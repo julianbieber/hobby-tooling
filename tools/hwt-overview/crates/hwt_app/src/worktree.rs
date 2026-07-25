@@ -619,10 +619,7 @@ struct TaskMeta {
 
 /// Path to a task's `task.json` in the notes tree: `notes/TOPIC/TASK/task.json`.
 pub fn meta_path(id: &TaskId) -> PathBuf {
-    notes_root()
-        .join(&id.topic)
-        .join(&id.name)
-        .join("task.json")
+    notes_root().join(id.rel()).join("task.json")
 }
 
 /// Read a task's `task.json`. Returns the all-default meta if the file is absent, empty, or
@@ -657,7 +654,7 @@ fn write_meta(id: &TaskId, meta: &TaskMeta) -> std::io::Result<()> {
 
 /// Path to a task's `prs.json` in the notes tree: `notes/TOPIC/TASK/prs.json`.
 pub fn prs_path(id: &TaskId) -> PathBuf {
-    notes_root().join(&id.topic).join(&id.name).join("prs.json")
+    notes_root().join(id.rel()).join("prs.json")
 }
 
 /// Read a task's `prs.json`: a JSON array of PR objects. Returns an empty vec if the file is
@@ -681,10 +678,7 @@ fn read_prs(id: &TaskId) -> Vec<Pr> {
 
 /// Path to a task's `subtasks.json` in the notes tree: `notes/TOPIC/TASK/subtasks.json`.
 pub fn subtasks_path(id: &TaskId) -> PathBuf {
-    notes_root()
-        .join(&id.topic)
-        .join(&id.name)
-        .join("subtasks.json")
+    notes_root().join(id.rel()).join("subtasks.json")
 }
 
 /// Read a task's `subtasks.json`: a JSON array of subtask refs. Returns an empty vec if the file is
@@ -875,146 +869,91 @@ pub fn open_notes(task: &Task) {
 mod tests {
     use super::*;
 
-    fn git(repo: &Path, args: &[&str]) {
-        let ok = Command::new("git")
-            .arg("-C")
-            .arg(repo)
-            .args(args)
-            .status()
-            .expect("run git")
-            .success();
-        assert!(ok, "git {args:?} failed");
-    }
-
-    /// `scan()` enumerates the union of live worktrees and notes tasks, and tags each with an owner
-    /// (the notes repo is shared, so filtering happens later in the UI):
-    /// - a present task reads its repos from disk and is owned by me;
-    /// - a removed task (task.json, no worktree) is owned by its notes dir's last committer;
-    /// - a removed task with no commits yet (uncommitted → local) is owned by me.
+    /// `scan()` enumerates the union of live worktrees and notes tasks across the
+    /// three-level `PROJECT/TOPIC/TASK` layout:
+    /// - a present task is one whose worktree dir exists;
+    /// - a removed task (task.json, no worktree) still appears, so it can be restored;
+    /// - each task carries exactly one repo — itself — named after its project;
+    /// - the same topic name under two projects stays in separate groups.
+    ///
+    /// No owner assertions: the hobby notes repo has a single author, so `scan()` does
+    /// not attribute tasks and the UI has no owner filter.
     #[test]
-    fn scan_unions_and_tags_owner() {
+    fn scan_unions_across_projects() {
         // Isolate HOME to a fixture. Tests in this module share the process, so keep it to one.
-        let home = std::env::temp_dir().join("wt_overview_scan_fixture");
+        let home = std::env::temp_dir().join("hwt_overview_scan_fixture");
         let _ = std::fs::remove_dir_all(&home);
         // SAFETY: single-threaded test setup; no other code reads HOME concurrently here.
         unsafe {
             std::env::set_var("HOME", &home);
         }
 
-        let notes_root = home.join("projects/team-constellation-mimisbrunnr/notes");
-        let notes = notes_root.join("topicA");
-        let wts = home.join("worktrees/topicA");
+        let notes_root = home.join("fun_repos/hobby-mimisbrunnr/notes");
+        let wt_root = home.join("fun_worktrees");
 
-        // Present task: a live worktree with one repo + matching task.json.
-        std::fs::create_dir_all(wts.join("live-task/RepoX/.git")).unwrap();
-        std::fs::create_dir_all(notes.join("live-task")).unwrap();
+        // Present task: the task dir itself is the worktree (a .git entry, no repo level).
+        std::fs::create_dir_all(wt_root.join("projA/features/live-task/.git")).unwrap();
+        std::fs::create_dir_all(notes_root.join("projA/features/live-task")).unwrap();
         std::fs::write(
-            notes.join("live-task/task.json"),
-            r#"{"done": false, "blocked": null, "repos": ["RepoX"]}"#,
+            notes_root.join("projA/features/live-task/task.json"),
+            r#"{"done": false, "blocked": null}"#,
         )
         .unwrap();
 
-        // Removed task, mine: task.json only, no worktree. Blocked with a past date.
-        std::fs::create_dir_all(notes.join("gone-task")).unwrap();
+        // Removed task: task.json only, no worktree. Done, and blocked with a past date.
+        std::fs::create_dir_all(notes_root.join("projA/bugs/gone-task")).unwrap();
         std::fs::write(
-            notes.join("gone-task/task.json"),
-            r#"{"done": true, "blocked": {"until": "2020-01-01"}, "repos": ["RepoY", "RepoZ"]}"#,
+            notes_root.join("projA/bugs/gone-task/task.json"),
+            r#"{"done": true, "blocked": {"until": "2020-01-01"}}"#,
         )
         .unwrap();
 
-        // Removed task, a teammate's: task.json only, committed under their name below.
-        std::fs::create_dir_all(notes.join("mate-task")).unwrap();
+        // A second project reusing the SAME topic name — must not merge with projA's.
+        std::fs::create_dir_all(wt_root.join("projB/features/other-task/.git")).unwrap();
+        std::fs::create_dir_all(notes_root.join("projB/features/other-task")).unwrap();
         std::fs::write(
-            notes.join("mate-task/task.json"),
-            r#"{"done": false, "blocked": null, "repos": ["RepoT"]}"#,
+            notes_root.join("projB/features/other-task/task.json"),
+            r#"{"done": false, "blocked": null}"#,
         )
         .unwrap();
-
-        // Removed task, uncommitted: task.json only, never committed (stays local → mine).
-        std::fs::create_dir_all(notes.join("orphan-task")).unwrap();
-        std::fs::write(
-            notes.join("orphan-task/task.json"),
-            r#"{"done": false, "blocked": null, "repos": ["RepoQ"]}"#,
-        )
-        .unwrap();
-
-        // Make the notes tree a git repo. My identity commits live/gone; a teammate authors mate;
-        // orphan is left unstaged (uncommitted).
-        git(&notes_root, &["init", "-q"]);
-        git(
-            &notes_root,
-            &["config", "user.email", "j.bieber@omniaretail.com"],
-        );
-        git(&notes_root, &["config", "user.name", "Julian"]);
-        git(
-            &notes_root,
-            &["add", "topicA/live-task", "topicA/gone-task"],
-        );
-        git(&notes_root, &["commit", "-q", "-m", "mine"]);
-        git(&notes_root, &["add", "topicA/mate-task"]);
-        git(
-            &notes_root,
-            &[
-                "commit",
-                "-q",
-                "--author=Mate <mate@omniaretail.com>",
-                "-m",
-                "theirs",
-            ],
-        );
 
         let model = scan();
-        let topic = model
-            .topics
-            .iter()
-            .find(|t| t.name == "topicA")
-            .expect("topicA present");
-        let task = |name: &str| topic.tasks.iter().find(|t| t.id.name == name);
-        let me = Some("j.bieber@omniaretail.com");
+        let group = |project: &str, topic: &str| {
+            model
+                .topics
+                .iter()
+                .find(|t| t.project == project && t.name == topic)
+        };
 
-        // All four tasks are enumerated (filtering is a UI concern now).
-        assert!(task("live-task").is_some());
-        assert!(task("gone-task").is_some());
-        assert!(task("orphan-task").is_some());
-        assert!(task("mate-task").is_some());
+        // Same topic name under two projects → two distinct groups.
+        let a_features = group("projA", "features").expect("projA/features");
+        let b_features = group("projB", "features").expect("projB/features");
+        assert_eq!(a_features.tasks.len(), 1);
+        assert_eq!(b_features.tasks.len(), 1);
+        assert_eq!(a_features.tasks[0].id.name, "live-task");
+        assert_eq!(b_features.tasks[0].id.name, "other-task");
 
-        // Owners are tagged from notes authorship (or me for live/uncommitted).
-        assert_eq!(task("live-task").unwrap().owner.as_deref(), me, "live = me");
-        assert_eq!(
-            task("gone-task").unwrap().owner.as_deref(),
-            me,
-            "committed by me"
-        );
-        assert_eq!(
-            task("orphan-task").unwrap().owner.as_deref(),
-            me,
-            "uncommitted = me"
-        );
-        assert_eq!(
-            task("mate-task").unwrap().owner.as_deref(),
-            Some("mate@omniaretail.com"),
-            "teammate's removed task tagged with their email"
-        );
-
-        let live = task("live-task").unwrap();
+        // A live worktree is present and carries one repo: itself, named for its project.
+        let live = &a_features.tasks[0];
         assert!(live.present);
-        assert_eq!(
-            live.repos.iter().map(|r| &r.name).collect::<Vec<_>>(),
-            ["RepoX"]
-        );
+        assert_eq!(live.id.project, "projA");
+        assert_eq!(live.id.topic, "features");
+        assert_eq!(live.repos.len(), 1, "a hobby task is exactly one repo");
+        assert_eq!(live.repos[0].name, "projA");
+        assert_eq!(live.repos[0].path, live.dir);
+        assert_eq!(live.id.rel(), "projA/features/live-task");
 
-        let gone = task("gone-task").unwrap();
+        // A removed task still shows up, from its retained metadata.
+        let gone_group = group("projA", "bugs").expect("projA/bugs");
+        let gone = &gone_group.tasks[0];
+        assert_eq!(gone.id.name, "gone-task");
         assert!(!gone.present, "removed task has no worktree");
         assert!(gone.done);
         assert!(gone.block.is_some(), "blocked parsed from task.json");
-        assert_eq!(
-            gone.repos
-                .iter()
-                .map(|r| r.name.clone())
-                .collect::<Vec<_>>(),
-            ["RepoY", "RepoZ"],
-            "removed task's repos come from metadata"
-        );
+        assert!(gone.ready(), "a past until-date means the block has lifted");
+        // Its single repo entry points at where a restore would put it.
+        assert_eq!(gone.repos.len(), 1);
+        assert_eq!(gone.repos[0].path, gone.dir);
 
         let _ = std::fs::remove_dir_all(&home);
     }
