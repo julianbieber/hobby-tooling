@@ -277,3 +277,133 @@ where:
     assert_eq!(doc.bindings[1].value.value, "10");
     assert_eq!(doc.bindings[1].config, None);
 }
+
+// ---- Bevy dialect examples --------------------------------------------------
+
+#[test]
+fn enemy_waves_plugin_is_clean() {
+    assert_clean(
+        "enemy-waves",
+        include_str!("fixtures/examples/enemy-waves.mml"),
+    );
+}
+
+#[test]
+fn spawn_enemies_system_is_clean() {
+    assert_clean(
+        "spawn-enemies",
+        include_str!("fixtures/examples/spawn-enemies.mml"),
+    );
+}
+
+#[test]
+fn plugin_produces_expected_structure() {
+    use mml_parser::ast::{Kind, Role, TypeDef};
+
+    let src = include_str!("fixtures/examples/enemy-waves.mml");
+    let (doc, _) = analyze(src);
+    assert_eq!(doc.header.kind.as_ref().unwrap().value, Kind::Plugin);
+
+    // Three world sections, each carrying its role.
+    assert_eq!(doc.components.role, Role::Component);
+    let comps: Vec<&str> = doc
+        .components
+        .types
+        .iter()
+        .map(|t| t.name().value.as_str())
+        .collect();
+    assert_eq!(comps, ["Wave", "EnemyHealth", "Spawner"]);
+    // `marker Spawner` is a zero-sized component, not a struct.
+    assert!(matches!(doc.components.types[2], TypeDef::Marker { .. }));
+    assert_eq!(doc.resources.types.len(), 2);
+    assert_eq!(doc.events.types.len(), 1);
+
+    // A plugin uses no `## data`, so there is no input or output type at all.
+    assert!(doc.data.types.is_empty());
+    assert!(doc.data.input.is_none());
+    assert!(doc.data.output.is_none());
+
+    // Systems, with their access blocks.
+    let names: Vec<&str> = doc.systems.iter().map(|s| s.name.value.as_str()).collect();
+    assert_eq!(
+        names,
+        ["tick_wave_timer", "spawn_enemies", "detect_cleared"]
+    );
+
+    let spawn = &doc.systems[1];
+    assert_eq!(spawn.access.schedule.as_ref().unwrap().value, "FixedUpdate");
+    assert_eq!(spawn.access.after[0].value, "tick_wave_timer");
+    assert_eq!(spawn.access.run_if.as_ref().unwrap().value, "WaveState.due");
+    let query = spawn.access.query.as_ref().unwrap();
+    let with: Vec<&str> = query.with.iter().map(|w| w.value.as_str()).collect();
+    assert_eq!(with, ["Transform", "Spawner"]);
+    assert!(query.without.is_empty());
+    let spawns: Vec<&str> = spawn
+        .access
+        .spawns
+        .iter()
+        .map(|s| s.value.as_str())
+        .collect();
+    assert_eq!(spawns, ["EnemyHealth", "Wave"]);
+    // The system is specced in full elsewhere.
+    assert_eq!(spawn.spec.as_ref().unwrap().value, "spawn-enemies");
+    // The first system's `@ path` is a source reference, not a schedule.
+    assert_eq!(
+        doc.systems[0].path.as_ref().unwrap().value,
+        "src/waves/timer.rs"
+    );
+
+    assert_eq!(doc.behavior.len(), 3);
+    assert_eq!(doc.bindings.len(), 1);
+    assert_eq!(doc.invariants.len(), 4);
+}
+
+#[test]
+fn system_kind_produces_a_single_access_block() {
+    use mml_parser::ast::Kind;
+
+    let src = include_str!("fixtures/examples/spawn-enemies.mml");
+    let (doc, _) = analyze(src);
+    assert_eq!(doc.header.kind.as_ref().unwrap().value, Kind::System);
+    assert!(doc.systems.is_empty());
+
+    let access = doc.access.as_ref().expect("## access block");
+    assert_eq!(access.schedule.as_ref().unwrap().value, "FixedUpdate");
+    assert_eq!(access.sets[0].value, "WaveSpawning");
+    let query = access.query.as_ref().unwrap();
+    let with: Vec<&str> = query.with.iter().map(|w| w.value.as_str()).collect();
+    let without: Vec<&str> = query.without.iter().map(|w| w.value.as_str()).collect();
+    assert_eq!(with, ["Transform", "Spawner"]);
+    assert_eq!(without, ["SpawnBudget"]);
+
+    // Shapes it does not own are imported, with the section assigning the role.
+    assert_eq!(doc.components.imports[0].types.len(), 3);
+    assert_eq!(doc.resources.imports[0].spec.value, "enemy-waves");
+    let roles = doc.roles();
+    assert_eq!(roles["Spawner"], mml_parser::ast::Role::Component);
+    assert_eq!(roles["WaveConfig"], mml_parser::ast::Role::Resource);
+}
+
+#[test]
+fn source_paths_include_system_entries() {
+    let src = include_str!("fixtures/examples/enemy-waves.mml");
+    let (doc, _) = analyze(src);
+    let paths: Vec<&str> = mml_parser::validate::collect_source_paths(&doc)
+        .into_iter()
+        .map(|p| p.value.as_str())
+        .collect();
+    // Two header paths, one module `@ path`, one system `@ path`.
+    assert!(paths.contains(&"src/waves/timer.rs"), "{paths:?}");
+    assert!(paths.contains(&"src/waves/mod.rs"), "{paths:?}");
+}
+
+#[test]
+fn spec_refs_include_system_entries() {
+    let src = include_str!("fixtures/examples/enemy-waves.mml");
+    let (doc, _) = analyze(src);
+    let refs: Vec<&str> = mml_parser::validate::collect_spec_refs(&doc)
+        .into_iter()
+        .map(|r| r.value.as_str())
+        .collect();
+    assert_eq!(refs, ["spawn-enemies"]);
+}

@@ -38,19 +38,33 @@ pub fn parse(src: &str) -> Document {
 
     let mut modules = Vec::new();
     let mut data = DataSection::default();
+    let mut components = WorldSection::new(Role::Component);
+    let mut resources = WorldSection::new(Role::Resource);
+    let mut events = WorldSection::new(Role::Event);
+    let mut systems: Vec<SystemDef> = Vec::new();
+    let mut access: Option<AccessBlock> = None;
     let mut behavior = Vec::new();
     let mut bindings = Vec::new();
     let mut invariants = Vec::new();
 
-    const NAMES: [&str; 4] = ["modules", "data", "behavior", "invariants"];
-    let mut seen = [false; 4];
+    // Which sections are legal here is a function of `kind` (grammar §7.2). A
+    // missing or unparsable kind falls back to the classic four-section schema,
+    // so a file being typed top-down does not first look like a broken plugin.
+    let kind = header.kind.as_ref().map(|k| k.value);
+    let allowed = kind.map(Kind::allowed_sections).unwrap_or(LEGACY_SECTIONS);
+    let required = kind.map(Kind::required_sections).unwrap_or(LEGACY_SECTIONS);
+
+    let mut seen = [false; SECTION_ORDER.len()];
     let mut max_order: i32 = -1;
 
     let mut i = first_section;
     while i < lines.len() {
         let sec_line = &lines[i];
         let name = sec_line.content.trim_start_matches('#').trim();
-        let order = NAMES.iter().position(|n| *n == name).map(|o| o as i32);
+        let order = SECTION_ORDER
+            .iter()
+            .position(|n| *n == name)
+            .map(|o| o as i32);
 
         let body_start = i + 1;
         let mut body_end = body_start;
@@ -65,7 +79,7 @@ pub fn parse(src: &str) -> Document {
                 p.push(Diagnostic::warning(
                     Span::new(s, e),
                     code::UNKNOWN_SECTION,
-                    format!("unknown section `{name}`; expected one of {NAMES:?}"),
+                    format!("unknown section `{name}`; expected one of {allowed:?}"),
                 ));
             }
             Some(order) => {
@@ -82,15 +96,39 @@ pub fn parse(src: &str) -> Document {
                     p.push(Diagnostic::warning(
                         Span::new(s, e),
                         code::SECTION_OUT_OF_ORDER,
-                        format!("section `{name}` is out of order; canonical order is {NAMES:?}"),
+                        format!(
+                            "section `{name}` is out of order; canonical order is {SECTION_ORDER:?}"
+                        ),
+                    ));
+                }
+                // A section that is real grammar but wrong for this kind still
+                // parses below — the LSP wants an AST for it either way.
+                if !allowed.contains(&name) {
+                    let for_kind = kind
+                        .map(|k| format!("`kind: {}`", k.as_str()))
+                        .unwrap_or_else(|| "this kind".to_string());
+                    p.push(Diagnostic::error(
+                        Span::new(s, e),
+                        code::SECTION_NOT_ALLOWED,
+                        format!(
+                            "`## {name}` is not a section of {for_kind}; expected one of {allowed:?}"
+                        ),
                     ));
                 }
                 max_order = max_order.max(order);
                 seen[oi] = true;
-                match order {
-                    0 => modules.extend(p.parse_modules(body)),
-                    1 => p.parse_data(body, &mut data),
-                    2 => {
+                match name {
+                    "modules" => modules.extend(p.parse_modules(body)),
+                    "data" => p.parse_data(body, &mut data),
+                    "components" => p.parse_world(body, &mut components),
+                    "resources" => p.parse_world(body, &mut resources),
+                    "events" => p.parse_world(body, &mut events),
+                    "systems" => systems.extend(p.parse_systems(body)),
+                    "access" => {
+                        let (block, _) = p.parse_access_block(body, 0, Span::new(s, e), true);
+                        access = Some(block);
+                    }
+                    "behavior" => {
                         let (steps, binds) = p.parse_behavior(body);
                         behavior.extend(steps);
                         bindings.extend(binds);
@@ -103,12 +141,19 @@ pub fn parse(src: &str) -> Document {
     }
 
     let eof = Span::at(src.len());
-    for (oi, name) in NAMES.iter().enumerate() {
+    for name in required {
+        let oi = SECTION_ORDER.iter().position(|n| n == name).unwrap_or(0);
         if !seen[oi] {
             p.push(Diagnostic::error(
                 eof,
                 code::MISSING_SECTION,
-                format!("missing required `## {name}` section"),
+                match kind {
+                    Some(k) => format!(
+                        "missing required `## {name}` section for `kind: {}`",
+                        k.as_str()
+                    ),
+                    None => format!("missing required `## {name}` section"),
+                },
             ));
         }
     }
@@ -141,6 +186,11 @@ pub fn parse(src: &str) -> Document {
         header,
         modules,
         data,
+        components,
+        resources,
+        events,
+        systems,
+        access,
         behavior,
         bindings,
         invariants,
@@ -196,9 +246,7 @@ impl Parser {
                     None => self.push(Diagnostic::error(
                         value_span,
                         code::BAD_KIND,
-                        format!(
-                            "`{value}` is not a valid kind; expected endpoint, workflow, or job"
-                        ),
+                        format!("`{value}` is not a valid kind; expected one of {KIND_VALUES:?}"),
                     )),
                 },
                 "source" => {
@@ -436,6 +484,364 @@ impl Parser {
                 j += 1;
             }
         }
+    }
+
+    // ---- Bevy world sections (grammar §8.1) ---------------------------------
+
+    /// Parse a `## components` / `## resources` / `## events` body: the `## data`
+    /// type grammar plus `marker`, minus `in:`/`out:` (data flows through the
+    /// World, so a Bevy unit declares no input or output type).
+    fn parse_world(&mut self, body: &[Line], section: &mut WorldSection) {
+        let mut j = 0;
+        while j < body.len() {
+            let line = &body[j];
+            if matches!(line.kind, LineKind::Blank | LineKind::Comment) {
+                j += 1;
+                continue;
+            }
+            let c = line.content;
+            if keyword_at(c, "struct") {
+                let (def, next) = self.parse_type_def(body, j, true);
+                section.types.push(def);
+                j = next;
+            } else if keyword_at(c, "enum") {
+                let (def, next) = self.parse_type_def(body, j, false);
+                section.types.push(def);
+                j = next;
+            } else if keyword_at(c, "marker") {
+                if let Some(def) = self.parse_marker(line, section.role) {
+                    section.types.push(def);
+                }
+                j += 1;
+            } else if keyword_at(c, "use") {
+                let imp = self.parse_use_import(line);
+                section.imports.push(imp);
+                j += 1;
+            } else if c.starts_with("in:") || c.starts_with("out:") {
+                let (s, e) = line.content_span();
+                self.push(Diagnostic::error(
+                    Span::new(s, e),
+                    code::MALFORMED_STRUCT,
+                    format!(
+                        "`in:`/`out:` have no meaning in `## {}`; a Bevy unit's interface is its \
+                         access block, not an input and output type",
+                        section.role.section()
+                    ),
+                ));
+                j += 1;
+            } else {
+                let (s, e) = line.content_span();
+                self.push(Diagnostic::error(
+                    Span::new(s, e),
+                    code::MALFORMED_STRUCT,
+                    "expected a `struct`/`enum`/`marker` definition or a `use` import",
+                ));
+                j += 1;
+            }
+        }
+    }
+
+    /// Parse a `marker Name` line — a zero-sized component (grammar §8.1).
+    fn parse_marker(&mut self, line: &Line, role: Role) -> Option<TypeDef> {
+        let c = line.content;
+        let (cs, ce) = line.content_span();
+        let kw = "marker";
+        let name_raw = &c[kw.len()..];
+        let name = name_raw.trim();
+        let name_abs = cs + kw.len() + leading_ws(name_raw);
+        let name_span = Span::new(name_abs, name_abs + name.len());
+
+        if role != Role::Component {
+            self.push(Diagnostic::error(
+                Span::new(cs, ce),
+                code::MALFORMED_MARKER,
+                format!(
+                    "`marker` declares a zero-sized component; it has no meaning in `## {}`",
+                    role.section()
+                ),
+            ));
+            return None;
+        }
+        if !is_pascal(name) {
+            self.push(Diagnostic::error(
+                if name.is_empty() {
+                    Span::at(name_abs)
+                } else {
+                    name_span
+                },
+                code::MALFORMED_MARKER,
+                "expected a PascalCase marker name",
+            ));
+            return None;
+        }
+        Some(TypeDef::Marker {
+            name: Spanned::new(name.to_owned(), name_span),
+            span: Span::new(cs, ce),
+        })
+    }
+
+    // ---- Bevy systems (grammar §8.2) ----------------------------------------
+
+    /// Parse a `## systems` body: declaration lines at column 0, each optionally
+    /// followed by an indented access block.
+    fn parse_systems(&mut self, body: &[Line]) -> Vec<SystemDef> {
+        let mut systems = Vec::new();
+        let mut j = 0;
+        while j < body.len() {
+            let line = &body[j];
+            if matches!(line.kind, LineKind::Blank | LineKind::Comment) {
+                j += 1;
+                continue;
+            }
+            let (cs, ce) = line.content_span();
+            if line.indent > 0 {
+                // An attribute line with nothing to attach to.
+                self.push(Diagnostic::error(
+                    Span::new(cs, ce),
+                    code::MALFORMED_ACCESS,
+                    "access attribute has no system entry above it",
+                ));
+                j += 1;
+                continue;
+            }
+
+            let c = line.content;
+            let Some((sep_rel, sep_len)) = find_separator(c) else {
+                self.push(Diagnostic::error(
+                    Span::new(cs, ce),
+                    code::MALFORMED_SYSTEM,
+                    "expected `system_name — responsibility` (use ` — ` or ` -- `)",
+                ));
+                j += 1;
+                continue;
+            };
+
+            let name_raw = &c[..sep_rel];
+            let name = name_raw.trim();
+            let name_abs = cs + (name_raw.len() - name_raw.trim_start().len());
+            let name_span = Span::new(name_abs, name_abs + name.len());
+            if !is_lower_id(name) {
+                self.push(Diagnostic::warning(
+                    name_span,
+                    code::SYSTEM_NAME_NOT_SNAKE,
+                    format!("system name `{name}` should be snake_case, like the Rust fn"),
+                ));
+            }
+
+            // Same annotation grammar as a module line: `@ spec` last, then
+            // `@ path`. The schedule lives in the access block, not here.
+            let rest = &c[sep_rel + sep_len..];
+            let rest_abs = cs + sep_rel + sep_len;
+            let (rest, spec) = self.split_spec_annotation(rest, rest_abs);
+            let (resp_raw, path) = match rest.rfind(" @ ") {
+                Some(at) => {
+                    let path_str = rest[at + 3..].trim();
+                    let path_abs = rest_abs + at + 3 + leading_ws(&rest[at + 3..]);
+                    (
+                        &rest[..at],
+                        Some(Spanned::new(
+                            path_str.to_owned(),
+                            Span::new(path_abs, path_abs + path_str.len()),
+                        )),
+                    )
+                }
+                None => (rest, None),
+            };
+            let resp = resp_raw.trim();
+            let resp_abs = rest_abs + leading_ws(resp_raw);
+
+            let (access, next) = self.parse_access_block(body, j + 1, Span::new(cs, ce), false);
+            let end = if access.span.end > ce {
+                access.span.end
+            } else {
+                ce
+            };
+            systems.push(SystemDef {
+                name: Spanned::new(name.to_owned(), name_span),
+                responsibility: Spanned::new(
+                    resp.to_owned(),
+                    Span::new(resp_abs, resp_abs + resp.len()),
+                ),
+                path,
+                spec,
+                access,
+                span: Span::new(cs, end),
+            });
+            j = next;
+        }
+        systems
+    }
+
+    /// Parse consecutive `key: value` attribute lines starting at `body[start]`,
+    /// stopping at the first column-0 line (which begins the next system entry).
+    /// Returns the block and the index of that line. With `whole_body` set — the
+    /// `## access` section of a `kind: system` file — every line is an attribute
+    /// and the indent rule does not apply, so nothing stops the scan early.
+    fn parse_access_block(
+        &mut self,
+        body: &[Line],
+        start: usize,
+        anchor: Span,
+        whole_body: bool,
+    ) -> (AccessBlock, usize) {
+        let in_access_section = whole_body;
+        let mut block = AccessBlock {
+            anchor,
+            span: anchor,
+            ..Default::default()
+        };
+        let mut seen: Vec<&str> = Vec::new();
+        let mut end = anchor.end;
+
+        let mut j = start;
+        while j < body.len() {
+            let line = &body[j];
+            if matches!(line.kind, LineKind::Blank | LineKind::Comment) {
+                j += 1;
+                continue;
+            }
+            if line.indent == 0 && !in_access_section {
+                break; // dedent starts the next system entry
+            }
+            let (cs, ce) = line.content_span();
+            let Some((key, key_abs, value, value_abs)) = split_kv(line) else {
+                self.push(Diagnostic::error(
+                    Span::new(cs, ce),
+                    code::MALFORMED_ACCESS,
+                    format!("expected `key: value`; one of {ACCESS_KEYS:?}"),
+                ));
+                j += 1;
+                continue;
+            };
+            end = ce;
+
+            if !ACCESS_KEYS.contains(&key) {
+                self.push(Diagnostic::error(
+                    Span::new(key_abs, key_abs + key.len()),
+                    code::UNKNOWN_ACCESS_KEY,
+                    format!("unknown access key `{key}`; expected one of {ACCESS_KEYS:?}"),
+                ));
+                j += 1;
+                continue;
+            }
+            if seen.contains(&key) {
+                self.push(Diagnostic::error(
+                    Span::new(key_abs, key_abs + key.len()),
+                    code::DUPLICATE_ACCESS_KEY,
+                    format!("duplicate access key `{key}`"),
+                ));
+            } else {
+                seen.push(key);
+            }
+
+            let value_span = Span::new(value_abs, value_abs + value.len());
+            if value.is_empty() {
+                self.push(Diagnostic::error(
+                    value_span,
+                    code::MALFORMED_ACCESS,
+                    format!("`{key}:` has no value"),
+                ));
+                j += 1;
+                continue;
+            }
+            let spanned = || Spanned::new(value.to_owned(), value_span);
+
+            match key {
+                // Free-text values: a schedule label may carry a state
+                // (`OnEnter(Playing)`), a run condition is prose.
+                "schedule" => block.schedule = Some(spanned()),
+                "run_if" => block.run_if = Some(spanned()),
+                "query" => block.query = Some(self.parse_query_filter(value, value_abs)),
+                _ => {
+                    let items = self.parse_ident_list(key, value, value_abs);
+                    match key {
+                        "set" => block.sets = items,
+                        "after" => block.after = items,
+                        "before" => block.before = items,
+                        "reads" => block.reads = items,
+                        "writes" => block.writes = items,
+                        "spawns" => block.spawns = items,
+                        "despawns" => block.despawns = items,
+                        "emits" => block.emits = items,
+                        _ => block.consumes = items,
+                    }
+                }
+            }
+            j += 1;
+        }
+
+        block.span = Span::new(anchor.start, end.max(anchor.end));
+        (block, j)
+    }
+
+    /// Parse a comma-separated identifier list (`reads: WaveConfig, Time`).
+    fn parse_ident_list(&mut self, key: &str, value: &str, abs: usize) -> Vec<Spanned<String>> {
+        let mut out = Vec::new();
+        for (item_abs, item) in split_commas(value, abs) {
+            let t = item.trim();
+            if t.is_empty() {
+                continue;
+            }
+            let t_abs = item_abs + leading_ws(item);
+            let span = Span::new(t_abs, t_abs + t.len());
+            if !is_ident(t) {
+                self.push(Diagnostic::error(
+                    span,
+                    code::MALFORMED_ACCESS,
+                    format!("`{key}:` expects names, but `{t}` is not an identifier"),
+                ));
+                continue;
+            }
+            out.push(Spanned::new(t.to_owned(), span));
+        }
+        out
+    }
+
+    /// Parse a `query:` value — `Transform + Spawner - Dead`. A bare or
+    /// `+`-prefixed term is required; a `-`-prefixed one is excluded.
+    fn parse_query_filter(&mut self, value: &str, abs: usize) -> QueryFilter {
+        let mut filter = QueryFilter {
+            with: Vec::new(),
+            without: Vec::new(),
+            span: Span::new(abs, abs + value.len()),
+        };
+        let mut negate = false;
+        for (tok_abs, tok) in split_whitespace_spans(value, abs) {
+            // A standalone sign, or one glued to the term (`-Dead`).
+            let (tok_abs, tok) = match tok {
+                "+" => {
+                    negate = false;
+                    continue;
+                }
+                "-" => {
+                    negate = true;
+                    continue;
+                }
+                t if t.len() > 1 && (t.starts_with('+') || t.starts_with('-')) => {
+                    negate = t.starts_with('-');
+                    (tok_abs + 1, &t[1..])
+                }
+                t => (tok_abs, t),
+            };
+            let span = Span::new(tok_abs, tok_abs + tok.len());
+            if !is_ident(tok) {
+                self.push(Diagnostic::error(
+                    span,
+                    code::MALFORMED_ACCESS,
+                    format!("`query:` expects component names joined by `+`/`-`, got `{tok}`"),
+                ));
+                negate = false;
+                continue;
+            }
+            let entry = Spanned::new(tok.to_owned(), span);
+            if negate {
+                filter.without.push(entry);
+            } else {
+                filter.with.push(entry);
+            }
+            negate = false;
+        }
+        filter
     }
 
     /// Parse a `use <spec-ref>: Type, Type` import line (grammar §4.5). The ref
@@ -1058,6 +1464,26 @@ fn split_commas(s: &str, base: usize) -> Vec<(usize, &str)> {
         }
     }
     out.push((base + start, &s[start..]));
+    out
+}
+
+/// Split `s` on whitespace, returning each token with its absolute start offset
+/// (`base` is the offset of `s[0]`) — `split_whitespace` with spans kept.
+fn split_whitespace_spans(s: &str, base: usize) -> Vec<(usize, &str)> {
+    let mut out = Vec::new();
+    let mut start: Option<usize> = None;
+    for (i, ch) in s.char_indices() {
+        if ch.is_whitespace() {
+            if let Some(st) = start.take() {
+                out.push((base + st, &s[st..i]));
+            }
+        } else if start.is_none() {
+            start = Some(i);
+        }
+    }
+    if let Some(st) = start {
+        out.push((base + st, &s[st..]));
+    }
     out
 }
 

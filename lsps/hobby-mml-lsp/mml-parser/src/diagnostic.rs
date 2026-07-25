@@ -32,6 +32,10 @@ pub mod code {
     pub const DUPLICATE_SECTION: &str = "duplicate-section";
     pub const SECTION_OUT_OF_ORDER: &str = "section-out-of-order";
     pub const UNKNOWN_SECTION: &str = "unknown-section";
+    /// A section that exists in the grammar but is not legal for the file's
+    /// `kind` — e.g. `## data` in a `kind: plugin` spec, or `## systems` in a
+    /// `kind: job` one (grammar §7.2).
+    pub const SECTION_NOT_ALLOWED: &str = "section-not-allowed-for-kind";
     pub const TAB_INDENT: &str = "tab-indent";
 
     // Modules (parse-time).
@@ -73,6 +77,30 @@ pub mod code {
     /// file on disk under any of the goto-definition search directories. The
     /// pure parse/validate passes never produce it.
     pub const UNRESOLVED_SOURCE_PATH: &str = "unresolved-source-path";
+
+    // Bevy dialect — `## systems` / `## access` (grammar §8, §9).
+    pub const MALFORMED_SYSTEM: &str = "malformed-system";
+    pub const SYSTEM_NAME_NOT_SNAKE: &str = "system-name-not-snake";
+    pub const DUPLICATE_SYSTEM: &str = "duplicate-system";
+    pub const MALFORMED_MARKER: &str = "malformed-marker";
+    /// An attribute line that is not `key: value`, or one that appears with no
+    /// system entry to attach to.
+    pub const MALFORMED_ACCESS: &str = "malformed-access";
+    pub const UNKNOWN_ACCESS_KEY: &str = "unknown-access-key";
+    pub const DUPLICATE_ACCESS_KEY: &str = "duplicate-access-key";
+    pub const MISSING_SCHEDULE: &str = "missing-schedule";
+    /// A `schedule:` label outside the known Bevy set. A warning, not an error —
+    /// custom schedules are legitimate.
+    pub const UNKNOWN_SCHEDULE: &str = "unknown-schedule";
+    /// An access-list name that resolves to no declared, imported, or built-in
+    /// component / resource / event.
+    pub const UNDEFINED_ACCESS_ITEM: &str = "undefined-access-item";
+    /// An access-list name that resolves, but whose ECS role does not fit the
+    /// key it appears under (a component in `emits:`, an event in `query:`, …).
+    pub const ACCESS_ROLE_MISMATCH: &str = "access-role-mismatch";
+    /// An `after:` / `before:` / `set:` name matching no system or set declared
+    /// in this file. A warning — ordering across plugins is legitimate.
+    pub const UNRESOLVED_SYSTEM_REF: &str = "unresolved-system-ref";
 
     // Semantic (validate-time).
     pub const UNDEFINED_TYPE: &str = "undefined-type";

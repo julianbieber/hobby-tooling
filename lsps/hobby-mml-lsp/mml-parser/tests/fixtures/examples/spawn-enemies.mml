@@ -1,0 +1,43 @@
+system: bevy-survivor
+unit: spawn-enemies
+kind: system
+source:
+  repo: bevy_survivor
+  paths:
+    - src/waves/spawn.rs
+
+## components
+use enemy-waves: Wave, EnemyHealth, Spawner
+struct SpawnBudget {
+  remaining: u32,
+}
+
+## resources
+use enemy-waves: WaveConfig, WaveState
+
+## access
+schedule: FixedUpdate
+set:      WaveSpawning
+after:    tick_wave_timer
+run_if:   WaveState.due
+query:    Transform + Spawner - SpawnBudget
+reads:    WaveConfig, Time
+writes:   WaveState
+spawns:   EnemyHealth, Wave, SpawnBudget
+
+## behavior
+- compute the wave size as WaveConfig.base_count scaled by WaveState.current
+- for each Spawner:
+  - split the wave size evenly across the spawners, giving the remainder to the first
+  - while the spawner's share is not exhausted:
+    - pick a position by jittering the spawner's Transform within radius X
+    - spawn an entity with EnemyHealth, a Wave tagged with WaveState.current, and that position
+- clear WaveState.due and advance WaveState.current
+
+where:
+  X = 3 @ constant SPAWN_JITTER
+
+## invariants
+- the number of entities spawned equals the wave size, regardless of spawner count
+- every spawned entity carries both EnemyHealth and Wave
+- a spawner already carrying SpawnBudget is skipped, so a wave is never spawned twice

@@ -5,14 +5,14 @@
 | Type         | skill                                                                              |
 | Install path | `~/.claude-hobby/commands/mml-extract.md`                                                            |
 | Owner        | @julianbieber                                                                      |
-| Dependencies | MML grammar (`llm_mental_model/01-language-spec`), `tree-extract` & `lsp-mcp` MCPs |
+| Dependencies | hobby MML grammar (`lsps/hobby-mml-lsp/grammar.md`), `tree-extract` & `lsp-mcp` MCPs |
 | Status       | experimental                                                                       |
 
 ## Description
 
 Analyzes one unit of an existing system — an endpoint, a message/queue workflow,
 or a scheduled job — and emits a valid
-[`.mml`](~/projects/team-constellation-mimisbrunnr/notes/llm_mental_model/DESIGN.md) (Mental Model Language)
+[`.mml`](../../lsps/hobby-mml-lsp/grammar.md) (Mental Model Language)
 spec: the four sections **modules / data / behavior / invariants** that capture
 how the unit behaves at mental-model altitude. The human then edits the `.mml`
 to drive a change, which `mml-translate` turns back into code — spec →

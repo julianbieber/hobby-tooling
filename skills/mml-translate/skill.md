@@ -20,13 +20,10 @@ Apply the change to the task's **worktree** checkout of the source repo, verify
 it (compile/tests), report the diff, and **stop** — reviewing and committing the
 code is the human's job (same contract as extract).
 
-Read
-`~/projects/team-constellation-mimisbrunnr/notes/llm_mental_model/01-language-spec/grammar.md`
-(authoritative grammar) and
-`~/projects/team-constellation-mimisbrunnr/notes/llm_mental_model/01-language-spec/{layout.md,linkage.md}`
-(how a spec locates its code) before your first translation if you are unsure of
-any rule below. The grammar cheat-sheet and worked examples at the end of this
-file are the reference.
+Read `~/fun_repos/hobby-tooling/lsps/hobby-mml-lsp/grammar.md` (the authoritative
+hobby grammar, v2 — **not** the work one) before your first translation if you
+are unsure of any rule below. The grammar cheat-sheet and worked examples at the
+end of this file are the reference.
 
 ## Instructions
 
@@ -150,8 +147,47 @@ file are the reference.
      - **reorder** only when the order is genuinely semantic.
    - **`## modules`** responsibility change → may mean moving code between
      files.
+   - **`## components` / `## resources` / `## events`** (Bevy) → the derived
+     type. Added type → a new `#[derive(Component)]` / `#[derive(Resource)]` /
+     `#[derive(Event)]` struct, registered in the plugin's `build` where
+     registration is required (events need `add_event`; components and resources
+     usually need `init_resource` / `insert_resource` only for resources).
+     A `marker Name` is a **unit struct** (`#[derive(Component)] struct Name;`),
+     not an empty braced one. Moving a type between world sections is a **role
+     change** — a component becoming a resource means it stops being attached to
+     entities and starts being a singleton; that is a real refactor, not a
+     rename. Never emit a Rust type for a Bevy built-in (`Transform`, `Time`, …)
+     — those names in a spec mean the engine's type.
+   - **`## systems`** (Bevy) — route each entry to its Rust fn via its
+     `@ path`, and map the access block key by key:
+     - `schedule:` → which `app.add_systems(<Schedule>, …)` call it sits in.
+       A changed schedule is a **move between `add_systems` calls**, not an edit
+       to the fn.
+     - `after:` / `before:` / `set:` → `.after(..)` / `.before(..)` /
+       `.in_set(..)` (or the position within a `.chain()`).
+     - `run_if:` → `.run_if(..)`, with the condition as prose to realise.
+     - `query:` → the `Query<…>` parameter: `+` terms are the fetched/`With<..>`
+       set, `-` terms are `Without<..>`.
+     - `reads:` / `writes:` → `Res<T>` vs `ResMut<T>` for resources, `&T` vs
+       `&mut T` inside the query for components. **A component moving from
+       `reads:` to `writes:` is a real signature change** — it changes the
+       system's parallelism, so make it even though the body may not need edits.
+     - `spawns:` / `despawns:` → `commands.spawn((..))` / `.despawn()`.
+     - `emits:` / `consumes:` → `EventWriter<E>` / `EventReader<E>`, plus the
+       `add_event::<E>()` registration if the event is new.
+     - A system entry added → a new fn **and** its `add_systems` registration.
+       Removed → remove both, subject to the same "absence ≠ dead code" caution
+       as a removed behavior step.
+     - A system entry gaining `@ spec <unit>` is a **boundary marker**, not a
+       work item — that system now has its own spec and its own translate run.
+   - **`## access`** (`kind: system`) → exactly as above, for the one fn this
+     spec covers. Its registration lives in the plugin's spec, not here: if the
+     schedule or ordering changed, **report** that the plugin's `add_systems`
+     call needs the matching edit rather than editing another unit's code.
    - **`## invariants`** change → assertions/guards, or a test that encodes the
-     property.
+     property. For Bevy, a component-exclusivity invariant ("no entity carries
+     both A and B") is naturally a debug assertion or a test spawning the
+     forbidden combination, not a runtime branch.
    - **header `method:` / field `@source` change** (endpoints) → the route
      definition and/or the controller's parameter binding (path vs query vs body
      vs header); a `method` change is a different verb/route, not a body change.
@@ -222,11 +258,18 @@ file are the reference.
 
 ## Grammar cheat-sheet
 
-- File = header, then exactly four `##` sections in order: `modules`, `data`,
-  `behavior`, `invariants`. All required; a body may be empty except `behavior`.
+- File = header, then `##` sections in canonical order: `modules`, `data`,
+  `components`, `resources`, `events`, `systems`, `access`, `behavior`,
+  `invariants`. **Which are legal depends on `kind`:**
+  - `endpoint`/`workflow`/`job` — exactly `modules`, `data`, `behavior`,
+    `invariants`, all required (a body may be empty except `behavior`).
+  - `plugin` — `systems`, `behavior`, `invariants` required; `modules`,
+    `components`, `resources`, `events` optional; no `data`, no `access`.
+  - `system` — `access`, `behavior`, `invariants` required; `modules`,
+    `components`, `resources`, `events` optional; no `data`, no `systems`.
 - Header keys: `system` (req), `unit` (req), `kind` (req: `endpoint`|`workflow`|
-  `job`), `method` (opt, endpoints: `GET`|`POST`|…), `base` (opt), `source`
-  (opt: `repo` + `paths` list). `system`/`unit` are identifiers.
+  `job`|`plugin`|`system`), `method` (opt, endpoints: `GET`|`POST`|…), `base`
+  (opt), `source` (opt: `repo` + `paths` list). `system`/`unit` are identifiers.
 - `#` at column 0 is a comment; `##` at column 0 is always a section header.
 - Indent = spaces only, 2 spaces per nesting level.
 - `## modules`: `PascalName — responsibility [@ repo-relative-path]`.
@@ -246,11 +289,28 @@ file are the reference.
   nested); everything else prose; declared names cross-link. An optional
   trailing `where:` block binds symbols: `Symbol = value [@ config-source]`.
 - `## invariants`: flat `-` bullets, each a checkable claim.
-- Cross-spec refs (grammar §5.4): a module line, behavior step, or invariant may
-  end with `@ spec system/unit` (or `@ spec unit` for the same system) — "more
-  specification under" that unit's `.mml`. At most one per line, always the last
-  annotation (after a module's `@ path`); it resolves to a sibling `.mml` in the
-  same task dir. Unresolved target = warning, not error.
+- Cross-spec refs (grammar §5.4): a module line, **system entry**, behavior step,
+  or invariant may end with `@ spec unit` — "more specification under" that
+  unit's `.mml`. At most one per line, always the last annotation (after an
+  `@ path`); it resolves to a sibling `.mml` in the same task dir. Unresolved
+  target = warning, not error.
+
+**Bevy dialect (grammar §8):**
+
+- `## components` / `## resources` / `## events`: the `## data` type grammar
+  minus `in:`/`out:`, plus `marker Name` (a zero-sized component, `## components`
+  only) → a Rust unit struct. **The section assigns the ECS role**, for `use`
+  imports too.
+- Bevy's own types are built in and never generated: `Transform`, `Time`,
+  `AssetServer`, `AppExit`, ….
+- `## systems`: `snake_name — responsibility [@ path] [@ spec unit]` at column 0,
+  each followed by an indented access block. `## access` is the same block,
+  unindented, for a `kind: system` file.
+- Access keys: `schedule:` (**required**), `set:`, `after:`, `before:`,
+  `run_if:`, `query:` (`A + B - C`), `reads:`, `writes:`, `spawns:`,
+  `despawns:`, `emits:`, `consumes:`. Roles are enforced: `query:`/`spawns:`/
+  `despawns:` take components, `emits:`/`consumes:` events, `reads:`/`writes:`
+  either a component or a resource.
 
 ## Worked examples
 

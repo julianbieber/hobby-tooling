@@ -193,10 +193,10 @@ pub fn defined_type_names(target: &Path) -> Vec<String> {
     let Ok(src) = std::fs::read_to_string(target) else {
         return Vec::new();
     };
+    // Both dialects: `## data` types and the Bevy world sections alike, so a
+    // `use enemy-waves: Wave` import resolves against a plugin's components.
     crate::parse(&src)
-        .data
-        .types
-        .iter()
+        .all_type_defs()
         .map(|t| t.name().value.clone())
         .collect()
 }

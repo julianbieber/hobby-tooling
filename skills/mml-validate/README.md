@@ -5,13 +5,13 @@
 | Type         | skill                                                                                                                                                                                                                 |
 | Install path | `~/.claude-hobby/commands/mml-validate.md`                                                                                                                                                                                              |
 | Owner        | @julianbieber                                                                                                                                                                                                         |
-| Dependencies | MML grammar (`llm_mental_model/01-language-spec`), per-task specs in the notes repo (`~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/`), `tree-extract` + `lsp-mcp`, `mml-{extract,translate}` |
+| Dependencies | hobby MML grammar (`lsps/hobby-mml-lsp/grammar.md`), per-task specs in the notes repo (`~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/`), `tree-extract` + `lsp-mcp`, `mml-{extract,translate}` |
 | Status       | experimental                                                                                                                                                                                                          |
 
 ## Description
 
 Read-only **conformance / drift check**: does the implementation still do what
-its [`.mml`](~/projects/team-constellation-mimisbrunnr/notes/llm_mental_model/DESIGN.md) spec says? This is the
+its [`.mml`](../../lsps/hobby-mml-lsp/grammar.md) spec says? This is the
 closing step of the MML loop and the mirror of `mml-translate`:
 
 - `mml-extract` — code → `.mml`

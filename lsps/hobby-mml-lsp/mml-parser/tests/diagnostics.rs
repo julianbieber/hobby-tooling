@@ -344,3 +344,265 @@ fn malformed_binding_no_equals() {
     let d = only(src, code::MALFORMED_BINDING);
     assert_eq!(d.severity, Severity::Error);
 }
+
+// ---- Bevy dialect (grammar §7.2, §8) ---------------------------------------
+
+/// A minimal well-formed `kind: plugin` spec with `body` spliced into the
+/// `## systems` section, so a test can vary one entry and nothing else.
+fn plugin_with_systems(systems: &str) -> String {
+    format!(
+        "system: s\nunit: u\nkind: plugin\n\n\
+## components\nmarker Foe\n\n\
+## resources\nstruct Cfg {{\n  n: u32,\n}}\n\n\
+## events\nstruct Cleared {{\n  n: u32,\n}}\n\n\
+## systems\n{systems}\n\n\
+## behavior\n- do it\n\n\
+## invariants\n- always\n"
+    )
+}
+
+#[test]
+fn data_section_is_not_allowed_in_a_plugin() {
+    let src = "system: s\nunit: u\nkind: plugin\n\n\
+## data\nin: String\nout: String\n\n\
+## systems\ngo — does it\n  schedule: Update\n\n\
+## behavior\n- do it\n\n## invariants\n- always\n";
+    let d = only(src, code::SECTION_NOT_ALLOWED);
+    assert_eq!(d.severity, Severity::Error);
+    assert_span(src, &d, "## data");
+    assert!(d.message.contains("kind: plugin"), "{}", d.message);
+}
+
+#[test]
+fn systems_section_is_not_allowed_in_a_job() {
+    let src = "system: s\nunit: u\nkind: job\n\n\
+## modules\n\n## data\nin: String\nout: String\n\n\
+## systems\ngo — does it\n  schedule: Update\n\n\
+## behavior\n- do it\n\n## invariants\n- always\n";
+    let d = only(src, code::SECTION_NOT_ALLOWED);
+    assert_span(src, &d, "## systems");
+}
+
+#[test]
+fn plugin_without_systems_section_is_missing_it() {
+    let src = "system: s\nunit: u\nkind: plugin\n\n\
+## components\nmarker Foe\n\n\
+## behavior\n- do it\n\n## invariants\n- always\n";
+    let d = only(src, code::MISSING_SECTION);
+    assert_eq!(d.severity, Severity::Error);
+    assert!(d.message.contains("systems"), "{}", d.message);
+    assert!(d.message.contains("kind: plugin"), "{}", d.message);
+}
+
+#[test]
+fn system_kind_requires_an_access_section() {
+    let src = "system: s\nunit: u\nkind: system\n\n\
+## behavior\n- do it\n\n## invariants\n- always\n";
+    let d = only(src, code::MISSING_SECTION);
+    assert!(d.message.contains("access"), "{}", d.message);
+}
+
+#[test]
+fn plugin_keeps_the_four_classic_sections_optional() {
+    // `## modules` is allowed but not required for a plugin, and its absence
+    // must not resurrect the classic schema's `## data` requirement.
+    let (_doc, diags) = analyze(&plugin_with_systems("go — does it\n  schedule: Update"));
+    assert!(diags.is_empty(), "unexpected diagnostics: {diags:#?}");
+}
+
+#[test]
+fn malformed_system_without_separator() {
+    let src = plugin_with_systems("go does it\n  schedule: Update");
+    let d = only(&src, code::MALFORMED_SYSTEM);
+    assert_eq!(d.severity, Severity::Error);
+    assert_span(&src, &d, "go does it");
+}
+
+#[test]
+fn system_name_not_snake_case_warns() {
+    let src = plugin_with_systems("SpawnEnemies — does it\n  schedule: Update");
+    let d = only(&src, code::SYSTEM_NAME_NOT_SNAKE);
+    assert_eq!(d.severity, Severity::Warning);
+    assert_span(&src, &d, "SpawnEnemies");
+}
+
+#[test]
+fn duplicate_system_name() {
+    let src = plugin_with_systems(
+        "go — does it\n  schedule: Update\ngo — does it again\n  schedule: Update",
+    );
+    let d = only(&src, code::DUPLICATE_SYSTEM);
+    assert_eq!(d.severity, Severity::Error);
+}
+
+#[test]
+fn missing_schedule_on_a_system() {
+    let src = plugin_with_systems("go — does it\n  reads: Cfg");
+    let d = only(&src, code::MISSING_SCHEDULE);
+    assert_eq!(d.severity, Severity::Error);
+    assert_span(&src, &d, "go — does it");
+}
+
+#[test]
+fn missing_schedule_in_an_access_section() {
+    let src = "system: s\nunit: u\nkind: system\n\n\
+## access\nreads: Time\n\n\
+## behavior\n- do it\n\n## invariants\n- always\n";
+    let d = only(src, code::MISSING_SCHEDULE);
+    assert!(d.message.contains("## access"), "{}", d.message);
+}
+
+#[test]
+fn unknown_schedule_warns_but_state_schedules_do_not() {
+    let src = plugin_with_systems("go — does it\n  schedule: Whenever");
+    let d = only(&src, code::UNKNOWN_SCHEDULE);
+    assert_eq!(d.severity, Severity::Warning);
+    assert_span(&src, &d, "Whenever");
+
+    // `OnEnter(..)` / `OnExit(..)` are recognised by shape.
+    for label in ["OnEnter(Playing)", "OnExit(Paused)", "FixedPostUpdate"] {
+        let src = plugin_with_systems(&format!("go — does it\n  schedule: {label}"));
+        let (_doc, diags) = analyze(&src);
+        assert!(diags.is_empty(), "{label} should be clean: {diags:#?}");
+    }
+}
+
+#[test]
+fn unknown_access_key() {
+    let src = plugin_with_systems("go — does it\n  schedule: Update\n  mutates: Cfg");
+    let d = only(&src, code::UNKNOWN_ACCESS_KEY);
+    assert_eq!(d.severity, Severity::Error);
+    assert_span(&src, &d, "mutates");
+}
+
+#[test]
+fn duplicate_access_key() {
+    let src = plugin_with_systems("go — does it\n  schedule: Update\n  reads: Cfg\n  reads: Cfg");
+    let d = only(&src, code::DUPLICATE_ACCESS_KEY);
+    assert_eq!(d.severity, Severity::Error);
+}
+
+#[test]
+fn access_attribute_without_a_system_entry() {
+    let src = plugin_with_systems("  schedule: Update");
+    let d = only(&src, code::MALFORMED_ACCESS);
+    assert_eq!(d.severity, Severity::Error);
+}
+
+#[test]
+fn undefined_access_item() {
+    let src = plugin_with_systems("go — does it\n  schedule: Update\n  reads: Nonsense");
+    let d = only(&src, code::UNDEFINED_ACCESS_ITEM);
+    assert_eq!(d.severity, Severity::Error);
+    assert_span(&src, &d, "Nonsense");
+}
+
+#[test]
+fn builtin_bevy_names_need_no_declaration() {
+    let src = plugin_with_systems(
+        "go — does it\n  schedule: Update\n  query: Transform + Foe\n  reads: Time\n  emits: AppExit",
+    );
+    let (_doc, diags) = analyze(&src);
+    assert!(diags.is_empty(), "unexpected diagnostics: {diags:#?}");
+}
+
+#[test]
+fn access_role_mismatch_emitting_a_component() {
+    let src = plugin_with_systems("go — does it\n  schedule: Update\n  emits: Foe");
+    let d = only(&src, code::ACCESS_ROLE_MISMATCH);
+    assert_eq!(d.severity, Severity::Error);
+    assert_span(&src, &d, "Foe");
+    assert!(d.message.contains("component"), "{}", d.message);
+}
+
+#[test]
+fn access_role_mismatch_querying_a_resource() {
+    let src = plugin_with_systems("go — does it\n  schedule: Update\n  query: Cfg");
+    let d = only(&src, code::ACCESS_ROLE_MISMATCH);
+    assert!(d.message.contains("resource"), "{}", d.message);
+}
+
+#[test]
+fn reads_accepts_both_components_and_resources() {
+    let src = plugin_with_systems("go — does it\n  schedule: Update\n  reads: Foe, Cfg");
+    let (_doc, diags) = analyze(&src);
+    assert!(diags.is_empty(), "unexpected diagnostics: {diags:#?}");
+}
+
+#[test]
+fn unresolved_system_ref_warns_in_a_plugin() {
+    let src = plugin_with_systems("go — does it\n  schedule: Update\n  after: nobody");
+    let d = only(&src, code::UNRESOLVED_SYSTEM_REF);
+    assert_eq!(d.severity, Severity::Warning);
+    assert_span(&src, &d, "nobody");
+}
+
+#[test]
+fn ordering_against_a_declared_set_or_system_is_silent() {
+    let src = plugin_with_systems(
+        "first — runs first\n  schedule: Update\n  set: Early\n\
+         second — runs after\n  schedule: Update\n  after: first, Early",
+    );
+    let (_doc, diags) = analyze(&src);
+    assert!(diags.is_empty(), "unexpected diagnostics: {diags:#?}");
+}
+
+#[test]
+fn a_system_kind_may_order_against_specs_elsewhere() {
+    // A standalone `kind: system` file has no local system list, so its
+    // ordering refs are not checked.
+    let src = "system: s\nunit: u\nkind: system\n\n\
+## access\nschedule: Update\nafter: some_other_plugins_system\n\n\
+## behavior\n- do it\n\n## invariants\n- always\n";
+    let (_doc, diags) = analyze(src);
+    assert!(diags.is_empty(), "unexpected diagnostics: {diags:#?}");
+}
+
+#[test]
+fn query_filter_splits_with_and_without() {
+    let src = plugin_with_systems("go — does it\n  schedule: Update\n  query: Foe - Cleared");
+    // `Cleared` is an event, so excluding it is still a role mismatch — the
+    // point here is that the `-` term is parsed as its own item.
+    let d = only(&src, code::ACCESS_ROLE_MISMATCH);
+    assert_span(&src, &d, "Cleared");
+}
+
+#[test]
+fn marker_outside_components_is_rejected() {
+    let src = "system: s\nunit: u\nkind: plugin\n\n\
+## resources\nmarker Foe\n\n\
+## systems\ngo — does it\n  schedule: Update\n\n\
+## behavior\n- do it\n\n## invariants\n- always\n";
+    let d = only(src, code::MALFORMED_MARKER);
+    assert_eq!(d.severity, Severity::Error);
+}
+
+#[test]
+fn in_out_lines_are_rejected_in_a_world_section() {
+    let src = "system: s\nunit: u\nkind: plugin\n\n\
+## components\nin: String\n\n\
+## systems\ngo — does it\n  schedule: Update\n\n\
+## behavior\n- do it\n\n## invariants\n- always\n";
+    let d = only(src, code::MALFORMED_STRUCT);
+    assert!(d.message.contains("access block"), "{}", d.message);
+}
+
+#[test]
+fn a_name_declared_in_two_world_sections_is_a_duplicate() {
+    let src = "system: s\nunit: u\nkind: plugin\n\n\
+## components\nmarker Foe\n\n\
+## resources\nstruct Foe {\n  n: u32,\n}\n\n\
+## systems\ngo — does it\n  schedule: Update\n\n\
+## behavior\n- do it\n\n## invariants\n- always\n";
+    let d = only(src, code::DUPLICATE_TYPE);
+    assert_eq!(d.severity, Severity::Error);
+}
+
+#[test]
+fn plugin_is_offered_as_a_kind() {
+    let src = "system: s\nunit: u\nkind: nonsense\n\n\
+## behavior\n- do it\n\n## invariants\n";
+    let d = only(src, code::BAD_KIND);
+    assert!(d.message.contains("plugin"), "{}", d.message);
+    assert!(d.message.contains("system"), "{}", d.message);
+}

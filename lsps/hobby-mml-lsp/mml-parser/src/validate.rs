@@ -6,20 +6,129 @@
 //! silent-if-unknown, so a mistyped module name in prose is a missing link, not
 //! an error.
 
-use crate::ast::{Document, Kind, Step, TypeDef, TypeExpr};
+use crate::ast::{Document, Kind, Role, Step, TypeDef, TypeExpr};
 use crate::diagnostic::{Diagnostic, code};
 use crate::span::Spanned;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Valid HTTP methods for the `method:` header key (grammar §2).
 const HTTP_METHODS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 
 /// Type idents that need no definition.
-const PRIMITIVES: &[&str] = &[
+pub const PRIMITIVES: &[&str] = &[
     "String", "bool", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64",
 ];
-const OPAQUE: &[&str] = &["Uuid", "Money", "DateTime"];
-const CONTAINERS: &[&str] = &["Option", "Vec", "Map", "Queue", "Stream"];
+pub const OPAQUE: &[&str] = &[
+    "Uuid", "Money", "DateTime", "Entity", "Duration", "Vec2", "Vec3", "Vec4", "Quat", "Color",
+    "Timer", "Rect",
+];
+pub const CONTAINERS: &[&str] = &["Option", "Vec", "Map", "Queue", "Stream", "Handle"];
+
+/// Bevy components a spec may name without declaring them — the engine already
+/// defines them, and restating `Transform` in every plugin spec would be noise.
+pub const BUILTIN_COMPONENTS: &[&str] = &[
+    "Entity",
+    "Transform",
+    "GlobalTransform",
+    "Visibility",
+    "InheritedVisibility",
+    "ViewVisibility",
+    "Name",
+    "Children",
+    "ChildOf",
+    "Parent",
+    "Sprite",
+    "Mesh2d",
+    "Mesh3d",
+    "MeshMaterial2d",
+    "MeshMaterial3d",
+    "Camera",
+    "Camera2d",
+    "Camera3d",
+    "PointLight",
+    "DirectionalLight",
+    "SpotLight",
+    "Text",
+    "Text2d",
+    "Node",
+    "Button",
+    "Window",
+    "AudioPlayer",
+    "AnimationPlayer",
+    "Aabb",
+];
+
+/// Bevy resources (and system params close enough to be spelled like one) a
+/// spec may name without declaring them.
+pub const BUILTIN_RESOURCES: &[&str] = &[
+    "Time",
+    "AssetServer",
+    "Assets",
+    "Commands",
+    "ButtonInput",
+    "Gamepads",
+    "Windows",
+    "State",
+    "NextState",
+    "Gizmos",
+    "ClearColor",
+    "AmbientLight",
+    "Msaa",
+    "Diagnostics",
+    "Fixed",
+];
+
+/// Bevy events a spec may name without declaring them.
+pub const BUILTIN_EVENTS: &[&str] = &[
+    "AppExit",
+    "AssetEvent",
+    "WindowResized",
+    "WindowCloseRequested",
+    "CursorMoved",
+    "KeyboardInput",
+    "MouseButtonInput",
+    "MouseMotion",
+    "MouseWheel",
+    "TouchInput",
+];
+
+/// Bevy's built-in schedule labels. A `schedule:` outside this set is a warning,
+/// not an error — custom schedules and `OnEnter(…)`/`OnExit(…)` state schedules
+/// are both legitimate (the latter are recognised by shape, see
+/// [`is_known_schedule`]).
+pub const SCHEDULES: &[&str] = &[
+    "PreStartup",
+    "Startup",
+    "PostStartup",
+    "First",
+    "PreUpdate",
+    "StateTransition",
+    "RunFixedMainLoop",
+    "FixedFirst",
+    "FixedPreUpdate",
+    "FixedUpdate",
+    "FixedPostUpdate",
+    "FixedLast",
+    "Update",
+    "PostUpdate",
+    "Last",
+    "Main",
+    "SpawnScene",
+];
+
+/// Whether `s` names a schedule the grammar recognises: a built-in label, or a
+/// state-transition schedule `OnEnter(X)` / `OnExit(X)` / `OnTransition(…)`.
+pub fn is_known_schedule(s: &str) -> bool {
+    if SCHEDULES.contains(&s) {
+        return true;
+    }
+    match s.split_once('(') {
+        Some((head, rest)) => {
+            matches!(head, "OnEnter" | "OnExit" | "OnTransition") && rest.ends_with(')')
+        }
+        None => false,
+    }
+}
 
 /// Run all semantic checks and return the diagnostics (unsorted; callers merge
 /// with [`Document::diagnostics`] and sort).
@@ -47,9 +156,12 @@ pub fn validate(doc: &Document) -> Vec<Diagnostic> {
         }
     }
 
-    // Defined type names (also drives duplicate-type detection).
+    // Defined type names (also drives duplicate-type detection). One namespace
+    // across `## data` and the three world sections, so declaring `Wave` as
+    // both a component and a resource is caught here rather than producing an
+    // ambiguous role later.
     let mut defined: HashSet<&str> = HashSet::new();
-    for def in &doc.data.types {
+    for def in doc.all_type_defs() {
         let name = def.name();
         if !defined.insert(name.value.as_str()) {
             diags.push(Diagnostic::error(
@@ -61,7 +173,7 @@ pub fn validate(doc: &Document) -> Vec<Diagnostic> {
     }
 
     // Duplicate fields within each struct.
-    for def in &doc.data.types {
+    for def in doc.all_type_defs() {
         if let TypeDef::Struct { fields, .. } = def {
             let mut seen: HashSet<&str> = HashSet::new();
             for field in fields {
@@ -81,7 +193,7 @@ pub fn validate(doc: &Document) -> Vec<Diagnostic> {
     // them stop erroring. Whether the target file/type actually exists needs a
     // filesystem and is a warning emitted by fs-side consumers (LSP, CLI, index).
     let mut imported: HashSet<&str> = HashSet::new();
-    for import in &doc.data.imports {
+    for import in doc.all_imports() {
         if !crate::ast::is_valid_spec_ref(import.spec.value.as_str()) {
             diags.push(Diagnostic::error(
                 import.spec.span,
@@ -128,7 +240,7 @@ pub fn validate(doc: &Document) -> Vec<Diagnostic> {
         .chain(imported.iter().copied())
         .collect();
 
-    for def in &doc.data.types {
+    for def in doc.all_type_defs() {
         if let TypeDef::Struct { fields, .. } = def {
             for field in fields {
                 check_type(&field.ty, &known, &mut diags);
@@ -141,6 +253,9 @@ pub fn validate(doc: &Document) -> Vec<Diagnostic> {
     if let Some(ty) = &doc.data.output {
         check_type(ty, &known, &mut diags);
     }
+
+    // Bevy dialect: systems and their access blocks.
+    validate_bevy(doc, &mut diags);
 
     // Duplicate module names.
     let mut seen_modules: HashSet<&str> = HashSet::new();
@@ -164,11 +279,148 @@ pub fn validate(doc: &Document) -> Vec<Diagnostic> {
     diags
 }
 
-/// All `@ spec` refs in the document: modules, behavior steps (recursively),
-/// and invariants.
+/// Semantic checks for the Bevy dialect: duplicate system names, and every
+/// access block's schedule, ordering refs, and world-item lists.
+///
+/// This is what replaces the `in:`/`out:` type check for `kind: plugin` and
+/// `kind: system` — because data flows through the World, a system's contract
+/// is the set of components, resources, and events it touches, and each of
+/// those names must resolve to something declared, imported, or built into
+/// Bevy, in a role that fits the key it appears under.
+fn validate_bevy(doc: &Document, diags: &mut Vec<Diagnostic>) {
+    // Duplicate system names.
+    let mut seen: HashSet<&str> = HashSet::new();
+    for system in &doc.systems {
+        if !seen.insert(system.name.value.as_str()) {
+            diags.push(Diagnostic::error(
+                system.name.span,
+                code::DUPLICATE_SYSTEM,
+                format!("duplicate system `{}`", system.name.value),
+            ));
+        }
+    }
+
+    let roles = doc.roles();
+    // Ordering targets declared in this file: the systems plus any set named in
+    // a `set:` line.
+    let mut orderable: HashSet<&str> = doc.systems.iter().map(|s| s.name.value.as_str()).collect();
+    for (_, block) in doc.access_blocks() {
+        orderable.extend(block.sets.iter().map(|s| s.value.as_str()));
+    }
+    // Only a plugin declares the systems it orders against. A `kind: system`
+    // file legitimately orders against systems specced elsewhere, so checking
+    // its refs would warn on every correct file.
+    let check_ordering = doc.header.kind.as_ref().map(|k| k.value) == Some(Kind::Plugin);
+
+    for (name, block) in doc.access_blocks() {
+        let label = match name {
+            Some(n) => format!("system `{}`", n.value),
+            None => "`## access`".to_string(),
+        };
+
+        match &block.schedule {
+            None => diags.push(Diagnostic::error(
+                block.anchor,
+                code::MISSING_SCHEDULE,
+                format!("{label} has no `schedule:`; every system runs in some schedule"),
+            )),
+            Some(schedule) if !is_known_schedule(&schedule.value) => {
+                diags.push(Diagnostic::warning(
+                    schedule.span,
+                    code::UNKNOWN_SCHEDULE,
+                    format!(
+                        "`{}` is not a built-in Bevy schedule; expected one of {SCHEDULES:?}, \
+                         `OnEnter(..)`/`OnExit(..)`, or a custom schedule you register",
+                        schedule.value
+                    ),
+                ));
+            }
+            Some(_) => {}
+        }
+
+        if check_ordering {
+            for r in block.ordering_refs() {
+                if !orderable.contains(r.value.as_str()) {
+                    diags.push(Diagnostic::warning(
+                        r.span,
+                        code::UNRESOLVED_SYSTEM_REF,
+                        format!(
+                            "`{}` names no system or set in this spec; ordering against another \
+                             plugin's system is fine, but check the spelling",
+                            r.value
+                        ),
+                    ));
+                }
+            }
+        }
+
+        for (key, accepted, items) in block.world_lists() {
+            for item in items {
+                check_access_item(key, accepted, item, &roles, diags);
+            }
+        }
+    }
+}
+
+/// Resolve one access-list name and check its role against the key it sits
+/// under. Declarations win over Bevy built-ins, so a spec may redefine `Timer`.
+fn check_access_item(
+    key: &str,
+    accepted: &[Role],
+    item: &Spanned<String>,
+    roles: &HashMap<&str, Role>,
+    diags: &mut Vec<Diagnostic>,
+) {
+    let name = item.value.as_str();
+    let role = roles.get(name).copied().or_else(|| builtin_role(name));
+    let Some(role) = role else {
+        let want = accepted
+            .iter()
+            .map(|r| r.section())
+            .collect::<Vec<_>>()
+            .join(" or ");
+        diags.push(Diagnostic::error(
+            item.span,
+            code::UNDEFINED_ACCESS_ITEM,
+            format!(
+                "`{name}` is not declared, imported, or a Bevy built-in; declare it in `## {want}`"
+            ),
+        ));
+        return;
+    };
+    if !accepted.contains(&role) {
+        let want = accepted
+            .iter()
+            .map(|r| r.noun())
+            .collect::<Vec<_>>()
+            .join(" or a ");
+        diags.push(Diagnostic::error(
+            item.span,
+            code::ACCESS_ROLE_MISMATCH,
+            format!("`{name}` is a {}, but `{key}:` takes a {want}", role.noun()),
+        ));
+    }
+}
+
+/// The role of a Bevy built-in name, if it is one.
+pub fn builtin_role(name: &str) -> Option<Role> {
+    if BUILTIN_COMPONENTS.contains(&name) {
+        Some(Role::Component)
+    } else if BUILTIN_RESOURCES.contains(&name) {
+        Some(Role::Resource)
+    } else if BUILTIN_EVENTS.contains(&name) {
+        Some(Role::Event)
+    } else {
+        None
+    }
+}
+
+/// All `@ spec` refs in the document: modules, system entries, behavior steps
+/// (recursively), and invariants.
 pub fn collect_spec_refs(doc: &Document) -> Vec<&Spanned<String>> {
     let mut refs = Vec::new();
     refs.extend(doc.modules.iter().filter_map(|m| m.spec.as_ref()));
+    refs.extend(doc.systems.iter().filter_map(|s| s.spec.as_ref()));
     fn walk<'a>(steps: &'a [Step], refs: &mut Vec<&'a Spanned<String>>) {
         for step in steps {
             refs.extend(step.spec.as_ref());
@@ -181,14 +433,16 @@ pub fn collect_spec_refs(doc: &Document) -> Vec<&Spanned<String>> {
 }
 
 /// All source-code references in the document: the header `source.paths`
-/// entries and each module's `@ path`. Whether a path resolves to a real file
-/// needs a filesystem and is checked by fs-aware consumers (`lint`, the LSP).
+/// entries, each module's `@ path`, and each system entry's `@ path`. Whether a
+/// path resolves to a real file needs a filesystem and is checked by fs-aware
+/// consumers (`lint`, the LSP).
 pub fn collect_source_paths(doc: &Document) -> Vec<&Spanned<String>> {
     let mut paths = Vec::new();
     if let Some(source) = &doc.header.source {
         paths.extend(source.paths.iter());
     }
     paths.extend(doc.modules.iter().filter_map(|m| m.path.as_ref()));
+    paths.extend(doc.systems.iter().filter_map(|s| s.path.as_ref()));
     paths
 }
 

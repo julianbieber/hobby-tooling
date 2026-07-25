@@ -16,14 +16,18 @@ shows. (The round-trip eval, task 08, confirms full-regeneration from a spec is
 lossy by design; the spec's job is to be edited and diffed, not to rebuild the
 unit.)
 
-Read
-`~/projects/team-constellation-mimisbrunnr/notes/llm_mental_model/01-language-spec/grammar.md`
-(authoritative grammar) and
-`~/projects/team-constellation-mimisbrunnr/notes/llm_mental_model/01-language-spec/{layout.md,linkage.md}`
-(where the file goes, how cross-spec linkage works) before your first extraction
-if you are unsure of any rule below. The grammar cheat-sheet and three worked
-examples at the end of this file are the reference — match their **altitude**
-and formatting.
+Read `~/fun_repos/hobby-tooling/lsps/hobby-mml-lsp/grammar.md` (the authoritative
+hobby grammar, v2 — **not** the work one) before your first extraction if you
+are unsure of any rule below. The grammar cheat-sheet and worked examples at the
+end of this file are the reference — match their **altitude** and formatting.
+The always-parsing examples live in
+`~/fun_repos/hobby-tooling/lsps/hobby-mml-lsp/mml-parser/tests/fixtures/examples/`.
+
+**Bevy is the common case here.** Most hobby repos are Bevy games, and a Bevy
+unit does not have an input and an output — data flows through the World. If the
+code you are extracting is a `Plugin` or a system, use `kind: plugin` /
+`kind: system` and the Bevy sections ([step 4b](#4b-extracting-bevy-code)), not
+`## data` with `in:`/`out:`.
 
 ## Instructions
 
@@ -35,8 +39,12 @@ and formatting.
      `bevy-survivor`, `terrain-erosion`). **Not** the git repo name.
    - `unit` — a unique-within-system identifier (kebab-case): verb-first for
      endpoints (`get-map-tile`); the message/job name for
-     workflows/jobs (`reload-shader-batch`, `mesh-terrain-chunks`).
-   - `kind` — exactly one of `endpoint` | `workflow` | `job`.
+     workflows/jobs (`reload-shader-batch`, `mesh-terrain-chunks`); the plugin's
+     feature name for Bevy (`enemy-waves`), or the fn name for a single system
+     (`spawn-enemies`).
+   - `kind` — exactly one of `endpoint` | `workflow` | `job` | `plugin` |
+     `system`. A `impl Plugin for X` is a `plugin`; one system worth its own
+     file is a `system`; everything else is a classic kind.
    - the **entry point**: the controller action + route for an endpoint, the
      consumer/`process`-function for a workflow, the `main`/scheduled function
      for a job. This is where the behavior walk starts and where `in:`/`out:`
@@ -84,7 +92,8 @@ and formatting.
    - Align the `—` separators with padding spaces as in the examples.
 
 4. **`## data`** — the in/out data model as a Rust-like subset. Definitions
-   first, then `in:` / `out:`.
+   first, then `in:` / `out:`. **Classic kinds only** — for `plugin` / `system`
+   skip to [step 4b](#4b-extracting-bevy-code).
 
    - Derive `struct`s from the request/response and the types that flow through
      the entry point. Field names `snake_case`; translate source types into the
@@ -124,9 +133,72 @@ and formatting.
      the unit that *owns* the type (defines it locally), not one that itself
      imports it.
 
+### 4b. Extracting Bevy code
+
+For `kind: plugin` / `kind: system` there is no `## data` and no `in:`/`out:`.
+Read the access set off the code instead — it is the interface.
+
+- **`## components` / `## resources` / `## events`** — one section per role.
+  Source them from the derives:
+  - `#[derive(Component)]` → `## components`. A unit struct
+    (`struct Spawner;`) becomes `marker Spawner`, not an empty struct.
+  - `#[derive(Resource)]` → `## resources`.
+  - `#[derive(Event)]` / `#[derive(Message)]` → `## events`.
+  - Field types map as in step 4, plus the Bevy atoms `Entity`, `Vec2`, `Vec3`,
+    `Quat`, `Color`, `Timer`, `Duration`, `Handle<T>`.
+  - **Do not declare Bevy's own types.** `Transform`, `Time`, `AssetServer`,
+    `AppExit` and friends are known to the parser. Declaring one locally
+    shadows the built-in and is almost always a mistake.
+  - Reuse before redeclaring, exactly as in step 4: `use enemy-waves: Wave` at
+    the top of the world section that gives it its role.
+
+- **`## systems`** — one entry per system the plugin registers. Read them off
+  `app.add_systems(<Schedule>, (a, b).chain())` and friends:
+
+  ```
+  <fn_name> — <what it does> [@ <path to the fn>] [@ spec <unit>]
+    schedule: FixedUpdate        # the add_systems schedule argument
+    set:      WaveSpawning       # .in_set(..)
+    after:    tick_wave_timer    # .after(..) — and .chain() implies after
+    before:   render_hud         # .before(..)
+    run_if:   WaveState.due      # .run_if(..), as prose
+    query:    Transform + Spawner - Dead
+    reads:    WaveConfig, Time
+    writes:   WaveState
+    spawns:   EnemyHealth, Wave
+    despawns: Wave
+    emits:    WaveCleared
+    consumes: WaveCleared
+  ```
+
+  Derive the lists from the system's parameters:
+  - `Query<&T, With<A>>` → `query: T + A`; `Without<B>` → `- B`.
+  - `&mut T` inside a query → also list `T` under `writes:`.
+  - `Res<T>` → `reads: T`; `ResMut<T>` → `writes: T`.
+  - `EventWriter<E>` → `emits: E`; `EventReader<E>` → `consumes: E`.
+  - `commands.spawn((A, B))` → `spawns: A, B`; `.despawn()` → `despawns:`.
+  - Omit a key entirely when the system does not use it — an empty list is
+    noise. `schedule:` is the one key that is always required.
+
+  Keep the responsibility at mental-model altitude; the access block already
+  carries the mechanics, so do not restate them in prose.
+
+- **When a system is too big for one entry**, give it its own `kind: system`
+  file and point at it: `spawn_enemies — … @ spec spawn-enemies`. The split file
+  carries the same access block as a `## access` section and imports the shapes
+  it touches.
+
+- **`## modules`** is optional for Bevy kinds — keep it for the non-system
+  collaborators (the `impl Plugin` type itself, an asset loader, a helper),
+  not for the systems, which have their own section.
+
 5. **`## behavior`** — **this is the whole game.** Nested `-` bullets at
    *mental-model altitude*: the steps I would narrate to a colleague, not a
    transcription of the code.
+
+   For `kind: plugin`, make the top-level bullets the **system names with a
+   trailing `:`** and nest each system's logic under it — the LSP then
+   cross-links each bullet to its `## systems` entry.
 
    - **Altitude test**: each step is a decision or an action a human cares about
      ("get a proxy from ProxyPool", "if a cookie banner is present: click accept
@@ -209,11 +281,18 @@ and formatting.
 
 ## Grammar cheat-sheet
 
-- File = header, then exactly four `##` sections in order: `modules`, `data`,
-  `behavior`, `invariants`. All required; a body may be empty except `behavior`.
+- File = header, then `##` sections in canonical order: `modules`, `data`,
+  `components`, `resources`, `events`, `systems`, `access`, `behavior`,
+  `invariants`. **Which are legal depends on `kind`:**
+  - `endpoint`/`workflow`/`job` — exactly `modules`, `data`, `behavior`,
+    `invariants`, all required (a body may be empty except `behavior`).
+  - `plugin` — `systems`, `behavior`, `invariants` required; `modules`,
+    `components`, `resources`, `events` optional; no `data`, no `access`.
+  - `system` — `access`, `behavior`, `invariants` required; `modules`,
+    `components`, `resources`, `events` optional; no `data`, no `systems`.
 - Header keys: `system` (req), `unit` (req), `kind` (req: `endpoint`|`workflow`|
-  `job`), `method` (opt, endpoints: `GET`|`POST`|…), `base` (opt), `source`
-  (opt: `repo` + `paths` list). `system`/`unit` are identifiers.
+  `job`|`plugin`|`system`), `method` (opt, endpoints: `GET`|`POST`|…), `base`
+  (opt), `source` (opt: `repo` + `paths` list). `system`/`unit` are identifiers.
 - `#` at column 0 is a comment; `##` at column 0 is always a section header.
 - Indent = spaces only, 2 spaces per nesting level.
 - `## modules`: `PascalName — responsibility [@ repo-relative-path]`.
@@ -233,11 +312,34 @@ and formatting.
   nested); everything else prose; declared names cross-link. An optional
   trailing `where:` block binds symbols: `Symbol = value [@ config-source]`.
 - `## invariants`: flat `-` bullets, each a checkable claim.
-- Cross-spec refs (grammar §5.4): a module line, behavior step, or invariant may
-  end with `@ spec unit` — "more specification under" a sibling `.mml` in the
-  same task directory. At most one per line, always the last annotation (after a
-  module's `@ path`); it resolves to `<unit>.mml` in the referencing file's own
-  directory. Unresolved target = warning, not error.
+- Cross-spec refs (grammar §5.4): a module line, **system entry**, behavior step,
+  or invariant may end with `@ spec unit` — "more specification under" a sibling
+  `.mml` in the same task directory. At most one per line, always the last
+  annotation (after an `@ path`); it resolves to `<unit>.mml` in the referencing
+  file's own directory. Unresolved target = warning, not error.
+
+**Bevy dialect (grammar §8):**
+
+- `## components` / `## resources` / `## events`: the `## data` type grammar
+  minus `in:`/`out:`, plus `marker Name` (a zero-sized component, `## components`
+  only). **The section assigns the ECS role**, for `use` imports too. The same
+  name may not be declared in two of them.
+- Bevy's own types need no declaration — `Transform`, `Time`, `AssetServer`,
+  `AppExit` and friends are built in with their roles.
+- `## systems`: `snake_name — responsibility [@ path] [@ spec unit]` at column 0,
+  each followed by an indented access block. `## access` is the same block,
+  unindented, for a `kind: system` file.
+- Access keys (each at most once): `schedule:` (**required**), `set:`, `after:`,
+  `before:`, `run_if:`, `query:`, `reads:`, `writes:`, `spawns:`, `despawns:`,
+  `emits:`, `consumes:`.
+- `query:` is `A + B - C` (`+` requires, `-` excludes) and takes **components**;
+  `spawns:`/`despawns:` components; `emits:`/`consumes:` **events**;
+  `reads:`/`writes:` either a component or a **resource**. Wrong role = error;
+  unresolvable name = error.
+- Schedules: `Update`, `FixedUpdate`, `Startup`, `PostUpdate`, … plus
+  `OnEnter(X)`/`OnExit(X)`. An unknown label is a warning, not an error.
+- `after:`/`before:` should name a system or `set:` in the same file (warning
+  otherwise) — checked only for `kind: plugin`.
 
 ## Worked examples
 
@@ -442,4 +544,144 @@ out: Stream<ReloadResult>
 - a pipeline is never left bound to a module that failed validation
 - every change in the batch produces exactly one ReloadResult
 - a failed batch is dropped rather than retried — the next filesystem event re-triggers it
+```
+
+### Bevy plugin — `enemy-waves.mml`
+
+Note what is *not* here: no `## data`, no `in:`/`out:`. The interface is the
+access blocks. `Transform` and `Time` are Bevy built-ins, so they are used
+without being declared; `Spawner` is a unit struct in the code and so becomes a
+`marker`.
+
+```mml
+system: bevy-survivor
+unit: enemy-waves
+kind: plugin
+source:
+  repo: bevy_survivor
+  paths:
+    - src/waves/mod.rs
+    - src/waves/timer.rs
+
+## modules
+WavePlugin — builds the plugin: registers the types below and adds the systems @ src/waves/mod.rs
+
+## components
+struct Wave {
+  index: u32,
+  remaining: u32,
+}
+struct EnemyHealth {
+  hp: f32,
+}
+marker Spawner
+
+## resources
+struct WaveConfig {
+  interval_secs: f32,
+  base_count: u32,
+}
+struct WaveState {
+  current: u32,
+  elapsed: f32,
+  due: bool,
+}
+
+## events
+struct WaveCleared {
+  index: u32,
+}
+
+## systems
+tick_wave_timer — advances the wave clock and marks the next wave due @ src/waves/timer.rs
+  schedule: FixedUpdate
+  reads:    WaveConfig, Time
+  writes:   WaveState
+spawn_enemies — spawns the next wave at each spawn point @ spec spawn-enemies
+  schedule: FixedUpdate
+  after:    tick_wave_timer
+  run_if:   WaveState.due
+  query:    Transform + Spawner
+  reads:    WaveConfig
+  writes:   WaveState
+  spawns:   EnemyHealth, Wave
+detect_cleared — emits WaveCleared once no enemies of the current wave remain
+  schedule: Update
+  query:    Wave + EnemyHealth
+  reads:    WaveState
+  emits:    WaveCleared
+
+## behavior
+- tick_wave_timer:
+  - advance WaveState.elapsed by the frame delta from Time
+  - if elapsed exceeds WaveConfig.interval_secs:
+    - mark WaveState due and reset elapsed
+- spawn_enemies:
+  - for each Spawner:
+    - spawn N enemies at the spawner's Transform, where N grows with WaveState.current
+    - give each one EnemyHealth and a Wave tagged with the current index
+  - clear the due flag and advance WaveState.current
+- detect_cleared:
+  - count the entities carrying a Wave for the current index
+  - if none remain:
+    - emit WaveCleared for that index
+
+where:
+  N = 8 @ WaveConfig.base_count
+
+## invariants
+- no entity carries both Spawner and EnemyHealth
+- WaveState.current only ever increases
+- exactly one WaveCleared is emitted per wave index
+```
+
+### Bevy system — `spawn-enemies.mml`
+
+The split-out form: one system, its access block as a section, and the shapes it
+touches imported rather than redeclared.
+
+```mml
+system: bevy-survivor
+unit: spawn-enemies
+kind: system
+source:
+  repo: bevy_survivor
+  paths:
+    - src/waves/spawn.rs
+
+## components
+use enemy-waves: Wave, EnemyHealth, Spawner
+struct SpawnBudget {
+  remaining: u32,
+}
+
+## resources
+use enemy-waves: WaveConfig, WaveState
+
+## access
+schedule: FixedUpdate
+set:      WaveSpawning
+after:    tick_wave_timer
+run_if:   WaveState.due
+query:    Transform + Spawner - SpawnBudget
+reads:    WaveConfig, Time
+writes:   WaveState
+spawns:   EnemyHealth, Wave, SpawnBudget
+
+## behavior
+- compute the wave size as WaveConfig.base_count scaled by WaveState.current
+- for each Spawner:
+  - split the wave size evenly across the spawners, giving the remainder to the first
+  - while the spawner's share is not exhausted:
+    - pick a position by jittering the spawner's Transform within radius X
+    - spawn an entity with EnemyHealth, a Wave tagged with WaveState.current, and that position
+- clear WaveState.due and advance WaveState.current
+
+where:
+  X = 3 @ constant SPAWN_JITTER
+
+## invariants
+- the number of entities spawned equals the wave size, regardless of spawner count
+- every spawned entity carries both EnemyHealth and Wave
+- a spawner already carrying SpawnBudget is skipped, so a wave is never spawned twice
 ```
