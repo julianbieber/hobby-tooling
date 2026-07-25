@@ -32,8 +32,8 @@ Split by machine, because the two have different things installed.
 - [ ] **`chobby`, then `/login`** with the private account. The only step `just
       bootstrap` cannot script. This is the last real gap in `just doctor`.
 - [ ] **Install `zellij`** — without it `hcdev` cannot open dev sessions.
-- [ ] **Install `gh`** — without it `/pr-create` and the `/gh-issue-*` skills fail,
-      and hobby projects use GitHub issues as their tracker.
+- [x] **Install `gh`** — done, 2.96.0, authenticated as `julianbieber`. `/pr-create`
+      and the `/gh-issue-*` skills work now.
 - [ ] **Review `git -C ~ diff .config/helix/languages.toml`** and commit what you
       want. Heads up: the previously installed copy (143,694 B, mtime 2025-12-04) was
       overwritten by `wire-helix` before being backed up, and it held ~26 KB of edits
