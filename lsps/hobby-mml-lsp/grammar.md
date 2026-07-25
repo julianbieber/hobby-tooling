@@ -1,19 +1,24 @@
 ---
-title: "Hobby MML — language specification (v2.0, Bevy dialect)"
+title: "Hobby HMML — language specification (v2.0, Bevy dialect)"
 created: 2026-07-25
 tags:
   - spec
   - reference
 ---
 
-# Hobby MML — Mental Model Language
+# Hobby HMML — Mental Model Language
 
-**This file is the source of truth for the hobby MML grammar.** The
-`hobby-mml-parser` / `hobby-mml-lsp` binaries and the five `mml-*` skills
+**This file is the source of truth for the HMML grammar.** The
+`hobby-mml-parser` / `hobby-mml-lsp` binaries and the five `hmml-*` skills
 implement exactly what is defined here.
 
-An `.mml` file describes **one unit of behavior** — small enough to hold in one
-head, one review, one diff. You edit the `.mml`; Claude translates spec → code.
+HMML is the hobby dialect and its files are **`.hmml`**. The work dialect keeps
+`.mml` and its own `mml-lsp`; the distinct extension is what lets both live on
+one machine without Helix guessing. The binaries here stay `hobby-mml-*` — they
+never collided with the work ones.
+
+An `.hmml` file describes **one unit of behavior** — small enough to hold in one
+head, one review, one diff. You edit the `.hmml`; Claude translates spec → code.
 
 > **v2.0 (2026-07-25) — the Bevy dialect.** Hobby projects are overwhelmingly
 > Bevy games, and Bevy breaks MML's founding assumption. A v1 unit is a function:
@@ -33,7 +38,7 @@ head, one review, one diff. You edit the `.mml`; Claude translates spec → code
 
 ## 1. File shape
 
-An `.mml` file is **line-oriented, UTF-8**, and has two parts in a fixed order:
+An `.hmml` file is **line-oriented, UTF-8**, and has two parts in a fixed order:
 
 1. A **header** (YAML-ish key/value block) at the top.
 2. A sequence of **`##` sections**, in canonical order.
@@ -63,7 +68,7 @@ A block of `key: value` lines before the first `##` section.
 
 | Key | Required | Meaning |
 |---|---|---|
-| `unit` | yes | Unique identifier (kebab-case). **This is the filename** (`<unit>.mml`). |
+| `unit` | yes | Unique identifier (kebab-case). **This is the filename** (`<unit>.hmml`). |
 | `kind` | yes | One of `endpoint`, `workflow`, `job`, `plugin`, `system`. |
 | `system` | yes | Free-text label for the conceptual product grouping (`bevy-survivor`). Not a path component. |
 | `method` | no | HTTP verb; `kind: endpoint` only. |
@@ -146,7 +151,7 @@ use enemy-waves: Wave, EnemyHealth
 ```
 
 Brings type **names** (not bodies) from another unit into this file's scope. The
-target is a bare `<unit>` resolving to a sibling `<unit>.mml` in the same task
+target is a bare `<unit>` resolving to a sibling `<unit>.hmml` in the same task
 directory. Legal at the top of `## data` **and** of each world section
 ([§8.1](#81--components----resources----events)).
 
@@ -421,16 +426,16 @@ compiled into the test suite, so they cannot drift:
 
 | File | Shows |
 |---|---|
-| `mml-parser/tests/fixtures/examples/enemy-waves.mml` | `kind: plugin` — all three world sections, three systems, ordering, a `marker`, a `where:` binding |
-| `mml-parser/tests/fixtures/examples/spawn-enemies.mml` | `kind: system` — `## access`, imports across specs, a `-` query exclusion |
-| `mml-parser/tests/fixtures/examples/get-map-tile.mml` | `kind: endpoint` — `method`, param sources |
-| `mml-parser/tests/fixtures/examples/mesh-terrain-chunks.mml` | `kind: workflow` — `Queue`/`Stream` in/out |
-| `mml-parser/tests/fixtures/examples/shared-data-imports.mml` | `use` type imports |
-| `mml-parser/tests/fixtures/examples/cross-spec-refs.mml` | `@ spec` annotations |
+| `mml-parser/tests/fixtures/examples/enemy-waves.hmml` | `kind: plugin` — all three world sections, three systems, ordering, a `marker`, a `where:` binding |
+| `mml-parser/tests/fixtures/examples/spawn-enemies.hmml` | `kind: system` — `## access`, imports across specs, a `-` query exclusion |
+| `mml-parser/tests/fixtures/examples/get-map-tile.hmml` | `kind: endpoint` — `method`, param sources |
+| `mml-parser/tests/fixtures/examples/mesh-terrain-chunks.hmml` | `kind: workflow` — `Queue`/`Stream` in/out |
+| `mml-parser/tests/fixtures/examples/shared-data-imports.hmml` | `use` type imports |
+| `mml-parser/tests/fixtures/examples/cross-spec-refs.hmml` | `@ spec` annotations |
 
 ## 11. Authoring checklist
 
-- Filename equals the `unit:` header value, plus `.mml`.
+- Filename equals the `unit:` header value, plus `.hmml`.
 - `kind:` set, and only that kind's sections present — in canonical order.
 - Indentation is 2 spaces, no tabs.
 - **Classic kinds:** every type in a field / `in:` / `out:` resolves.

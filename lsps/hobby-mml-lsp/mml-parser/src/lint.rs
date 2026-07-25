@@ -3,7 +3,7 @@
 //! The pure parse/validate passes never touch the filesystem; these checks do.
 //! Each takes the spec's on-disk location (`current_file`) plus an optional
 //! workspace root and warns about references that do not resolve to a real
-//! file: `@ spec` refs and `use` imports (sibling `.mml` files) and — the check
+//! file: `@ spec` refs and `use` imports (sibling `.hmml` files) and — the check
 //! goto-definition otherwise fails silently on — the header `source.paths`
 //! entries and module `@ path`s.
 
@@ -184,7 +184,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("supervisor.py"), "x").unwrap();
         fs::write(dir.path().join("child.py"), "x").unwrap();
-        let current = dir.path().join("one.mml");
+        let current = dir.path().join("one.hmml");
         let diags = unresolved_source_paths(&doc(&spec_src("")), &current, None);
         assert!(diags.is_empty(), "{diags:?}");
     }
@@ -195,7 +195,7 @@ mod tests {
         // Only the module's `child.py` exists; the header path is missing.
         fs::write(dir.path().join("child.py"), "x").unwrap();
         let src = spec_src("");
-        let current = dir.path().join("one.mml");
+        let current = dir.path().join("one.hmml");
         let diags = unresolved_source_paths(&doc(&src), &current, None);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].code, "unresolved-source-path");
@@ -209,7 +209,7 @@ mod tests {
     fn module_path_without_source_block_warns_when_missing() {
         let dir = tempfile::tempdir().unwrap();
         let src = "unit: one\nkind: job\n\n## modules\nWorker — runs @ nope.py\n\n## data\nin:  Queue<String>\nout: Stream<String>\n\n## behavior\n- run\n\n## invariants\n";
-        let current = dir.path().join("one.mml");
+        let current = dir.path().join("one.hmml");
         let diags = unresolved_source_paths(&doc(src), &current, None);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("nope.py"));
@@ -222,7 +222,7 @@ mod tests {
         fs::create_dir_all(&repo).unwrap();
         fs::write(repo.join("supervisor.py"), "x").unwrap();
         fs::write(repo.join("child.py"), "x").unwrap();
-        let current = dir.path().join("one.mml");
+        let current = dir.path().join("one.hmml");
         let diags = unresolved_source_paths(&doc(&spec_src("base: checkout\n")), &current, None);
         assert!(diags.is_empty(), "{diags:?}");
     }
@@ -232,7 +232,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("child.py"), "x").unwrap();
         let src = "unit: one\nkind: job\n\n## modules\nWorker — runs @ child.py:42:10\n\n## data\nin:  Queue<String>\nout: Stream<String>\n\n## behavior\n- run\n\n## invariants\n";
-        let current = dir.path().join("one.mml");
+        let current = dir.path().join("one.hmml");
         let diags = unresolved_source_paths(&doc(src), &current, None);
         assert!(diags.is_empty(), "{diags:?}");
     }
@@ -243,7 +243,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         fs::write(ws.path().join("supervisor.py"), "x").unwrap();
         fs::write(ws.path().join("child.py"), "x").unwrap();
-        let current = spec_dir.path().join("one.mml");
+        let current = spec_dir.path().join("one.hmml");
         let diags = unresolved_source_paths(&doc(&spec_src("")), &current, Some(ws.path()));
         assert!(diags.is_empty(), "{diags:?}");
     }
@@ -254,7 +254,7 @@ mod tests {
         // `supervisor.py`/`child.py` missing AND a spec ref to a missing
         // sibling → one source-path warning per path + one spec-ref warning.
         let src = spec_src("").replace("- run", "- run @ spec other");
-        let current = dir.path().join("one.mml");
+        let current = dir.path().join("one.hmml");
         let diags = lint(&doc(&src), &current, None);
         let codes: Vec<&str> = diags.iter().map(|d| d.code).collect();
         assert!(codes.contains(&"unresolved-spec-ref"), "{codes:?}");

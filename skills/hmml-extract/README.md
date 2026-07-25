@@ -1,21 +1,21 @@
-# MML Extract
+# HMML Extract
 
 | Field        | Value                                                                              |
 | ------------ | ---------------------------------------------------------------------------------- |
 | Type         | skill                                                                              |
-| Install path | `~/.claude-hobby/commands/mml-extract.md`                                                            |
+| Install path | `~/.claude-hobby/commands/hmml-extract.md`                                                            |
 | Owner        | @julianbieber                                                                      |
-| Dependencies | hobby MML grammar (`lsps/hobby-mml-lsp/grammar.md`), `tree-extract` & `lsp-mcp` MCPs |
+| Dependencies | HMML grammar (`lsps/hobby-mml-lsp/grammar.md`), `tree-extract` & `lsp-mcp` MCPs |
 | Status       | experimental                                                                       |
 
 ## Description
 
 Analyzes one unit of an existing system — an endpoint, a message/queue workflow,
 or a scheduled job — and emits a valid
-[`.mml`](../../lsps/hobby-mml-lsp/grammar.md) (Mental Model Language)
+[`.hmml`](../../lsps/hobby-mml-lsp/grammar.md) (Mental Model Language)
 spec: the four sections **modules / data / behavior / invariants** that capture
-how the unit behaves at mental-model altitude. The human then edits the `.mml`
-to drive a change, which `mml-translate` turns back into code — spec →
+how the unit behaves at mental-model altitude. The human then edits the `.hmml`
+to drive a change, which `hmml-translate` turns back into code — spec →
 code, not prose → code.
 
 You point at one unit ("the `/tiles/{z}/{x}/{y}` endpoint", "the shader reload batch
@@ -24,11 +24,11 @@ behavior off the source, and writes the file into the current task's notes dir.
 
 Produces:
 
-- `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/<unit>.mml` —
+- `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/<unit>.hmml` —
   one spec, header + the four `##` sections, `source.repo`/`source.paths`
   pointing at the real code.
 
-Emits the `.mml` and stops — reviewing, editing, and committing it are the
+Emits the `.hmml` and stops — reviewing, editing, and committing it are the
 human's job (that is the point of the artifact).
 
 ## Installation
@@ -37,19 +37,19 @@ Installed by `just install-skills` from `~/fun_repos/hobby-tooling`, or manually
 
 ```bash
 mkdir -p ~/.claude-hobby/commands/
-ln -s ~/fun_repos/hobby-tooling/skills/mml-extract/skill.md \
-  ~/.claude-hobby/commands/mml-extract.md
+ln -s ~/fun_repos/hobby-tooling/skills/hmml-extract/skill.md \
+  ~/.claude-hobby/commands/hmml-extract.md
 ```
 
 ## Usage
 
 ```
-/mml-extract the shader reload batch worker
+/hmml-extract the shader reload batch worker
 ```
 
 Point it at a unit (an endpoint, a queue/message workflow, or a job) or a
 file/function. It writes
-`~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/<unit>.mml`.
+`~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/<unit>.hmml`.
 
 ## Known Limitations
 
@@ -60,5 +60,5 @@ file/function. It writes
   cross-file / external calls may be missed, so verify the module list.
 - Emits and stops — it does not iterate with you, and it never runs `git add` /
   `git commit` in the notes or tooling repos.
-- No `.mml` parser exists yet (task 06), so output is validated against the
-  grammar by eye until it does.
+- Output is checked with `hobby-mml-parser <path> --lint`; altitude and naming
+  remain judgement calls the grammar cannot settle.

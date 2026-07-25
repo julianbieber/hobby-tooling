@@ -5,7 +5,7 @@
 | Type         | skill                                  |
 | Install path | `~/.claude-hobby/commands/dev-flow.md` |
 | Owner        | @julianbieber                          |
-| Dependencies | `resume-journal`, MML suite, `pr-create`, `journal`; notes repo |
+| Dependencies | `resume-journal`, HMML suite, `pr-create`, `journal`; notes repo |
 | Status       | experimental                           |
 
 ## Description
@@ -14,7 +14,7 @@ Thin orchestrator for my default development loop, run as a predictable pipeline
 with two hard human gates:
 
 ```
-read task → MML plan → self-review → [GATE 1] → implement → self-review
+read task → HMML plan → self-review → [GATE 1] → implement → self-review
   → test → [GATE 2] → PR → journal
 ```
 
@@ -30,7 +30,7 @@ Installed by `just install-skills` from `~/fun_repos/hobby-tooling`.
 ```
 /dev-flow                    # resume at the recorded/inferred phase
 /dev-flow plan               # force a phase
-/dev-flow --no-mml           # skip the MML steps, plan inline
+/dev-flow --no-hmml           # skip the HMML steps, plan inline
 /dev-flow --resume-deep      # use resume-deep instead of resume-journal
 ```
 

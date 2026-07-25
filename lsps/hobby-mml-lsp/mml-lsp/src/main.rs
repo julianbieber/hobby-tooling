@@ -1,4 +1,4 @@
-//! `mml-lsp`: a `tower-lsp` language server for `.mml` (Mental Model Language)
+//! `mml-lsp`: a `tower-lsp` language server for `.hmml` (Mental Model Language)
 //! specs, built on the `mml-parser` crate.
 //!
 //! This file is protocol glue only: it caches a parsed [`DocState`] per open
@@ -102,7 +102,7 @@ fn type_def_span(t: &TypeDef) -> Span {
     t.span()
 }
 
-/// Resolve an import/spec ref to its target `.mml` and return the target path,
+/// Resolve an import/spec ref to its target `.hmml` and return the target path,
 /// its source text, and its parsed document. `None` if the ref does not resolve
 /// to an existing file.
 fn read_target(
@@ -148,7 +148,7 @@ fn import_type_hover(
             Some(def) => {
                 let span = type_def_span(def);
                 format!(
-                    "```mml\n{}\n```\n\n_imported from `{spec_raw}`_",
+                    "```hmml\n{}\n```\n\n_imported from `{spec_raw}`_",
                     &src[span.start..span.end]
                 )
             }
@@ -188,7 +188,7 @@ fn import_references(target: &(String, String), root: &Path) -> Vec<Location> {
     let (owner_unit, type_name) = target;
     let mut out = Vec::new();
     for unit in paths::list_spec_entries(root) {
-        let path = root.join(format!("{unit}.mml"));
+        let path = root.join(format!("{unit}.{}", mml_parser::SPEC_EXT));
         let Ok(src) = std::fs::read_to_string(&path) else {
             continue;
         };
@@ -301,7 +301,7 @@ fn module_hover(ds: &DocState, name: &str) -> Option<String> {
 fn type_hover(ds: &DocState, name: &str) -> Option<String> {
     let t = analysis::type_named(&ds.symbols, name)?;
     let src = &ds.text[t.def_span.start..t.def_span.end];
-    let mut out = format!("```mml\n{src}\n```");
+    let mut out = format!("```hmml\n{src}\n```");
     if t.role.is_some() {
         out.push_str(&format!("\n\n_{}_", t.detail()));
         // The whole point of role-checked access: answer "who touches this?"
@@ -405,7 +405,7 @@ fn definition_at(
 ) -> Option<GotoDefinitionResponse> {
     let offset = ds.offset(pos);
 
-    // Cross-spec ref: jump to the referenced `.mml` file.
+    // Cross-spec ref: jump to the referenced `.hmml` file.
     if let Some(r) = analysis::spec_ref_at(&ds.doc, offset) {
         let file = uri.to_file_path().ok()?;
         let (target, exists) = paths::resolve_spec_ref(&r.value, &file, workspace_root)?;
@@ -630,7 +630,7 @@ fn spec_reference_target(ds: &DocState, offset: usize) -> Option<String> {
 fn spec_references(target: &str, root: &Path) -> Vec<Location> {
     let mut out = Vec::new();
     for unit in paths::list_spec_entries(root) {
-        let path = root.join(format!("{unit}.mml"));
+        let path = root.join(format!("{unit}.{}", mml_parser::SPEC_EXT));
         let Ok(src) = std::fs::read_to_string(&path) else {
             continue;
         };
@@ -839,7 +839,7 @@ fn type_symbols(ds: &DocState, types: &[TypeDef]) -> Vec<DocumentSymbol> {
 /// Spec-repo context for `@ spec` completions, gathered from the filesystem by
 /// the completion handler (the pure logic stays in [`completions_at`]).
 struct SpecEntries {
-    /// The unit names (`.mml` stems) in the current file's own directory.
+    /// The unit names (`.hmml` stems) in the current file's own directory.
     entries: Vec<String>,
     /// The current file's unit (its file stem) — excluded from completions.
     current_unit: Option<String>,
@@ -1046,7 +1046,9 @@ fn to_lsp_diagnostic(li: &LineIndex, d: &mml_parser::Diagnostic) -> Diagnostic {
             Severity::Info => DiagnosticSeverity::INFORMATION,
         }),
         code: Some(NumberOrString::String(d.code.to_string())),
-        source: Some("mml".to_string()),
+        // Both dialects' servers can be live at once; this is what Helix prints
+        // beside a diagnostic, so it must say which one spoke.
+        source: Some(mml_parser::SPEC_EXT.to_string()),
         message: d.message.clone(),
         ..Default::default()
     }
@@ -1092,7 +1094,7 @@ impl LanguageServer for Backend {
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
-                name: "mml-lsp".to_string(),
+                name: "hobby-mml-lsp".to_string(),
                 version: Some(env!("CARGO_PKG_VERSION").to_string()),
             }),
         })
@@ -1267,7 +1269,7 @@ mod tests {
     use super::*;
 
     const SAMPLE: &str =
-        include_str!("../../mml-parser/tests/fixtures/examples/mesh-terrain-chunks.mml");
+        include_str!("../../mml-parser/tests/fixtures/examples/mesh-terrain-chunks.hmml");
 
     fn state() -> DocState {
         let text = SAMPLE.to_string();
@@ -1288,7 +1290,7 @@ mod tests {
     }
 
     fn uri() -> Url {
-        Url::parse("file:///specs/mesh-terrain-chunks.mml").unwrap()
+        Url::parse("file:///specs/mesh-terrain-chunks.hmml").unwrap()
     }
 
     #[test]
@@ -1419,7 +1421,7 @@ mod tests {
             line_index,
             symbols,
         };
-        let file_uri = Url::from_file_path(spec_dir.join("u.mml")).unwrap();
+        let file_uri = Url::from_file_path(spec_dir.join("u.hmml")).unwrap();
 
         // Cursor on the `source.paths` entry; resolution comes from the checkout
         // named by `source.repo`, found under the workspace root.
@@ -1489,7 +1491,7 @@ mod tests {
         )
     }
 
-    /// A temp task spec dir with sibling units one.mml, two.mml, other.mml,
+    /// A temp task spec dir with sibling units one.hmml, two.hmml, other.hmml,
     /// where `one` references `other` and `two` (both bare) and a missing spec.
     fn spec_tree() -> (tempfile::TempDir, std::path::PathBuf, String) {
         use std::fs;
@@ -1506,9 +1508,9 @@ mod tests {
             ("two", mini_spec("sys-a", "two", "- noop")),
             ("other", mini_spec("sys-b", "other", "- noop")),
         ] {
-            fs::write(dir.path().join(format!("{unit}.mml")), body).unwrap();
+            fs::write(dir.path().join(format!("{unit}.hmml")), body).unwrap();
         }
-        let path = dir.path().join("one.mml");
+        let path = dir.path().join("one.hmml");
         (dir, path, one)
     }
 
@@ -1539,14 +1541,14 @@ mod tests {
         let GotoDefinitionResponse::Scalar(loc) = resp else {
             panic!("scalar")
         };
-        assert!(loc.uri.path().ends_with("other.mml"));
+        assert!(loc.uri.path().ends_with("other.hmml"));
 
         let pos = to_lsp_pos(ds.line_index.position(text.find("@ spec two").unwrap() + 7));
         let resp = definition_at(&ds, &file_uri, None, pos).expect("goto second ref");
         let GotoDefinitionResponse::Scalar(loc) = resp else {
             panic!("scalar")
         };
-        assert!(loc.uri.path().ends_with("two.mml"));
+        assert!(loc.uri.path().ends_with("two.hmml"));
 
         // Unresolved ref: no definition.
         let pos = to_lsp_pos(
@@ -1588,8 +1590,8 @@ mod tests {
     #[test]
     fn references_from_header_finds_incoming_refs() {
         let (dir, _path, _text) = spec_tree();
-        // In other.mml, ask for references while on the `unit:` value.
-        let other_path = dir.path().join("other.mml");
+        // In other.hmml, ask for references while on the `unit:` value.
+        let other_path = dir.path().join("other.hmml");
         let other_text = std::fs::read_to_string(&other_path).unwrap();
         let ds = state_of(&other_text);
         let offset = other_text.find("unit: other").unwrap() + "unit: ".len();
@@ -1598,7 +1600,7 @@ mod tests {
 
         let locs = spec_references(&target, dir.path());
         assert_eq!(locs.len(), 1);
-        assert!(locs[0].uri.path().ends_with("one.mml"));
+        assert!(locs[0].uri.path().ends_with("one.hmml"));
     }
 
     #[test]
@@ -1611,7 +1613,7 @@ mod tests {
         assert_eq!(target, "two");
         let locs = spec_references(&target, dir.path());
         assert_eq!(locs.len(), 1);
-        assert!(locs[0].uri.path().ends_with("one.mml"));
+        assert!(locs[0].uri.path().ends_with("one.hmml"));
     }
 
     // --- type imports (grammar §4.5) ---
@@ -1629,9 +1631,9 @@ mod tests {
 ## data\nuse model: Offer\nuse model: Missing\nin: Offer\nout: Offer\n\n\
 ## behavior\n- handle an Offer\n\n## invariants\n";
         for (unit, body) in [("model", owner), ("importer", importer)] {
-            fs::write(dir.path().join(format!("{unit}.mml")), body).unwrap();
+            fs::write(dir.path().join(format!("{unit}.hmml")), body).unwrap();
         }
-        let path = dir.path().join("importer.mml");
+        let path = dir.path().join("importer.hmml");
         (dir, path, importer.to_string())
     }
 
@@ -1647,9 +1649,9 @@ mod tests {
         let GotoDefinitionResponse::Scalar(loc) = resp else {
             panic!("scalar")
         };
-        assert!(loc.uri.path().ends_with("model.mml"));
+        assert!(loc.uri.path().ends_with("model.hmml"));
         // It points at the `struct Offer` name line, not 0:0.
-        let owner_src = std::fs::read_to_string(dir.path().join("model.mml")).unwrap();
+        let owner_src = std::fs::read_to_string(dir.path().join("model.hmml")).unwrap();
         let want = LineIndex::new(&owner_src).position(owner_src.find("Offer").unwrap());
         assert_eq!(loc.range.start.line, want.line);
     }
@@ -1666,7 +1668,7 @@ mod tests {
         let GotoDefinitionResponse::Scalar(loc) = resp else {
             panic!("scalar")
         };
-        assert!(loc.uri.path().ends_with("model.mml"));
+        assert!(loc.uri.path().ends_with("model.hmml"));
     }
 
     #[test]
@@ -1689,7 +1691,7 @@ mod tests {
         let (dir, path, text) = import_tree();
         let ds = state_of(&text);
         // Types the owner defines, as the handler would compute them.
-        let owner = dir.path().join("model.mml");
+        let owner = dir.path().join("model.hmml");
         let import_types = paths::defined_type_names(&owner);
         assert!(import_types.contains(&"Offer".to_string()));
         // Cursor right after `use model: ` → offer the owner's types.
@@ -1722,8 +1724,8 @@ mod tests {
     #[test]
     fn import_references_finds_use_sites() {
         let (dir, _path, _text) = import_tree();
-        // In model.mml, ask for references while on the `struct Offer` name.
-        let owner_path = dir.path().join("model.mml");
+        // In model.hmml, ask for references while on the `struct Offer` name.
+        let owner_path = dir.path().join("model.hmml");
         let owner_text = std::fs::read_to_string(&owner_path).unwrap();
         let ds = state_of(&owner_text);
         let offset = owner_text.find("Offer").unwrap() + 1;
@@ -1731,19 +1733,19 @@ mod tests {
         assert_eq!(target, ("model".to_string(), "Offer".to_string()));
         let locs = import_references(&target, dir.path());
         assert_eq!(locs.len(), 1);
-        assert!(locs[0].uri.path().ends_with("importer.mml"));
+        assert!(locs[0].uri.path().ends_with("importer.hmml"));
     }
 
     // --- Bevy dialect handlers ---
 
-    const PLUGIN: &str = include_str!("../../mml-parser/tests/fixtures/examples/enemy-waves.mml");
+    const PLUGIN: &str = include_str!("../../mml-parser/tests/fixtures/examples/enemy-waves.hmml");
 
     fn plugin_state() -> DocState {
         state_of(PLUGIN)
     }
 
     fn plugin_uri() -> Url {
-        Url::parse("file:///specs/enemy-waves.mml").unwrap()
+        Url::parse("file:///specs/enemy-waves.hmml").unwrap()
     }
 
     #[test]
@@ -2024,11 +2026,11 @@ mod tests {
         for f in ["mod.rs", "timer.rs"] {
             fs::write(waves.join(f), "x").unwrap();
         }
-        let spec = dir.path().join("enemy-waves.mml");
+        let spec = dir.path().join("enemy-waves.hmml");
         fs::write(&spec, PLUGIN).unwrap();
         fs::write(
-            dir.path().join("spawn-enemies.mml"),
-            include_str!("../../mml-parser/tests/fixtures/examples/spawn-enemies.mml"),
+            dir.path().join("spawn-enemies.hmml"),
+            include_str!("../../mml-parser/tests/fixtures/examples/spawn-enemies.hmml"),
         )
         .unwrap();
 

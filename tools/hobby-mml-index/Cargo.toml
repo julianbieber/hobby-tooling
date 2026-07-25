@@ -3,7 +3,7 @@ name = "hobby-mml-index"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-description = "Generate index.md for a repository of MML (.mml) specs"
+description = "Generate index.md for a repository of HMML (.hmml) specs"
 
 [dependencies]
 mml-parser = { path = "../../lsps/hobby-mml-lsp/mml-parser", package = "hobby-mml-parser" }

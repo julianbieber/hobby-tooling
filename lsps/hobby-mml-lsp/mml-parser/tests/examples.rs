@@ -17,7 +17,7 @@ fn assert_clean(name: &str, src: &str) {
 fn mesh_terrain_chunks_is_clean() {
     assert_clean(
         "mesh-terrain-chunks",
-        include_str!("fixtures/examples/mesh-terrain-chunks.mml"),
+        include_str!("fixtures/examples/mesh-terrain-chunks.hmml"),
     );
 }
 
@@ -25,7 +25,7 @@ fn mesh_terrain_chunks_is_clean() {
 fn get_map_tile_is_clean() {
     assert_clean(
         "get-map-tile",
-        include_str!("fixtures/examples/get-map-tile.mml"),
+        include_str!("fixtures/examples/get-map-tile.hmml"),
     );
 }
 
@@ -33,13 +33,13 @@ fn get_map_tile_is_clean() {
 fn reload_shader_batch_is_clean() {
     assert_clean(
         "reload-shader-batch",
-        include_str!("fixtures/examples/reload-shader-batch.mml"),
+        include_str!("fixtures/examples/reload-shader-batch.hmml"),
     );
 }
 
 #[test]
 fn examples_produce_expected_structure() {
-    let src = include_str!("fixtures/examples/get-map-tile.mml");
+    let src = include_str!("fixtures/examples/get-map-tile.hmml");
     let (doc, _) = analyze(src);
     // TileHandler, TileStore, TileRenderer => 3 modules.
     assert_eq!(doc.modules.len(), 3);
@@ -82,7 +82,7 @@ out: String
 
 #[test]
 fn lowercase_enum_variants_are_accepted() {
-    let src = include_str!("fixtures/examples/reload-shader-batch.mml");
+    let src = include_str!("fixtures/examples/reload-shader-batch.hmml");
     let (doc, diags) = analyze(src);
     assert!(diags.is_empty(), "unexpected diagnostics: {diags:#?}");
     let outcome = doc
@@ -139,7 +139,7 @@ out: String
 
 #[test]
 fn cross_spec_refs_parse_clean() {
-    let src = include_str!("fixtures/examples/cross-spec-refs.mml");
+    let src = include_str!("fixtures/examples/cross-spec-refs.hmml");
     let (doc, diags) = analyze(src);
     assert!(diags.is_empty(), "unexpected diagnostics: {diags:#?}");
 
@@ -202,7 +202,7 @@ fn cross_spec_refs_parse_clean() {
 
 #[test]
 fn shared_data_imports_parse_clean() {
-    let src = include_str!("fixtures/examples/shared-data-imports.mml");
+    let src = include_str!("fixtures/examples/shared-data-imports.hmml");
     let (doc, diags) = analyze(src);
     assert!(diags.is_empty(), "unexpected diagnostics: {diags:#?}");
 
@@ -284,7 +284,7 @@ where:
 fn enemy_waves_plugin_is_clean() {
     assert_clean(
         "enemy-waves",
-        include_str!("fixtures/examples/enemy-waves.mml"),
+        include_str!("fixtures/examples/enemy-waves.hmml"),
     );
 }
 
@@ -292,7 +292,7 @@ fn enemy_waves_plugin_is_clean() {
 fn spawn_enemies_system_is_clean() {
     assert_clean(
         "spawn-enemies",
-        include_str!("fixtures/examples/spawn-enemies.mml"),
+        include_str!("fixtures/examples/spawn-enemies.hmml"),
     );
 }
 
@@ -300,7 +300,7 @@ fn spawn_enemies_system_is_clean() {
 fn plugin_produces_expected_structure() {
     use mml_parser::ast::{Kind, Role, TypeDef};
 
-    let src = include_str!("fixtures/examples/enemy-waves.mml");
+    let src = include_str!("fixtures/examples/enemy-waves.hmml");
     let (doc, _) = analyze(src);
     assert_eq!(doc.header.kind.as_ref().unwrap().value, Kind::Plugin);
 
@@ -362,7 +362,7 @@ fn plugin_produces_expected_structure() {
 fn system_kind_produces_a_single_access_block() {
     use mml_parser::ast::Kind;
 
-    let src = include_str!("fixtures/examples/spawn-enemies.mml");
+    let src = include_str!("fixtures/examples/spawn-enemies.hmml");
     let (doc, _) = analyze(src);
     assert_eq!(doc.header.kind.as_ref().unwrap().value, Kind::System);
     assert!(doc.systems.is_empty());
@@ -386,7 +386,7 @@ fn system_kind_produces_a_single_access_block() {
 
 #[test]
 fn source_paths_include_system_entries() {
-    let src = include_str!("fixtures/examples/enemy-waves.mml");
+    let src = include_str!("fixtures/examples/enemy-waves.hmml");
     let (doc, _) = analyze(src);
     let paths: Vec<&str> = mml_parser::validate::collect_source_paths(&doc)
         .into_iter()
@@ -399,7 +399,7 @@ fn source_paths_include_system_entries() {
 
 #[test]
 fn spec_refs_include_system_entries() {
-    let src = include_str!("fixtures/examples/enemy-waves.mml");
+    let src = include_str!("fixtures/examples/enemy-waves.hmml");
     let (doc, _) = analyze(src);
     let refs: Vec<&str> = mml_parser::validate::collect_spec_refs(&doc)
         .into_iter()

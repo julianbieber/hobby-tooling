@@ -89,7 +89,7 @@ pub fn resolve(raw: &str, search_dirs: &[&Path]) -> Option<PathBuf> {
 /// Existing checkout directories for the header's `source.repo`, in resolution
 /// order. `source.paths` are relative to the repo checkout root (linkage.md).
 ///
-/// Hobby layout: the spec lives at `.../notes/{project}/{topic}/{task}/<unit>.mml`
+/// Hobby layout: the spec lives at `.../notes/{project}/{topic}/{task}/<unit>.hmml`
 /// and the matching checkout is the task worktree itself,
 /// `~/fun_worktrees/{project}/{topic}/{task}` — a hobby task is one repo, so
 /// there is **no repo level** under the task. Resolution order is that worktree,
@@ -104,7 +104,7 @@ pub fn repo_dirs(repo: &str, current_file: &Path, workspace_root: Option<&Path>)
 }
 
 /// The task worktree for the open spec: `{home}/fun_worktrees/{project}/{topic}/{task}`,
-/// where the spec is at `.../{project}/{topic}/{task}/<unit>.mml` (task = parent,
+/// where the spec is at `.../{project}/{topic}/{task}/<unit>.hmml` (task = parent,
 /// topic = grandparent, project = great-grandparent).
 ///
 /// `repo` is deliberately unused: the worktree *is* the repo checkout, so the
@@ -151,12 +151,12 @@ fn repo_dirs_with(
 
 /// The namespace root for a spec file's cross-spec refs — its own directory.
 /// Specs for one task are flat siblings in `.../notes/{project}/{topic}/{task}/`, so a
-/// ref addresses a `.mml` in the same directory as the open file.
+/// ref addresses a `.hmml` in the same directory as the open file.
 pub fn spec_root(current_file: &Path) -> Option<PathBuf> {
     current_file.parent().map(Path::to_path_buf)
 }
 
-/// Resolve an `@ spec` ref to a sibling `<unit>.mml` in the open file's own
+/// Resolve an `@ spec` ref to a sibling `<unit>.hmml` in the open file's own
 /// directory. A ref is a bare `<unit>`; a qualified `sys/unit` ref (deprecated)
 /// has its `sys` part ignored and `unit` resolved in the same directory. Tries
 /// the current file's directory first, then the workspace root. Returns the
@@ -168,7 +168,7 @@ pub fn resolve_spec_ref(
     workspace_root: Option<&Path>,
 ) -> Option<(PathBuf, bool)> {
     let (_system, unit) = crate::ast::split_spec_ref(raw);
-    let rel = format!("{unit}.mml");
+    let rel = format!("{unit}.{}", crate::SPEC_EXT);
     let mut first_candidate = None;
     for root in [
         spec_root(current_file),
@@ -201,7 +201,7 @@ pub fn defined_type_names(target: &Path) -> Vec<String> {
         .collect()
 }
 
-/// The unit names of the spec files directly in `root` — the `.mml` filename
+/// The unit names of the spec files directly in `root` — the `.hmml` filename
 /// stems in a task's flat spec directory. A unit is just the filename stem;
 /// there is no system dimension.
 pub fn list_spec_entries(root: &Path) -> Vec<String> {
@@ -211,7 +211,7 @@ pub fn list_spec_entries(root: &Path) -> Vec<String> {
     };
     for file in files.flatten() {
         let path = file.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("mml")
+        if path.extension().and_then(|e| e.to_str()) == Some(crate::SPEC_EXT)
             && let Some(unit) = path.file_stem().and_then(|s| s.to_str())
             && !unit.starts_with('.')
         {
@@ -287,7 +287,7 @@ mod tests {
     fn spec_tree() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         for unit in ["one", "two", "other"] {
-            fs::write(dir.path().join(format!("{unit}.mml")), "x").unwrap();
+            fs::write(dir.path().join(format!("{unit}.hmml")), "x").unwrap();
         }
         dir
     }
@@ -295,44 +295,44 @@ mod tests {
     #[test]
     fn resolve_spec_ref_bare_and_qualified() {
         let dir = spec_tree();
-        let current = dir.path().join("one.mml");
+        let current = dir.path().join("one.hmml");
         // Bare ref → sibling in the same directory.
         let (p, exists) = resolve_spec_ref("two", &current, None).unwrap();
         assert!(exists);
-        assert_eq!(p, dir.path().join("two.mml"));
+        assert_eq!(p, dir.path().join("two.hmml"));
         // Qualified ref (deprecated): the `sys` part is ignored, `unit`
         // resolved in the same directory.
         let (p, exists) = resolve_spec_ref("sys-b/other", &current, None).unwrap();
         assert!(exists);
-        assert_eq!(p, dir.path().join("other.mml"));
+        assert_eq!(p, dir.path().join("other.hmml"));
     }
 
     #[test]
     fn resolve_spec_ref_missing_reports_candidate() {
         let dir = spec_tree();
-        let current = dir.path().join("one.mml");
+        let current = dir.path().join("one.hmml");
         let (p, exists) = resolve_spec_ref("nope", &current, None).unwrap();
         assert!(!exists);
-        assert_eq!(p, dir.path().join("nope.mml"));
+        assert_eq!(p, dir.path().join("nope.hmml"));
     }
 
     #[test]
     fn resolve_spec_ref_falls_back_to_workspace_root() {
         let dir = spec_tree();
-        // Current file's own directory holds no sibling `other.mml`.
+        // Current file's own directory holds no sibling `other.hmml`.
         let loose = tempfile::tempdir().unwrap();
-        let current = loose.path().join("one.mml");
+        let current = loose.path().join("one.hmml");
         let (p, exists) = resolve_spec_ref("other", &current, Some(dir.path())).unwrap();
         assert!(exists);
-        assert_eq!(p, dir.path().join("other.mml"));
+        assert_eq!(p, dir.path().join("other.hmml"));
     }
 
     #[test]
     fn list_spec_entries_lists_units_in_dir() {
         let dir = spec_tree();
-        // A dotfile-stemmed .mml is skipped; subdirectories are not descended.
+        // A dotfile-stemmed .hmml is skipped; subdirectories are not descended.
         fs::create_dir_all(dir.path().join("sub")).unwrap();
-        fs::write(dir.path().join("sub/nested.mml"), "x").unwrap();
+        fs::write(dir.path().join("sub/nested.hmml"), "x").unwrap();
         let entries = list_spec_entries(dir.path());
         assert_eq!(
             entries,
@@ -340,12 +340,12 @@ mod tests {
         );
     }
 
-    /// A spec at `{home}/notes/{project}/{topic}/{task}/one.mml` — the hobby
+    /// A spec at `{home}/notes/{project}/{topic}/{task}/one.hmml` — the hobby
     /// three-level notes layout.
     fn notes_spec(home: &Path, project: &str, topic: &str, task: &str) -> PathBuf {
         let dir = home.join("notes").join(project).join(topic).join(task);
         fs::create_dir_all(&dir).unwrap();
-        dir.join("one.mml")
+        dir.join("one.hmml")
     }
 
     #[test]

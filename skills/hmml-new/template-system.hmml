@@ -1,5 +1,5 @@
-# MML spec template — one Bevy system, split out of a plugin. Copied to
-# notes/{project}/{topic}/{task}/<unit>.mml and filled in by hand.
+# HMML spec template — one Bevy system, split out of a plugin. Copied to
+# notes/{project}/{topic}/{task}/<unit>.hmml and filled in by hand.
 #
 # Use this when one system's behavior outgrows a few nested bullets in its
 # plugin spec. Point at it from the plugin's system entry:

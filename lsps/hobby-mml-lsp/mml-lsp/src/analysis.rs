@@ -707,7 +707,7 @@ mod tests {
     use mml_parser::{LineIndex, analyze};
 
     const SAMPLE: &str =
-        include_str!("../../mml-parser/tests/fixtures/examples/mesh-terrain-chunks.mml");
+        include_str!("../../mml-parser/tests/fixtures/examples/mesh-terrain-chunks.hmml");
 
     fn pos(line: u32, character: u32) -> Position {
         Position { line, character }
@@ -1031,8 +1031,8 @@ mod tests {
 
     // --- Bevy dialect ---
 
-    const PLUGIN: &str = include_str!("../../mml-parser/tests/fixtures/examples/enemy-waves.mml");
-    const SYSTEM: &str = include_str!("../../mml-parser/tests/fixtures/examples/spawn-enemies.mml");
+    const PLUGIN: &str = include_str!("../../mml-parser/tests/fixtures/examples/enemy-waves.hmml");
+    const SYSTEM: &str = include_str!("../../mml-parser/tests/fixtures/examples/spawn-enemies.hmml");
 
     #[test]
     fn sections_cover_the_bevy_kinds() {

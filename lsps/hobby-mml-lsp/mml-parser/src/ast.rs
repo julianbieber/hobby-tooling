@@ -9,7 +9,7 @@ use crate::diagnostic::Diagnostic;
 use crate::span::{Span, Spanned};
 use serde::Serialize;
 
-/// A parsed `.mml` document. `diagnostics` holds parse-time diagnostics only;
+/// A parsed `.hmml` document. `diagnostics` holds parse-time diagnostics only;
 /// run [`crate::validate::validate`] to add semantic ones.
 ///
 /// Which of the section fields are populated depends on the header `kind`
