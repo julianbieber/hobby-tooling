@@ -1,0 +1,71 @@
+# MML spec template — Bevy plugin. Copied to
+# notes/{project}/{topic}/{task}/<unit>.mml and filled in by hand.
+#
+# A plugin has no in:/out: — data flows through the World, so the interface is
+# each system's access block. `## systems`, `## behavior` and `## invariants`
+# are required; the three world sections are optional, so delete any you have
+# nothing to say in.
+#
+# Bevy's own types (Transform, Time, AssetServer, AppExit, …) need no
+# declaration — use them directly in an access list.
+
+system: my-system
+unit: my-unit
+kind: plugin
+# source:
+#   repo: my_bevy_game
+#   paths:
+#     - src/my_feature/mod.rs
+
+## modules
+# Optional — the non-system collaborators (the `impl Plugin` type, an asset
+# loader, a helper). The systems live in `## systems`, not here.
+
+## components
+# Entity data. `marker Name` declares a zero-sized component.
+# use <sibling-unit>: SharedComponent
+# struct Health {
+#   hp: f32,
+# }
+# marker Enemy
+
+## resources
+# Global singletons.
+# struct MyConfig {
+#   interval_secs: f32,
+# }
+
+## events
+# Message payloads.
+# struct SomethingHappened {
+#   at: f32,
+# }
+
+## systems
+# One entry per system, each with an indented access block. `schedule:` is
+# required; omit any other key the system does not use.
+#
+#   <snake_name> — <what it does> [@ <path>] [@ spec <unit>]
+#     schedule: FixedUpdate
+#     set:      MySet
+#     after:    some_other_system
+#     before:   yet_another_system
+#     run_if:   MyConfig is enabled
+#     query:    Transform + Enemy - Dead
+#     reads:    MyConfig, Time
+#     writes:   Health
+#     spawns:   Health, Enemy
+#     despawns: Enemy
+#     emits:    SomethingHappened
+#     consumes: SomethingHappened
+do_the_thing — describe the system here
+  schedule: Update
+
+## behavior
+# One top-level bullet per system name (with a trailing `:`), its logic nested.
+- do_the_thing:
+  - describe the first step here
+
+## invariants
+# One `-` bullet per property that must always hold — a component-exclusivity
+# rule, an ordering guarantee, a monotonic counter.

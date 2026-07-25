@@ -5,12 +5,12 @@
 | Type         | skill                                                                                                                                                           |
 | Install path | `~/.claude-hobby/commands/mml-new.md`                                                                                                                                             |
 | Owner        | @julianbieber                                                                                                                                                   |
-| Dependencies | MML grammar (`llm_mental_model/01-language-spec`), notes repo `~/fun_repos/hobby-mimisbrunnr`, `template.mml` (skill asset), `mml-translate` |
+| Dependencies | hobby MML grammar (`lsps/hobby-mml-lsp/grammar.md`), notes repo `~/fun_repos/hobby-mimisbrunnr`, `template{,-plugin,-system}.mml` (skill assets), `mml-translate` |
 | Status       | experimental                                                                                                                                                    |
 
 ## Description
 
-Scaffolds a skeleton [`.mml`](~/projects/team-constellation-mimisbrunnr/notes/llm_mental_model/DESIGN.md) (Mental
+Scaffolds a skeleton [`.mml`](../../lsps/hobby-mml-lsp/grammar.md) (Mental
 Model Language) spec for a **new** unit of behaviour — one that has no code yet
 — so I can edit it into the shape I want before `mml-translate` turns it
 into code. This is the "building a new feature" entry to the MML loop; its
@@ -20,7 +20,7 @@ sibling `mml-extract` is the "adjusting an existing feature" entry (code
 Two paths, chosen from what I give it:
 
 - **Blank template** — I want to write the spec by hand; the skill drops a
-  correctly-structured empty spec (from the skill asset `template.mml`) at the
+  correctly-structured empty spec (from the skill asset matching the `kind`: `template.mml`, `template-plugin.mml`, or `template-system.mml`) at the
   right path so I start well-formed.
 - **Draft from a rough idea** — I describe the feature in a sentence or two and
   the skill drafts a first-pass `.mml` (best-guess modules / data / behavior /

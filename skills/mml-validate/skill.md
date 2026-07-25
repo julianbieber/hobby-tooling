@@ -17,12 +17,9 @@ the human's call, and that is the point: if the spec is the intent, run
 re-run `mml-extract` to refresh the spec. This skill only tells you
 *that* they diverged and *how*.
 
-Read
-`~/projects/team-constellation-mimisbrunnr/notes/llm_mental_model/01-language-spec/grammar.md`
-(authoritative grammar) and
-`~/projects/team-constellation-mimisbrunnr/notes/llm_mental_model/01-language-spec/{layout.md,linkage.md}`
-(how a spec locates its code) before your first run if you are unsure of any
-rule below.
+Read `~/fun_repos/hobby-tooling/lsps/hobby-mml-lsp/grammar.md` (the authoritative
+hobby grammar, v2 — **not** the work one) before your first run if you are
+unsure of any rule below.
 
 ## Drift vocabulary
 
@@ -121,6 +118,38 @@ Every finding is one of four verdicts. Use them exactly:
      **CONFORMS** — do not nitpick prose. Watch specifically for a step that
      **contradicts** the code (spec says `<`, code does `<=`; spec says "reply
      502", code replies 400) — that is the highest-value SPEC-AHEAD finding.
+   - **`## components` / `## resources` / `## events`** (Bevy) — each declared
+     type maps to a real type carrying the **matching derive**: a component to
+     `#[derive(Component)]`, a resource to `#[derive(Resource)]`, an event to
+     `#[derive(Event)]`. A **role mismatch is drift even when the type exists** —
+     a spec resource whose code type derives `Component` is **SPEC-AHEAD**, and
+     it is the highest-value finding in this section, because the spec's whole
+     access model is built on roles. A `marker Name` must be a unit struct; a
+     marker that has grown fields in code is **CODE-AHEAD**. Fields compare as in
+     `## data`. Never flag a Bevy built-in (`Transform`, `Time`, …) for having no
+     local declaration — it is not supposed to have one.
+   - **`## systems`** (Bevy) — for each entry, find the Rust fn (via `@ path`
+     where present) **and its registration**, then compare the access block
+     against the fn's real signature:
+     - `schedule:` vs the `app.add_systems(<Schedule>, …)` the fn is registered
+       in. A system in the spec with **no registration at all** is SPEC-AHEAD and
+       worth calling out loudly — it means dead code that never runs.
+     - `after:` / `before:` / `set:` vs `.after(..)` / `.before(..)` /
+       `.in_set(..)` and any `.chain()` position; `run_if:` vs `.run_if(..)`.
+     - `query:` vs the `Query<…>` params: `+` terms against the fetched and
+       `With<..>` set, `-` terms against `Without<..>`.
+     - `reads:` / `writes:` vs `Res<T>`/`ResMut<T>` and `&T`/`&mut T`. **A spec
+       `reads:` where the code takes `&mut`/`ResMut` is SPEC-AHEAD** — the spec
+       understates the system's access, which is exactly the claim a reader would
+       rely on when reasoning about conflicts.
+     - `spawns:` / `despawns:` vs `commands.spawn`/`despawn`; `emits:` /
+       `consumes:` vs `EventWriter<E>` / `EventReader<E>`.
+     - A **fn registered in the plugin that the spec's `## systems` omits** is
+       CODE-AHEAD — and unlike an omitted helper, it is worth reporting: an
+       unlisted system is a whole unit of frame behavior missing from the model.
+   - **`## access`** (`kind: system`) — the same comparison for the one fn.
+     Its `schedule:`/ordering live in the **plugin's** registration, so check
+     them there and report a mismatch against this spec.
    - **`## invariants`** — for each, find the enforcing mechanism (a semaphore,
      prefetch count, unique index, max-requeue constant, auth guard, validation
      allowlist). An invariant with no discoverable enforcement is **SPEC-AHEAD /
@@ -171,12 +200,19 @@ Every finding is one of four verdicts. Use them exactly:
 
 ## Grammar cheat-sheet
 
-- File = header, then exactly four `##` sections in order: `modules`, `data`,
-  `behavior`, `invariants`. All required; a body may be empty except `behavior`.
+- File = header, then `##` sections in canonical order: `modules`, `data`,
+  `components`, `resources`, `events`, `systems`, `access`, `behavior`,
+  `invariants`. **Which are legal depends on `kind`:**
+  - `endpoint`/`workflow`/`job` — exactly `modules`, `data`, `behavior`,
+    `invariants`, all required (a body may be empty except `behavior`).
+  - `plugin` — `systems`, `behavior`, `invariants` required; `modules`,
+    `components`, `resources`, `events` optional; no `data`, no `access`.
+  - `system` — `access`, `behavior`, `invariants` required; `modules`,
+    `components`, `resources`, `events` optional; no `data`, no `systems`.
 - Header keys: `system` (req), `unit` (req), `kind` (req: `endpoint`|`workflow`|
-  `job`), `method` (opt, endpoints: `GET`|`POST`|…), `base` (opt: subdir the
-  `source.paths` resolve against), `source` (opt: `repo` + `paths` list).
-  `system`/`unit` are identifiers.
+  `job`|`plugin`|`system`), `method` (opt, endpoints: `GET`|`POST`|…), `base`
+  (opt: subdir the `source.paths` resolve against), `source` (opt: `repo` +
+  `paths` list). `system`/`unit` are identifiers.
 - `#` at column 0 is a comment; `##` at column 0 is always a section header.
 - Indent = spaces only, 2 spaces per nesting level.
 - `## modules`: `PascalName — responsibility [@ repo-relative-path]`.
@@ -196,11 +232,28 @@ Every finding is one of four verdicts. Use them exactly:
   optional trailing `where:` block binds them:
   `Symbol = value [@ config-source]`.
 - `## invariants`: flat `-` bullets, each a checkable claim.
-- Cross-spec refs (grammar §5.4): a module line, behavior step, or invariant may
-  end with `@ spec unit` (bare unit) — "more specification under" that unit's
-  `.mml`. At most one per line, always the last annotation (after a module's
-  `@ path`); it resolves to a sibling `<unit>.mml` in the same task directory.
-  Unresolved target = warning, not error.
+- Cross-spec refs (grammar §5.4): a module line, **system entry**, behavior step,
+  or invariant may end with `@ spec unit` (bare unit) — "more specification
+  under" that unit's `.mml`. At most one per line, always the last annotation
+  (after an `@ path`); it resolves to a sibling `<unit>.mml` in the same task
+  directory. Unresolved target = warning, not error.
+
+**Bevy dialect (grammar §8):**
+
+- `## components` / `## resources` / `## events`: the `## data` type grammar
+  minus `in:`/`out:`, plus `marker Name` (a zero-sized component, `## components`
+  only). **The section assigns the ECS role**, for `use` imports too — so the
+  role is a checkable claim about the code's derive.
+- Bevy's own types (`Transform`, `Time`, `AssetServer`, `AppExit`, …) are built
+  in and are never declared locally.
+- `## systems`: `snake_name — responsibility [@ path] [@ spec unit]` at column 0,
+  each followed by an indented access block. `## access` is the same block,
+  unindented, for a `kind: system` file.
+- Access keys: `schedule:` (required), `set:`, `after:`, `before:`, `run_if:`,
+  `query:` (`A + B - C`), `reads:`, `writes:`, `spawns:`, `despawns:`, `emits:`,
+  `consumes:`. `query:`/`spawns:`/`despawns:` take components,
+  `emits:`/`consumes:` events, `reads:`/`writes:` either a component or a
+  resource.
 
 The spec is a **lossy view**: absence of detail in the spec is not drift. Only a
 spec claim the code contradicts (SPEC-AHEAD), or a significant code behavior the

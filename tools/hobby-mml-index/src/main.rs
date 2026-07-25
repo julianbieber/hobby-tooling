@@ -35,6 +35,19 @@ struct SpecEntry {
     /// unit regardless of how many types are imported from it); bare refs
     /// resolved against this spec's system.
     imports: Vec<SpecId>,
+    /// Bevy systems this spec declares — a `kind: plugin`'s `## systems`
+    /// entries, or the single system a `kind: system` file specs. Empty for the
+    /// classic kinds.
+    systems: Vec<SystemRow>,
+}
+
+/// One Bevy system, as the index shows it: what it is called, when it runs, and
+/// what it runs after. The schedule map is the thing a plugin index can say
+/// that a list of units cannot.
+struct SystemRow {
+    name: String,
+    schedule: String,
+    after: Vec<String>,
 }
 
 impl SpecEntry {
@@ -60,7 +73,10 @@ fn main() -> ExitCode {
     };
 
     if !root.is_dir() {
-        eprintln!("hobby-mml-index: spec root {} is not a directory", root.display());
+        eprintln!(
+            "hobby-mml-index: spec root {} is not a directory",
+            root.display()
+        );
         return ExitCode::FAILURE;
     }
 
@@ -81,7 +97,10 @@ fn main() -> ExitCode {
         match fs::read_to_string(file) {
             Ok(text) => match parse_spec(&text) {
                 Some(e) => entries.push(e),
-                None => eprintln!("hobby-mml-index: skipping {}: incomplete header", file.display()),
+                None => eprintln!(
+                    "hobby-mml-index: skipping {}: incomplete header",
+                    file.display()
+                ),
             },
             Err(e) => eprintln!("hobby-mml-index: cannot read {}: {e}", file.display()),
         }
@@ -179,7 +198,7 @@ fn parse_spec(text: &str) -> Option<SpecEntry> {
 
     let system = doc.header.system.as_ref()?.value.clone();
     let unit = doc.header.unit.as_ref()?.value.clone();
-    let kind = format!("{:?}", doc.header.kind.as_ref()?.value).to_lowercase();
+    let kind = doc.header.kind.as_ref()?.value.as_str().to_string();
     let (repo, paths) = match &doc.header.source {
         Some(src) => (
             src.repo.as_ref().map(|r| r.value.clone()),
@@ -203,9 +222,7 @@ fn parse_spec(text: &str) -> Option<SpecEntry> {
     refs.dedup();
 
     let mut imports: Vec<SpecId> = doc
-        .data
-        .imports
-        .iter()
+        .all_imports()
         .filter(|i| mml_parser::ast::is_valid_spec_ref(&i.spec.value))
         .map(|i| {
             let (ref_system, ref_unit) = mml_parser::ast::split_spec_ref(&i.spec.value);
@@ -218,6 +235,38 @@ fn parse_spec(text: &str) -> Option<SpecEntry> {
     imports.sort();
     imports.dedup();
 
+    // A plugin lists its systems; a `kind: system` file is one system, named by
+    // its unit. Both surface in the schedule map.
+    const NO_SCHEDULE: &str = "(no schedule)";
+    let after_of = |block: &mml_parser::ast::AccessBlock| {
+        block.after.iter().map(|a| a.value.clone()).collect()
+    };
+    let mut systems: Vec<SystemRow> = doc
+        .systems
+        .iter()
+        .map(|s| SystemRow {
+            name: s.name.value.clone(),
+            schedule: s
+                .access
+                .schedule
+                .as_ref()
+                .map(|sc| sc.value.clone())
+                .unwrap_or_else(|| NO_SCHEDULE.to_string()),
+            after: after_of(&s.access),
+        })
+        .collect();
+    if let Some(access) = &doc.access {
+        systems.push(SystemRow {
+            name: unit.clone(),
+            schedule: access
+                .schedule
+                .as_ref()
+                .map(|sc| sc.value.clone())
+                .unwrap_or_else(|| NO_SCHEDULE.to_string()),
+            after: after_of(access),
+        });
+    }
+
     Some(SpecEntry {
         system,
         unit,
@@ -226,6 +275,7 @@ fn parse_spec(text: &str) -> Option<SpecEntry> {
         paths,
         refs,
         imports,
+        systems,
     })
 }
 
@@ -329,7 +379,7 @@ fn render_index(entries: &[SpecEntry], sources: &BTreeMap<String, SourceState>) 
         out.push_str(
             "| ---- | ---- | ----------- | ------------ | ---------- | ----------- | ---- | ------------- | ------- | ----------- |\n",
         );
-        for h in units {
+        for h in units.iter() {
             let repo = h.repo.as_deref().unwrap_or(UNKNOWN);
             let src = sources.get(repo).cloned().unwrap_or(SourceState {
                 sha: UNKNOWN.to_string(),
@@ -367,8 +417,44 @@ fn render_index(entries: &[SpecEntry], sources: &BTreeMap<String, SourceState>) 
                 imported = imported,
             ));
         }
+
+        out.push_str(&render_schedule_map(units));
     }
 
+    out
+}
+
+/// The Bevy addition to the manifest: every system in this product grouping,
+/// bucketed by the schedule it runs in. A list of units cannot answer "what runs
+/// in `FixedUpdate`, and in what order?"; this can. Emits nothing when the
+/// grouping holds no Bevy specs.
+fn render_schedule_map(units: &[&SpecEntry]) -> String {
+    let mut by_schedule: BTreeMap<&str, Vec<(&str, &SystemRow)>> = BTreeMap::new();
+    for u in units {
+        for s in &u.systems {
+            by_schedule
+                .entry(&s.schedule)
+                .or_default()
+                .push((&u.unit, s));
+        }
+    }
+    if by_schedule.is_empty() {
+        return String::new();
+    }
+
+    let mut out = String::from("\n### Systems by schedule\n");
+    for (schedule, mut systems) in by_schedule {
+        systems.sort_by(|a, b| (a.1.name.as_str(), a.0).cmp(&(b.1.name.as_str(), b.0)));
+        out.push_str(&format!("\n**{schedule}**\n\n"));
+        for (unit, s) in systems {
+            let after = if s.after.is_empty() {
+                String::new()
+            } else {
+                format!(" — after {}", s.after.join(", "))
+            };
+            out.push_str(&format!("- `{}` ({unit}){after}\n", s.name));
+        }
+    }
     out
 }
 
@@ -401,7 +487,70 @@ mod tests {
             paths: Vec::new(),
             refs: ids(refs),
             imports: ids(imports),
+            systems: Vec::new(),
         }
+    }
+
+    #[test]
+    fn parse_spec_collects_bevy_systems_and_imports() {
+        let text = "system: bevy-survivor\nunit: waves\nkind: plugin\nsource:\n  repo: r\n  paths:\n    - a.rs\n\n\
+## components\nuse other: Foe\nmarker Spawner\n\n\
+## systems\ntick — advances\n  schedule: FixedUpdate\nspawn — spawns\n  schedule: FixedUpdate\n  after: tick\n\n\
+## behavior\n- go\n\n## invariants\n- ok\n";
+        let e = parse_spec(text).expect("spec");
+        assert_eq!(e.kind, "plugin");
+        // World-section `use` lines are import edges just like `## data` ones.
+        assert_eq!(
+            e.imports,
+            vec![("bevy-survivor".to_string(), "other".to_string())]
+        );
+        assert_eq!(e.systems.len(), 2);
+        assert_eq!(e.systems[1].name, "spawn");
+        assert_eq!(e.systems[1].schedule, "FixedUpdate");
+        assert_eq!(e.systems[1].after, vec!["tick".to_string()]);
+    }
+
+    #[test]
+    fn parse_spec_treats_a_system_kind_as_one_system() {
+        let text = "system: bevy-survivor\nunit: spawn-enemies\nkind: system\nsource:\n  repo: r\n  paths:\n    - a.rs\n\n\
+## access\nschedule: Update\n\n\
+## behavior\n- go\n\n## invariants\n- ok\n";
+        let e = parse_spec(text).expect("spec");
+        assert_eq!(e.systems.len(), 1);
+        assert_eq!(e.systems[0].name, "spawn-enemies");
+        assert_eq!(e.systems[0].schedule, "Update");
+    }
+
+    #[test]
+    fn schedule_map_groups_systems_and_is_empty_without_them() {
+        let mut plugin = entry("bevy-survivor", "waves", Some("r"), &[]);
+        plugin.kind = "plugin".to_string();
+        plugin.systems = vec![
+            SystemRow {
+                name: "spawn".to_string(),
+                schedule: "FixedUpdate".to_string(),
+                after: vec!["tick".to_string()],
+            },
+            SystemRow {
+                name: "tick".to_string(),
+                schedule: "FixedUpdate".to_string(),
+                after: Vec::new(),
+            },
+            SystemRow {
+                name: "draw".to_string(),
+                schedule: "Update".to_string(),
+                after: Vec::new(),
+            },
+        ];
+        let out = render_schedule_map(&[&plugin]);
+        assert!(out.contains("### Systems by schedule"), "{out}");
+        assert!(out.contains("**FixedUpdate**"), "{out}");
+        assert!(out.contains("`spawn` (waves) — after tick"), "{out}");
+        assert!(out.contains("**Update**"), "{out}");
+
+        // A classic spec contributes nothing.
+        let job = entry("sys", "one", Some("r"), &[]);
+        assert_eq!(render_schedule_map(&[&job]), "");
     }
 
     #[test]

@@ -97,11 +97,9 @@ impl Backend {
     }
 }
 
-/// The byte span of a type definition (struct or enum) in its own document.
+/// The byte span of a type definition in its own document.
 fn type_def_span(t: &TypeDef) -> Span {
-    match t {
-        TypeDef::Struct { span, .. } | TypeDef::Enum { span, .. } => *span,
-    }
+    t.span()
 }
 
 /// Resolve an import/spec ref to its target `.mml` and return the target path,
@@ -129,11 +127,7 @@ fn import_type_definition(
     workspace_root: Option<&Path>,
 ) -> Option<Location> {
     let (target, src, doc) = read_target(spec_raw, current_file, workspace_root)?;
-    let def = doc
-        .data
-        .types
-        .iter()
-        .find(|t| t.name().value == type_name)?;
+    let def = doc.all_type_defs().find(|t| t.name().value == type_name)?;
     let li = LineIndex::new(&src);
     Some(Location {
         uri: Url::from_file_path(&target).ok()?,
@@ -150,7 +144,7 @@ fn import_type_hover(
     workspace_root: Option<&Path>,
 ) -> String {
     match read_target(spec_raw, current_file, workspace_root) {
-        Some((_, src, doc)) => match doc.data.types.iter().find(|t| t.name().value == type_name) {
+        Some((_, src, doc)) => match doc.all_type_defs().find(|t| t.name().value == type_name) {
             Some(def) => {
                 let span = type_def_span(def);
                 format!(
@@ -173,9 +167,10 @@ fn import_reference_target(ds: &DocState, offset: usize) -> Option<(String, Stri
         let (_system, unit) = mml_parser::ast::split_spec_ref(&spec.value);
         return Some((unit.to_string(), ty.value.clone()));
     }
-    // Cursor on a local type name (its definition or a use of it) in `## data`:
-    // this file's unit owns it, so importers reference it by this unit.
-    if analysis::section_at(&ds.text, offset) == SectionKind::Data {
+    // Cursor on a local type name (its definition or a use of it) in a
+    // type-declaring section: this file's unit owns it, so importers reference
+    // it by this unit.
+    if analysis::section_at(&ds.text, offset).declares_types() {
         let word = analysis::word_at(&ds.text, offset)?;
         if analysis::type_named(&ds.symbols, &word.text).is_some()
             && let Some(unit) = &ds.doc.header.unit
@@ -198,14 +193,14 @@ fn import_references(target: &(String, String), root: &Path) -> Vec<Location> {
             continue;
         };
         let doc = mml_parser::parse(&src);
-        if doc.data.imports.is_empty() {
+        if doc.all_imports().next().is_none() {
             continue;
         }
         let Ok(uri) = Url::from_file_path(&path) else {
             continue;
         };
         let li = LineIndex::new(&src);
-        for import in &doc.data.imports {
+        for import in doc.all_imports() {
             let (_rsystem, runit) = mml_parser::ast::split_spec_ref(&import.spec.value);
             if runit != owner_unit {
                 continue;
@@ -271,12 +266,18 @@ fn hover_at(
     }
 
     let word = analysis::word_at(&ds.text, offset)?;
-    let markdown = match analysis::section_at(&ds.text, offset) {
-        SectionKind::Behavior | SectionKind::Invariants => {
-            module_hover(ds, &word.text).or_else(|| type_hover(ds, &word.text))
-        }
+    let section = analysis::section_at(&ds.text, offset);
+    let markdown = match section {
+        SectionKind::Behavior | SectionKind::Invariants => module_hover(ds, &word.text)
+            .or_else(|| system_hover(ds, &word.text))
+            .or_else(|| type_hover(ds, &word.text)),
         SectionKind::Modules => module_hover(ds, &word.text),
-        SectionKind::Data => type_hover(ds, &word.text),
+        // In an access block a name is a system, a declared world type, or a
+        // Bevy built-in the spec never had to declare.
+        s if s.has_access() => system_hover(ds, &word.text)
+            .or_else(|| type_hover(ds, &word.text))
+            .or_else(|| builtin_hover(&word.text)),
+        s if s.declares_types() => type_hover(ds, &word.text),
         _ => None,
     }?;
     Some(Hover {
@@ -300,7 +301,64 @@ fn module_hover(ds: &DocState, name: &str) -> Option<String> {
 fn type_hover(ds: &DocState, name: &str) -> Option<String> {
     let t = analysis::type_named(&ds.symbols, name)?;
     let src = &ds.text[t.def_span.start..t.def_span.end];
-    Some(format!("```mml\n{src}\n```"))
+    let mut out = format!("```mml\n{src}\n```");
+    if t.role.is_some() {
+        out.push_str(&format!("\n\n_{}_", t.detail()));
+        // The whole point of role-checked access: answer "who touches this?"
+        // without leaving the definition.
+        let mentions = analysis::access_mentions(&ds.doc, name);
+        if !mentions.is_empty() {
+            let mut keys: Vec<&str> = mentions.iter().map(|(k, _)| *k).collect();
+            keys.sort_unstable();
+            keys.dedup();
+            out.push_str(&format!(
+                "\n\n{} access site(s): {}",
+                mentions.len(),
+                keys.join(", ")
+            ));
+        }
+    }
+    Some(out)
+}
+
+/// Hover for a `## systems` entry: its schedule, ordering, and access lists.
+fn system_hover(ds: &DocState, name: &str) -> Option<String> {
+    let sym = analysis::system_named(&ds.symbols, name)?;
+    let system = ds.doc.systems.iter().find(|s| s.name.value == name)?;
+    let mut out = format!("**{}** — {}", sym.name, sym.responsibility);
+    let access = &system.access;
+    if let Some(schedule) = &sym.schedule {
+        out.push_str(&format!("\n\n`schedule: {schedule}`"));
+    }
+    for (label, refs) in [("after", &access.after), ("before", &access.before)] {
+        if !refs.is_empty() {
+            let names: Vec<&str> = refs.iter().map(|r| r.value.as_str()).collect();
+            out.push_str(&format!("\n\n`{label}: {}`", names.join(", ")));
+        }
+    }
+    if let Some(run_if) = &access.run_if {
+        out.push_str(&format!("\n\n`run_if: {}`", run_if.value));
+    }
+    for (key, _roles, items) in access.world_lists() {
+        if items.is_empty() {
+            continue;
+        }
+        let names: Vec<&str> = items.iter().map(|i| i.value.as_str()).collect();
+        out.push_str(&format!("\n- **{key}** — {}", names.join(", ")));
+    }
+    if let Some(path) = &sym.path {
+        out.push_str(&format!("\n\n`@ {}`", path.value));
+    }
+    Some(out)
+}
+
+/// Hover for a Bevy built-in named in an access list but never declared here.
+fn builtin_hover(name: &str) -> Option<String> {
+    let role = mml_parser::validate::builtin_role(name)?;
+    Some(format!(
+        "**{name}**\n\n_built-in Bevy {}; no declaration needed_",
+        role.noun()
+    ))
 }
 
 /// Markdown summary of the spec an `@ spec` ref points at: `system/unit`,
@@ -435,13 +493,37 @@ fn definition_at(
         }));
     }
 
-    // In-spec: module / type name → its definition, same document.
+    // Inside an access block, resolve by role rather than by bare word: an
+    // access-list entry is a world item, an `after:`/`before:` target is a
+    // system. Falls through to the generic lookup when the name is a Bevy
+    // built-in or an imported type with no local declaration.
+    if let Some((_key, _roles, item)) = analysis::access_item_at(&ds.doc, offset)
+        && let Some(t) = analysis::type_named(&ds.symbols, &item.value)
+    {
+        return Some(GotoDefinitionResponse::Scalar(Location {
+            uri: uri.clone(),
+            range: ds.range(t.name_span),
+        }));
+    }
+    if let Some(r) = analysis::ordering_ref_at(&ds.doc, offset)
+        && let Some(s) = analysis::system_named(&ds.symbols, &r.value)
+    {
+        return Some(GotoDefinitionResponse::Scalar(Location {
+            uri: uri.clone(),
+            range: ds.range(s.name_span),
+        }));
+    }
+
+    // In-spec: module / system / type name → its definition, same document.
     let word = analysis::word_at(&ds.text, offset)?;
-    let span = match analysis::section_at(&ds.text, offset) {
-        SectionKind::Data => analysis::type_named(&ds.symbols, &word.text).map(|t| t.name_span),
-        _ => analysis::module_named(&ds.symbols, &word.text)
+    let section = analysis::section_at(&ds.text, offset);
+    let span = if section.declares_types() {
+        analysis::type_named(&ds.symbols, &word.text).map(|t| t.name_span)
+    } else {
+        analysis::module_named(&ds.symbols, &word.text)
             .map(|m| m.name_span)
-            .or_else(|| analysis::type_named(&ds.symbols, &word.text).map(|t| t.name_span)),
+            .or_else(|| analysis::system_named(&ds.symbols, &word.text).map(|s| s.name_span))
+            .or_else(|| analysis::type_named(&ds.symbols, &word.text).map(|t| t.name_span))
     }?;
     Some(GotoDefinitionResponse::Scalar(Location {
         uri: uri.clone(),
@@ -449,12 +531,19 @@ fn definition_at(
     }))
 }
 
-/// If `offset` sits on a module `@ path` or a header `source.paths` entry,
-/// return the raw path string.
+/// If `offset` sits on a module or system `@ path`, or a header `source.paths`
+/// entry, return the raw path string.
 fn path_target_at(ds: &DocState, offset: usize) -> Option<&str> {
     let within = |span: Span| offset >= span.start && offset < span.end;
     for m in &ds.doc.modules {
         if let Some(p) = &m.path
+            && within(p.span)
+        {
+            return Some(&p.value);
+        }
+    }
+    for s in &ds.doc.systems {
+        if let Some(p) = &s.path
             && within(p.span)
         {
             return Some(&p.value);
@@ -476,16 +565,33 @@ fn references_at(ds: &DocState, uri: &Url, pos: Position, include_decl: bool) ->
         return Vec::new();
     };
 
-    // Only meaningful for a declared module or type.
+    // Only meaningful for a declared module, system, or type.
     let decl_span = analysis::module_named(&ds.symbols, &word.text)
         .map(|m| m.name_span)
+        .or_else(|| analysis::system_named(&ds.symbols, &word.text).map(|s| s.name_span))
         .or_else(|| analysis::type_named(&ds.symbols, &word.text).map(|t| t.name_span));
     if decl_span.is_none() {
         return Vec::new();
     }
 
-    let mut locs: Vec<Location> = analysis::find_mentions(&ds.doc.behavior, &word.text)
+    // Behavior prose mentions, plus every access list naming it — the latter is
+    // what answers "which systems write this component?".
+    let mentions = analysis::find_mentions(&ds.doc.behavior, &word.text)
         .into_iter()
+        .chain(
+            analysis::access_mentions(&ds.doc, &word.text)
+                .into_iter()
+                .map(|(_key, span)| span),
+        )
+        .chain(
+            ds.doc
+                .access_blocks()
+                .into_iter()
+                .flat_map(|(_, b)| b.ordering_refs())
+                .filter(|r| r.value == word.text)
+                .map(|r| r.span),
+        );
+    let mut locs: Vec<Location> = mentions
         .map(|span| Location {
             uri: uri.clone(),
             range: ds.range(span),
@@ -582,7 +688,18 @@ fn document_symbols(ds: &DocState) -> Vec<DocumentSymbol> {
         let full = ds.range(Span::new(range.start, range.end));
         let (name, children) = match kind {
             SectionKind::Modules => ("modules", module_symbols(ds)),
-            SectionKind::Data => ("data", type_symbols(ds)),
+            SectionKind::Data => ("data", type_symbols(ds, &ds.doc.data.types)),
+            SectionKind::World(role) => {
+                let section = ds
+                    .doc
+                    .world_sections()
+                    .into_iter()
+                    .find(|w| w.role == role)
+                    .expect("one section per role");
+                (role.section(), type_symbols(ds, &section.types))
+            }
+            SectionKind::Systems => ("systems", system_symbols(ds)),
+            SectionKind::Access => ("access", Vec::new()),
             SectionKind::Behavior => ("behavior", Vec::new()),
             SectionKind::Invariants => ("invariants", Vec::new()),
             SectionKind::Header | SectionKind::Unknown => continue,
@@ -616,10 +733,45 @@ fn module_symbols(ds: &DocState) -> Vec<DocumentSymbol> {
         .collect()
 }
 
-fn type_symbols(ds: &DocState) -> Vec<DocumentSymbol> {
+/// Document symbols for one system entry, with its schedule as the detail and
+/// its access lists flattened into children — the outline answers "what does
+/// this system touch?" without opening the block.
+fn system_symbols(ds: &DocState) -> Vec<DocumentSymbol> {
     ds.doc
-        .data
-        .types
+        .systems
+        .iter()
+        .map(|s| {
+            let mut children = Vec::new();
+            for (key, _roles, items) in s.access.world_lists() {
+                for item in items {
+                    children.push(doc_symbol(
+                        item.value.clone(),
+                        Some(key.to_string()),
+                        SymbolKind::FIELD,
+                        ds.range(item.span),
+                        ds.range(item.span),
+                        Vec::new(),
+                    ));
+                }
+            }
+            let detail = match &s.access.schedule {
+                Some(schedule) => format!("{} — {}", schedule.value, s.responsibility.value),
+                None => s.responsibility.value.clone(),
+            };
+            doc_symbol(
+                s.name.value.clone(),
+                Some(detail),
+                SymbolKind::FUNCTION,
+                ds.range(s.span),
+                ds.range(s.name.span),
+                children,
+            )
+        })
+        .collect()
+}
+
+fn type_symbols(ds: &DocState, types: &[TypeDef]) -> Vec<DocumentSymbol> {
+    types
         .iter()
         .map(|t| match t {
             TypeDef::Struct { name, fields, span } => {
@@ -672,6 +824,14 @@ fn type_symbols(ds: &DocState) -> Vec<DocumentSymbol> {
                     children,
                 )
             }
+            TypeDef::Marker { name, span } => doc_symbol(
+                name.value.clone(),
+                Some("marker".to_string()),
+                SymbolKind::STRUCT,
+                ds.range(*span),
+                ds.range(name.span),
+                Vec::new(),
+            ),
         })
         .collect()
 }
@@ -710,21 +870,31 @@ fn completions_at(
             ..Default::default()
         }
     }
+    fn type_item(t: &analysis::TypeSym) -> CompletionItem {
+        let kind = match t.shape {
+            analysis::TypeShape::Enum => CompletionItemKind::ENUM,
+            _ => CompletionItemKind::STRUCT,
+        };
+        CompletionItem {
+            label: t.name.clone(),
+            kind: Some(kind),
+            detail: Some(t.detail()),
+            ..Default::default()
+        }
+    }
     let names = |ds: &DocState| -> Vec<CompletionItem> {
         let modules = ds
             .symbols
             .modules
             .iter()
             .map(|m| item(m.name.clone(), CompletionItemKind::MODULE, "module"));
-        let types = ds.symbols.types.iter().map(|t| {
-            let (k, d) = if t.is_struct {
-                (CompletionItemKind::STRUCT, "struct")
-            } else {
-                (CompletionItemKind::ENUM, "enum")
-            };
-            item(t.name.clone(), k, d)
-        });
-        modules.chain(types).collect()
+        let systems = ds
+            .symbols
+            .systems
+            .iter()
+            .map(|s| item(s.name.clone(), CompletionItemKind::FUNCTION, "system"));
+        let types = ds.symbols.types.iter().map(type_item);
+        modules.chain(systems).chain(types).collect()
     };
 
     let offset = ds.offset(pos);
@@ -749,20 +919,61 @@ fn completions_at(
             .iter()
             .map(|v| item(*v, CompletionItemKind::ENUM_MEMBER, "method"))
             .collect(),
-        CompletionContext::Type => {
-            let mut out: Vec<CompletionItem> = ds
-                .symbols
-                .types
+        CompletionContext::AccessKey => analysis::ACCESS_KEYS
+            .iter()
+            .map(|k| item(format!("{k}:"), CompletionItemKind::FIELD, "access key"))
+            .collect(),
+        CompletionContext::AccessValue(value) => match value {
+            analysis::AccessValue::Schedule => analysis::SCHEDULES
                 .iter()
-                .map(|t| {
-                    let (k, d) = if t.is_struct {
-                        (CompletionItemKind::STRUCT, "struct")
-                    } else {
-                        (CompletionItemKind::ENUM, "enum")
+                .map(|s| item(*s, CompletionItemKind::ENUM_MEMBER, "schedule"))
+                .collect(),
+            analysis::AccessValue::Ordering => ds
+                .symbols
+                .systems
+                .iter()
+                .map(|s| item(s.name.clone(), CompletionItemKind::FUNCTION, "system"))
+                .chain(
+                    ds.doc
+                        .access_blocks()
+                        .into_iter()
+                        .flat_map(|(_, b)| b.sets.iter())
+                        .map(|s| {
+                            item(s.value.clone(), CompletionItemKind::INTERFACE, "system set")
+                        }),
+                )
+                .collect(),
+            analysis::AccessValue::Free => Vec::new(),
+            // Role-filtered: only names that fit this key, declared here or
+            // built into Bevy.
+            v => {
+                let roles = v.roles();
+                let mut out: Vec<CompletionItem> = roles
+                    .iter()
+                    .flat_map(|r| ds.symbols.with_role(*r))
+                    .map(type_item)
+                    .collect();
+                for role in roles {
+                    let (builtins, detail) = match role {
+                        mml_parser::ast::Role::Component => {
+                            (analysis::BUILTIN_COMPONENTS, "bevy component")
+                        }
+                        mml_parser::ast::Role::Resource => {
+                            (analysis::BUILTIN_RESOURCES, "bevy resource")
+                        }
+                        mml_parser::ast::Role::Event => (analysis::BUILTIN_EVENTS, "bevy event"),
                     };
-                    item(t.name.clone(), k, d)
-                })
-                .collect();
+                    out.extend(
+                        builtins
+                            .iter()
+                            .map(|b| item(*b, CompletionItemKind::STRUCT, detail)),
+                    );
+                }
+                out
+            }
+        },
+        CompletionContext::Type => {
+            let mut out: Vec<CompletionItem> = ds.symbols.types.iter().map(type_item).collect();
             out.extend(
                 analysis::PRIMITIVES
                     .iter()
@@ -1100,7 +1311,11 @@ mod tests {
     #[test]
     fn hover_type_shows_definition() {
         let ds = state();
-        let pos = at(SAMPLE, "out: Stream<ChunkMesh>", "out: Stream<".len() as u32);
+        let pos = at(
+            SAMPLE,
+            "out: Stream<ChunkMesh>",
+            "out: Stream<".len() as u32,
+        );
         let h = hover_at(&ds, &uri(), None, pos).expect("hover");
         let HoverContents::Markup(m) = h.contents else {
             panic!("markup")
@@ -1517,5 +1732,309 @@ mod tests {
         let locs = import_references(&target, dir.path());
         assert_eq!(locs.len(), 1);
         assert!(locs[0].uri.path().ends_with("importer.mml"));
+    }
+
+    // --- Bevy dialect handlers ---
+
+    const PLUGIN: &str = include_str!("../../mml-parser/tests/fixtures/examples/enemy-waves.mml");
+
+    fn plugin_state() -> DocState {
+        state_of(PLUGIN)
+    }
+
+    fn plugin_uri() -> Url {
+        Url::parse("file:///specs/enemy-waves.mml").unwrap()
+    }
+
+    #[test]
+    fn document_symbols_list_bevy_sections_and_systems() {
+        let ds = plugin_state();
+        let syms = document_symbols(&ds);
+        let names: Vec<&str> = syms.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "modules",
+                "components",
+                "resources",
+                "events",
+                "systems",
+                "behavior",
+                "invariants"
+            ]
+        );
+
+        // The world sections list their own types, not each other's.
+        let components = syms.iter().find(|s| s.name == "components").unwrap();
+        let ctypes: Vec<&str> = components
+            .children
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect();
+        assert_eq!(ctypes, ["Wave", "EnemyHealth", "Spawner"]);
+        let resources = syms.iter().find(|s| s.name == "resources").unwrap();
+        let rtypes: Vec<&str> = resources
+            .children
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect();
+        assert_eq!(rtypes, ["WaveConfig", "WaveState"]);
+
+        // A system's detail leads with its schedule; its access list is nested.
+        let systems = syms.iter().find(|s| s.name == "systems").unwrap();
+        let children = systems.children.as_ref().unwrap();
+        let names: Vec<&str> = children.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["tick_wave_timer", "spawn_enemies", "detect_cleared"]
+        );
+        assert!(
+            children[1]
+                .detail
+                .as_deref()
+                .unwrap()
+                .starts_with("FixedUpdate — "),
+            "{:?}",
+            children[1].detail
+        );
+        let access: Vec<(&str, &str)> = children[1]
+            .children
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|c| (c.name.as_str(), c.detail.as_deref().unwrap()))
+            .collect();
+        assert!(access.contains(&("WaveState", "writes")), "{access:?}");
+        assert!(access.contains(&("Spawner", "query")), "{access:?}");
+    }
+
+    #[test]
+    fn hover_on_a_system_shows_schedule_and_access() {
+        let ds = plugin_state();
+        let pos = at(PLUGIN, "spawn_enemies — spawns", 2);
+        let h = hover_at(&ds, &plugin_uri(), None, pos).expect("hover");
+        let HoverContents::Markup(m) = h.contents else {
+            panic!("markup")
+        };
+        assert!(m.value.contains("spawn_enemies"), "{}", m.value);
+        assert!(m.value.contains("schedule: FixedUpdate"), "{}", m.value);
+        assert!(m.value.contains("after: tick_wave_timer"), "{}", m.value);
+        assert!(m.value.contains("**spawns**"), "{}", m.value);
+    }
+
+    #[test]
+    fn hover_on_a_component_reports_its_role_and_access_sites() {
+        let ds = plugin_state();
+        // Cursor on `WaveState` in detect_cleared's `reads:` line.
+        let off = PLUGIN
+            .find(
+                "reads:    WaveState
+  emits",
+            )
+            .unwrap()
+            + "reads:    ".len();
+        let pos = to_lsp_pos(ds.line_index.position(off));
+        let h = hover_at(&ds, &plugin_uri(), None, pos).expect("hover");
+        let HoverContents::Markup(m) = h.contents else {
+            panic!("markup")
+        };
+        assert!(m.value.contains("struct WaveState"), "{}", m.value);
+        assert!(m.value.contains("resource struct"), "{}", m.value);
+        assert!(m.value.contains("access site"), "{}", m.value);
+    }
+
+    #[test]
+    fn hover_on_a_bevy_builtin_says_so() {
+        let ds = plugin_state();
+        let off =
+            PLUGIN.find("reads:    WaveConfig, Time").unwrap() + "reads:    WaveConfig, ".len();
+        let pos = to_lsp_pos(ds.line_index.position(off));
+        let h = hover_at(&ds, &plugin_uri(), None, pos).expect("hover");
+        let HoverContents::Markup(m) = h.contents else {
+            panic!("markup")
+        };
+        assert!(m.value.contains("built-in Bevy resource"), "{}", m.value);
+    }
+
+    #[test]
+    fn goto_from_an_access_list_reaches_the_declaration() {
+        let ds = plugin_state();
+
+        // `writes: WaveState` → the `struct WaveState` declaration.
+        let off = PLUGIN
+            .find(
+                "writes:   WaveState
+  spawns",
+            )
+            .unwrap()
+            + "writes:   ".len();
+        let pos = to_lsp_pos(ds.line_index.position(off));
+        let resp = definition_at(&ds, &plugin_uri(), None, pos).expect("goto type");
+        let GotoDefinitionResponse::Scalar(loc) = resp else {
+            panic!("scalar")
+        };
+        let decl = at(PLUGIN, "struct WaveState", 0);
+        assert_eq!(loc.range.start.line, decl.line);
+
+        // `after: tick_wave_timer` → the system entry that declares it.
+        let off = PLUGIN.find("after:    tick_wave_timer").unwrap() + "after:    ".len();
+        let pos = to_lsp_pos(ds.line_index.position(off));
+        let resp = definition_at(&ds, &plugin_uri(), None, pos).expect("goto system");
+        let GotoDefinitionResponse::Scalar(loc) = resp else {
+            panic!("scalar")
+        };
+        let decl = at(PLUGIN, "tick_wave_timer — advances", 0);
+        assert_eq!(loc.range.start.line, decl.line);
+    }
+
+    #[test]
+    fn goto_into_source_follows_a_system_path() {
+        use std::fs;
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("src/waves");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(sub.join("timer.rs"), "x").unwrap();
+
+        let ds = plugin_state();
+        let off = PLUGIN.find("src/waves/timer.rs").unwrap() + 2;
+        let pos = to_lsp_pos(ds.line_index.position(off));
+        let resp =
+            definition_at(&ds, &plugin_uri(), Some(dir.path()), pos).expect("goto into source");
+        let GotoDefinitionResponse::Scalar(loc) = resp else {
+            panic!("scalar")
+        };
+        assert!(loc.uri.path().ends_with("src/waves/timer.rs"));
+    }
+
+    #[test]
+    fn references_on_a_resource_find_every_access_site() {
+        let ds = plugin_state();
+        // From the declaration of WaveState.
+        let pos = at(PLUGIN, "struct WaveState", "struct ".len() as u32);
+        let refs = references_at(&ds, &plugin_uri(), pos, false);
+        // tick_wave_timer writes, spawn_enemies writes, detect_cleared reads,
+        // plus the behavior prose mentions.
+        assert!(
+            refs.len() >= 3,
+            "expected the three access sites, got {refs:#?}"
+        );
+
+        // From a system name: its declaration plus the `after:` ref that orders
+        // against it, plus the behavior bullet naming it.
+        let pos = at(PLUGIN, "tick_wave_timer — advances", 0);
+        let refs = references_at(&ds, &plugin_uri(), pos, true);
+        assert!(refs.len() >= 3, "{refs:#?}");
+    }
+
+    #[test]
+    fn completion_offers_access_keys_and_role_filtered_values() {
+        let ds = plugin_state();
+
+        // Key position: the closed access-key set.
+        let off = PLUGIN.find("  schedule: FixedUpdate").unwrap() + 2;
+        let pos = to_lsp_pos(ds.line_index.position(off));
+        let labels: Vec<String> = completions_at(&ds, pos, None, &[])
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(labels.contains(&"schedule:".to_string()), "{labels:?}");
+        assert!(labels.contains(&"query:".to_string()), "{labels:?}");
+
+        // `emits:` offers events only — never a component or a resource.
+        let off = PLUGIN.find("emits:    WaveCleared").unwrap() + "emits:    ".len();
+        let pos = to_lsp_pos(ds.line_index.position(off));
+        let labels: Vec<String> = completions_at(&ds, pos, None, &[])
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(labels.contains(&"WaveCleared".to_string()), "{labels:?}");
+        assert!(labels.contains(&"AppExit".to_string()), "{labels:?}");
+        assert!(!labels.contains(&"Wave".to_string()), "{labels:?}");
+        assert!(!labels.contains(&"WaveState".to_string()), "{labels:?}");
+
+        // `query:` offers components, declared and built-in.
+        let off = PLUGIN.find("query:    Transform + Spawner").unwrap() + "query:    ".len();
+        let pos = to_lsp_pos(ds.line_index.position(off));
+        let labels: Vec<String> = completions_at(&ds, pos, None, &[])
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(labels.contains(&"Spawner".to_string()), "{labels:?}");
+        assert!(labels.contains(&"Transform".to_string()), "{labels:?}");
+        assert!(!labels.contains(&"WaveCleared".to_string()), "{labels:?}");
+
+        // `schedule:` offers the built-in labels.
+        let off = PLUGIN.find("schedule: Update\n  query:    Wave").unwrap() + "schedule: ".len();
+        let pos = to_lsp_pos(ds.line_index.position(off));
+        let labels: Vec<String> = completions_at(&ds, pos, None, &[])
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(labels.contains(&"FixedUpdate".to_string()), "{labels:?}");
+        assert!(labels.contains(&"PostUpdate".to_string()), "{labels:?}");
+
+        // `after:` offers the file's own systems.
+        let off = PLUGIN.find("after:    tick_wave_timer").unwrap() + "after:    ".len();
+        let pos = to_lsp_pos(ds.line_index.position(off));
+        let labels: Vec<String> = completions_at(&ds, pos, None, &[])
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(
+            labels.contains(&"tick_wave_timer".to_string()),
+            "{labels:?}"
+        );
+        assert!(labels.contains(&"detect_cleared".to_string()), "{labels:?}");
+    }
+
+    #[test]
+    fn section_header_completion_includes_the_bevy_sections() {
+        let ds = plugin_state();
+        let pos = at(PLUGIN, "## systems", 3);
+        let labels: Vec<String> = completions_at(&ds, pos, None, &[])
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        for want in [
+            "## components",
+            "## resources",
+            "## events",
+            "## systems",
+            "## access",
+        ] {
+            assert!(
+                labels.contains(&want.to_string()),
+                "{want} missing: {labels:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_bevy_plugin_lints_clean_against_a_real_tree() {
+        use std::fs;
+        // The fixture references a sibling spec and two source files; with both
+        // present, every filesystem-aware check must stay silent.
+        let dir = tempfile::tempdir().unwrap();
+        let waves = dir.path().join("src/waves");
+        fs::create_dir_all(&waves).unwrap();
+        for f in ["mod.rs", "timer.rs"] {
+            fs::write(waves.join(f), "x").unwrap();
+        }
+        let spec = dir.path().join("enemy-waves.mml");
+        fs::write(&spec, PLUGIN).unwrap();
+        fs::write(
+            dir.path().join("spawn-enemies.mml"),
+            include_str!("../../mml-parser/tests/fixtures/examples/spawn-enemies.mml"),
+        )
+        .unwrap();
+
+        let (doc, diags) = analyze(PLUGIN);
+        assert!(diags.is_empty(), "{diags:#?}");
+        let fs_diags = lint::lint(&doc, &spec, Some(dir.path()));
+        assert!(fs_diags.is_empty(), "{fs_diags:#?}");
     }
 }

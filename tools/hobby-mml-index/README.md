@@ -14,6 +14,13 @@ Walks the hobby notes tree, parses every `.mml`, and writes an `index.md`
 summarizing units by system — plus warnings for cross-spec refs and imports that
 point at specs which do not exist.
 
+For the Bevy dialect it also emits a **schedule map** per system grouping: every
+system across the grouping's plugins, bucketed by the schedule it runs in and
+annotated with its `after:` ordering. That is the question a flat list of units
+cannot answer — *what runs in `FixedUpdate`, and in what order?* — and it spans
+plugins, so it surfaces ordering that no single spec shows. Groupings with no
+Bevy specs get no such section.
+
 Fork of the work `mml-index`. Two changes: the default spec root is
 `~/fun_repos/hobby-mimisbrunnr/notes` (hobby specs live per-task inside the notes
 tree, not in a standalone spec repo), and `source.repo` resolves against

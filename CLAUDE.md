@@ -36,9 +36,30 @@ hooks/<name>/hook.sh                  # symlinked into ~/.claude-hobby/hooks/
 skills/<name>/{skill.md, README.md}   # symlinked into ~/.claude-hobby/commands/
 settings/hobby.settings.json          # symlinked to ~/.claude-hobby/settings.json
 scripts/                              # install logic too involved for a justfile recipe
-lsps/hobby-mml-lsp/                   # forked MML language server
+lsps/hobby-mml-lsp/                   # forked MML language server + grammar.md
 tools/{hobby-mml-index, hwt-overview}/
 ```
+
+## MML is a Bevy dialect here
+
+`lsps/hobby-mml-lsp/grammar.md` is the **source of truth** for hobby MML (v2) and
+what the `mml-*` skills read. The work `01-language-spec/grammar.md` describes v1
+and governs nothing in this repo.
+
+The fork exists because hobby projects are Bevy games and MML v1 assumes a unit
+is a function (`in: T` / `out: T`). An ECS has no such contract — data flows
+through the World — so v2 adds `kind: plugin` / `kind: system` and the sections
+`## components`, `## resources`, `## events`, `## systems`, `## access`, with the
+legal section set a function of `kind:`. A system's interface is its **access
+block** (`schedule:`, `query:`, `reads:`, `writes:`, `spawns:`, `emits:`, …), and
+every name in it is role-checked against the declared components / resources /
+events. That check is what replaces the `in:`/`out:` type check and what gives
+the LSP goto-definition, "who writes this component?", and the index's schedule
+map.
+
+`endpoint` / `workflow` / `job` keep the v1 grammar unchanged, so the handful of
+non-Bevy hobby repos (`mosaik_map`, `securitd`, `glsllsp`) still have a usable
+dialect. The two cannot be mixed in one file.
 
 ## Installing
 

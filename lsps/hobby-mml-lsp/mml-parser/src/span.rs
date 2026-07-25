@@ -6,8 +6,9 @@
 
 use serde::Serialize;
 
-/// A half-open byte range `[start, end)` into the source text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// A half-open byte range `[start, end)` into the source text. `Default` is the
+/// empty span at offset 0, so span-carrying AST nodes can derive `Default`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
 pub struct Span {
     pub start: usize,
     pub end: usize,

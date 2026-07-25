@@ -11,16 +11,92 @@ use serde::Serialize;
 
 /// A parsed `.mml` document. `diagnostics` holds parse-time diagnostics only;
 /// run [`crate::validate::validate`] to add semantic ones.
+///
+/// Which of the section fields are populated depends on the header `kind`
+/// (grammar §7.2): the classic kinds (`endpoint`/`workflow`/`job`) use
+/// [`Document::data`], while the Bevy kinds (`plugin`/`system`) use
+/// [`components`](Document::components) / [`resources`](Document::resources) /
+/// [`events`](Document::events) plus [`systems`](Document::systems) or
+/// [`access`](Document::access). A section used by the wrong kind still parses
+/// (so the LSP keeps working mid-edit) but carries a
+/// [`SECTION_NOT_ALLOWED`](crate::diagnostic::code::SECTION_NOT_ALLOWED)
+/// diagnostic.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Document {
     pub header: Header,
     pub modules: Vec<Module>,
     pub data: DataSection,
+    /// `## components` — entity data (grammar §8.1).
+    pub components: WorldSection,
+    /// `## resources` — global singletons (grammar §8.1).
+    pub resources: WorldSection,
+    /// `## events` — message payloads (grammar §8.1).
+    pub events: WorldSection,
+    /// `## systems` — one entry per system a `kind: plugin` registers (§8.2).
+    pub systems: Vec<SystemDef>,
+    /// `## access` — the lone access block of a `kind: system` file (§8.3).
+    pub access: Option<AccessBlock>,
     pub behavior: Vec<Step>,
     /// `where:` symbol bindings at the end of `## behavior` (grammar §5.3).
     pub bindings: Vec<Binding>,
     pub invariants: Vec<Invariant>,
     pub diagnostics: Vec<Diagnostic>,
+}
+
+impl Document {
+    /// The three world sections in canonical order, for consumers that treat
+    /// components / resources / events uniformly (validation, symbols, index).
+    pub fn world_sections(&self) -> [&WorldSection; 3] {
+        [&self.components, &self.resources, &self.events]
+    }
+
+    /// Every type definition in the document, whichever dialect declared it —
+    /// `## data` plus the three world sections.
+    pub fn all_type_defs(&self) -> impl Iterator<Item = &TypeDef> {
+        self.data.types.iter().chain(
+            self.world_sections()
+                .into_iter()
+                .flat_map(|w| w.types.iter()),
+        )
+    }
+
+    /// Every `use` import in the document, from `## data` and the three world
+    /// sections alike.
+    pub fn all_imports(&self) -> impl Iterator<Item = &Import> {
+        self.data.imports.iter().chain(
+            self.world_sections()
+                .into_iter()
+                .flat_map(|w| w.imports.iter()),
+        )
+    }
+
+    /// The ECS role of every declared and imported world name. Used to check
+    /// that an access-list entry fits the key it appears under.
+    pub fn roles(&self) -> std::collections::HashMap<&str, Role> {
+        let mut out = std::collections::HashMap::new();
+        for section in self.world_sections() {
+            for name in section.names() {
+                out.entry(name.value.as_str()).or_insert(section.role);
+            }
+        }
+        out
+    }
+
+    /// Every access block in the document: one per `## systems` entry, plus the
+    /// `## access` block of a `kind: system` file. The [`Spanned`] name is the
+    /// system's own name where there is one, and the header `unit` otherwise —
+    /// it is what diagnostics anchor to.
+    pub fn access_blocks(&self) -> Vec<(Option<&Spanned<String>>, &AccessBlock)> {
+        let mut out: Vec<(Option<&Spanned<String>>, &AccessBlock)> = self
+            .systems
+            .iter()
+            .map(|s| (Some(&s.name), &s.access))
+            .collect();
+        if let Some(access) = &self.access {
+            out.push((None, access));
+        }
+        out
+    }
 }
 
 // ---- header ----------------------------------------------------------------
@@ -44,7 +120,14 @@ pub enum Kind {
     Endpoint,
     Workflow,
     Job,
+    /// A Bevy `Plugin`: what it registers into the `App` and in what order.
+    Plugin,
+    /// One Bevy system split out of a plugin, with its own access block.
+    System,
 }
+
+/// Every `kind:` value, in the order the LSP offers them.
+pub const KIND_VALUES: &[&str] = &["endpoint", "workflow", "job", "plugin", "system"];
 
 impl Kind {
     pub fn parse(s: &str) -> Option<Kind> {
@@ -52,10 +135,84 @@ impl Kind {
             "endpoint" => Some(Kind::Endpoint),
             "workflow" => Some(Kind::Workflow),
             "job" => Some(Kind::Job),
+            "plugin" => Some(Kind::Plugin),
+            "system" => Some(Kind::System),
             _ => None,
         }
     }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Kind::Endpoint => "endpoint",
+            Kind::Workflow => "workflow",
+            Kind::Job => "job",
+            Kind::Plugin => "plugin",
+            Kind::System => "system",
+        }
+    }
+
+    /// Whether this kind models a Bevy ECS unit, and therefore uses the
+    /// component/resource/event/system sections instead of `## data`.
+    pub fn is_bevy(self) -> bool {
+        matches!(self, Kind::Plugin | Kind::System)
+    }
+
+    /// The sections this kind must declare (grammar §7.2). Absent ones are a
+    /// [`MISSING_SECTION`](crate::diagnostic::code::MISSING_SECTION) error.
+    pub fn required_sections(self) -> &'static [&'static str] {
+        match self {
+            Kind::Plugin => &["systems", "behavior", "invariants"],
+            Kind::System => &["access", "behavior", "invariants"],
+            _ => LEGACY_SECTIONS,
+        }
+    }
+
+    /// The sections this kind may declare — a superset of
+    /// [`required_sections`](Kind::required_sections). Anything else is a
+    /// [`SECTION_NOT_ALLOWED`](crate::diagnostic::code::SECTION_NOT_ALLOWED)
+    /// error.
+    pub fn allowed_sections(self) -> &'static [&'static str] {
+        match self {
+            Kind::Plugin => &[
+                "modules",
+                "components",
+                "resources",
+                "events",
+                "systems",
+                "behavior",
+                "invariants",
+            ],
+            Kind::System => &[
+                "modules",
+                "components",
+                "resources",
+                "events",
+                "access",
+                "behavior",
+                "invariants",
+            ],
+            _ => LEGACY_SECTIONS,
+        }
+    }
 }
+
+/// The four sections of the classic (non-Bevy) dialect — required and allowed
+/// alike, and the fallback schema when `kind:` is missing or unparsable.
+pub const LEGACY_SECTIONS: &[&str] = &["modules", "data", "behavior", "invariants"];
+
+/// Canonical section order across both dialects (grammar §1). A section that
+/// appears after one with a higher index warns as out-of-order.
+pub const SECTION_ORDER: &[&str] = &[
+    "modules",
+    "data",
+    "components",
+    "resources",
+    "events",
+    "systems",
+    "access",
+    "behavior",
+    "invariants",
+];
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Source {
@@ -137,14 +294,185 @@ pub enum TypeDef {
         variants: Vec<Spanned<String>>,
         span: Span,
     },
+    /// `marker Name` — a zero-sized component (grammar §8.1). Legal only in the
+    /// Bevy world sections; markers are common enough in Bevy that spelling one
+    /// as an empty `struct` reads badly.
+    Marker { name: Spanned<String>, span: Span },
 }
 
 impl TypeDef {
     pub fn name(&self) -> &Spanned<String> {
         match self {
-            TypeDef::Struct { name, .. } | TypeDef::Enum { name, .. } => name,
+            TypeDef::Struct { name, .. }
+            | TypeDef::Enum { name, .. }
+            | TypeDef::Marker { name, .. } => name,
         }
     }
+
+    pub fn span(&self) -> Span {
+        match self {
+            TypeDef::Struct { span, .. }
+            | TypeDef::Enum { span, .. }
+            | TypeDef::Marker { span, .. } => *span,
+        }
+    }
+}
+
+// ---- Bevy world sections (grammar §8.1) ------------------------------------
+
+/// The ECS role of a type definition, taken from the section that declares it.
+/// Role is what makes an access list checkable: a component cannot be emitted,
+/// an event cannot be queried.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    Component,
+    Resource,
+    Event,
+}
+
+impl Role {
+    pub fn section(self) -> &'static str {
+        match self {
+            Role::Component => "components",
+            Role::Resource => "resources",
+            Role::Event => "events",
+        }
+    }
+
+    pub fn noun(self) -> &'static str {
+        match self {
+            Role::Component => "component",
+            Role::Resource => "resource",
+            Role::Event => "event",
+        }
+    }
+}
+
+/// One of `## components` / `## resources` / `## events`. Body grammar is the
+/// `## data` type-definition grammar minus `in:`/`out:`, plus `marker`. A `use`
+/// import here takes the section's role, so a type imported into
+/// `## components` is a component in this file.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct WorldSection {
+    pub role: Role,
+    pub imports: Vec<Import>,
+    pub types: Vec<TypeDef>,
+}
+
+impl WorldSection {
+    pub fn new(role: Role) -> WorldSection {
+        WorldSection {
+            role,
+            imports: Vec::new(),
+            types: Vec::new(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.imports.is_empty() && self.types.is_empty()
+    }
+
+    /// Every name this section brings into scope — defined and imported alike.
+    pub fn names(&self) -> impl Iterator<Item = &Spanned<String>> {
+        self.types
+            .iter()
+            .map(TypeDef::name)
+            .chain(self.imports.iter().flat_map(|i| i.types.iter()))
+    }
+}
+
+// ---- Bevy systems (grammar §8.2) -------------------------------------------
+
+/// One `## systems` entry: a module-shaped declaration line plus an indented
+/// [`AccessBlock`].
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SystemDef {
+    pub name: Spanned<String>,
+    pub responsibility: Spanned<String>,
+    pub path: Option<Spanned<String>>,
+    /// Trailing `@ spec <unit>`: the system is specced in full in its own file.
+    pub spec: Option<Spanned<String>>,
+    pub access: AccessBlock,
+    pub span: Span,
+}
+
+/// The closed set of access-block keys (grammar §8.3), in canonical order —
+/// also the LSP's completion list.
+pub const ACCESS_KEYS: &[&str] = &[
+    "schedule", "set", "after", "before", "run_if", "query", "reads", "writes", "spawns",
+    "despawns", "emits", "consumes",
+];
+
+/// A system's world access: what schedules and orders it, and what it touches.
+/// This is the ECS replacement for `in:` / `out:` — data flows through the
+/// World, so a system's interface is the set of things it reads and writes.
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+pub struct AccessBlock {
+    /// `schedule:` — the schedule label it runs in (`Update`, `FixedUpdate`,
+    /// `OnEnter(Playing)`, …). Required.
+    pub schedule: Option<Spanned<String>>,
+    /// `set:` — system-set membership.
+    pub sets: Vec<Spanned<String>>,
+    /// `after:` / `before:` — ordering against systems or sets.
+    pub after: Vec<Spanned<String>>,
+    pub before: Vec<Spanned<String>>,
+    /// `run_if:` — a run condition, kept as free text.
+    pub run_if: Option<Spanned<String>>,
+    /// The declaration line this block hangs off — a `## systems` entry line, or
+    /// the `## access` section header. Where block-level diagnostics anchor.
+    pub anchor: Span,
+    /// `query:` — the matched component set.
+    pub query: Option<QueryFilter>,
+    /// `reads:` / `writes:` — components and resources accessed.
+    pub reads: Vec<Spanned<String>>,
+    pub writes: Vec<Spanned<String>>,
+    /// `spawns:` / `despawns:` — components on entities created / destroyed.
+    pub spawns: Vec<Spanned<String>>,
+    pub despawns: Vec<Spanned<String>>,
+    /// `emits:` / `consumes:` — events written / read.
+    pub emits: Vec<Spanned<String>>,
+    pub consumes: Vec<Spanned<String>>,
+    pub span: Span,
+}
+
+impl AccessBlock {
+    /// The access lists that name world items, paired with the key they came
+    /// from and the roles that key accepts. Drives validation and hover.
+    pub fn world_lists(&self) -> Vec<(&'static str, &[Role], &[Spanned<String>])> {
+        const RW: &[Role] = &[Role::Component, Role::Resource];
+        const C: &[Role] = &[Role::Component];
+        const E: &[Role] = &[Role::Event];
+        let mut out: Vec<(&'static str, &[Role], &[Spanned<String>])> = vec![
+            ("reads", RW, &self.reads),
+            ("writes", RW, &self.writes),
+            ("spawns", C, &self.spawns),
+            ("despawns", C, &self.despawns),
+            ("emits", E, &self.emits),
+            ("consumes", E, &self.consumes),
+        ];
+        if let Some(q) = &self.query {
+            out.push(("query", C, &q.with));
+            out.push(("query", C, &q.without));
+        }
+        out
+    }
+
+    /// The ordering references — `after:` / `before:` — that should name a
+    /// system or set declared somewhere. `set:` is excluded: it *declares*
+    /// membership rather than referencing an existing name.
+    pub fn ordering_refs(&self) -> impl Iterator<Item = &Spanned<String>> {
+        self.after.iter().chain(self.before.iter())
+    }
+}
+
+/// A `query:` value — `Transform + Spawner - Dead`. `+` (or a bare leading
+/// term) adds a required component; `-` excludes one.
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+pub struct QueryFilter {
+    pub with: Vec<Spanned<String>>,
+    pub without: Vec<Spanned<String>>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

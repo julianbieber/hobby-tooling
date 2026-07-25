@@ -5,12 +5,12 @@
 | Type         | skill                                                                                                                                                            |
 | Install path | `~/.claude-hobby/commands/mml-translate.md`                                                                                                                                        |
 | Owner        | @julianbieber                                                                                                                                                    |
-| Dependencies | MML grammar (`llm_mental_model/01-language-spec`), per-task specs in the notes repo `~/fun_repos/hobby-mimisbrunnr`, `tree-extract` & `lsp-mcp` MCPs |
+| Dependencies | hobby MML grammar (`lsps/hobby-mml-lsp/grammar.md`), per-task specs in the notes repo `~/fun_repos/hobby-mimisbrunnr`, `tree-extract` & `lsp-mcp` MCPs |
 | Status       | experimental                                                                                                                                                     |
 
 ## Description
 
-Translates an **edited** [`.mml`](~/projects/team-constellation-mimisbrunnr/notes/llm_mental_model/DESIGN.md)
+Translates an **edited** [`.mml`](../../lsps/hobby-mml-lsp/grammar.md)
 (Mental Model Language) spec into the **code change** that makes the real system
 match it — spec → code, not prose → code. This is the payoff step of the MML
 loop: `mml-extract` turns code into a `.mml`, the human edits the `.mml`

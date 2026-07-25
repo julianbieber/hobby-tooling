@@ -18,23 +18,32 @@
 use std::ops::Range;
 
 use mml_parser::Position;
-use mml_parser::ast::{Document, Step, TypeDef};
+use mml_parser::ast::{Document, Role, Step, TypeDef};
 use mml_parser::span::{Span, Spanned};
 
-// ---- constants (mirror `mml_parser::validate` + grammar) -------------------
+// ---- constants -------------------------------------------------------------
 
-/// Type idents that need no definition (kept in sync with `validate.rs`).
-pub const PRIMITIVES: &[&str] = &[
-    "String", "bool", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64",
-];
-pub const OPAQUE: &[&str] = &["Uuid", "Money", "DateTime"];
-pub const CONTAINERS: &[&str] = &["Option", "Vec", "Map", "Queue", "Stream"];
+// Re-exported from the parser so the two can't drift.
+pub use mml_parser::ast::{ACCESS_KEYS, KIND_VALUES};
+pub use mml_parser::validate::{
+    BUILTIN_COMPONENTS, BUILTIN_EVENTS, BUILTIN_RESOURCES, CONTAINERS, OPAQUE, PRIMITIVES,
+    SCHEDULES,
+};
 
 pub const HEADER_KEYS: &[&str] = &["system", "unit", "kind", "method", "base", "source"];
 pub const SOURCE_KEYS: &[&str] = &["repo", "paths"];
-pub const KIND_VALUES: &[&str] = &["endpoint", "workflow", "job"];
 pub const METHOD_VALUES: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
-pub const SECTION_HEADERS: &[&str] = &["## modules", "## data", "## behavior", "## invariants"];
+pub const SECTION_HEADERS: &[&str] = &[
+    "## modules",
+    "## data",
+    "## components",
+    "## resources",
+    "## events",
+    "## systems",
+    "## access",
+    "## behavior",
+    "## invariants",
+];
 
 /// Behavior control-flow forms (grammar §5.1); the spellings match
 /// `parser::classify_step`. Offered verbatim as completions.
@@ -140,15 +149,37 @@ pub enum SectionKind {
     Header,
     Modules,
     Data,
+    /// One of the Bevy world sections, carrying its ECS role.
+    World(Role),
+    Systems,
+    Access,
     Behavior,
     Invariants,
     Unknown,
+}
+
+impl SectionKind {
+    /// Whether this section declares types — `## data` and the three world
+    /// sections share a body grammar and therefore a completion behaviour.
+    pub fn declares_types(self) -> bool {
+        matches!(self, SectionKind::Data | SectionKind::World(_))
+    }
+
+    /// Whether this section holds access attribute lines.
+    pub fn has_access(self) -> bool {
+        matches!(self, SectionKind::Systems | SectionKind::Access)
+    }
 }
 
 fn section_kind_from_name(name: &str) -> SectionKind {
     match name {
         "modules" => SectionKind::Modules,
         "data" => SectionKind::Data,
+        "components" => SectionKind::World(Role::Component),
+        "resources" => SectionKind::World(Role::Resource),
+        "events" => SectionKind::World(Role::Event),
+        "systems" => SectionKind::Systems,
+        "access" => SectionKind::Access,
         "behavior" => SectionKind::Behavior,
         "invariants" => SectionKind::Invariants,
         _ => SectionKind::Unknown,
@@ -212,21 +243,70 @@ pub struct ModuleSym {
     pub path: Option<Spanned<String>>,
 }
 
+/// How a type was declared. `Marker` exists only in `## components`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeShape {
+    Struct,
+    Enum,
+    Marker,
+}
+
+impl TypeShape {
+    pub fn noun(self) -> &'static str {
+        match self {
+            TypeShape::Struct => "struct",
+            TypeShape::Enum => "enum",
+            TypeShape::Marker => "marker",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TypeSym {
     pub name: String,
     pub name_span: Span,
     pub def_span: Span,
-    pub is_struct: bool,
+    pub shape: TypeShape,
+    /// The ECS role, for a type declared in a world section; `None` for a
+    /// `## data` type in the classic dialect.
+    pub role: Option<Role>,
+}
+
+impl TypeSym {
+    /// What hover and completion call this: `component struct`, `enum`, …
+    pub fn detail(&self) -> String {
+        match self.role {
+            Some(role) => format!("{} {}", role.noun(), self.shape.noun()),
+            None => self.shape.noun().to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SystemSym {
+    pub name: String,
+    pub name_span: Span,
+    pub responsibility: String,
+    pub schedule: Option<String>,
+    pub path: Option<Spanned<String>>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct Symbols {
     pub modules: Vec<ModuleSym>,
     pub types: Vec<TypeSym>,
+    pub systems: Vec<SystemSym>,
 }
 
-/// Build the module + type symbol tables from a parsed document.
+impl Symbols {
+    /// Names declared with the given role — the completion list for a
+    /// role-constrained access key.
+    pub fn with_role(&self, role: Role) -> impl Iterator<Item = &TypeSym> {
+        self.types.iter().filter(move |t| t.role == Some(role))
+    }
+}
+
+/// Build the module + type + system symbol tables from a parsed document.
 pub fn symbols(doc: &Document) -> Symbols {
     let modules = doc
         .modules
@@ -238,25 +318,47 @@ pub fn symbols(doc: &Document) -> Symbols {
             path: m.path.clone(),
         })
         .collect();
-    let types = doc
-        .data
-        .types
+
+    let to_sym = |t: &TypeDef, role: Option<Role>| {
+        let name = t.name();
+        let shape = match t {
+            TypeDef::Struct { .. } => TypeShape::Struct,
+            TypeDef::Enum { .. } => TypeShape::Enum,
+            TypeDef::Marker { .. } => TypeShape::Marker,
+        };
+        TypeSym {
+            name: name.value.clone(),
+            name_span: name.span,
+            def_span: t.span(),
+            shape,
+            role,
+        }
+    };
+    let mut types: Vec<TypeSym> = doc.data.types.iter().map(|t| to_sym(t, None)).collect();
+    for section in doc.world_sections() {
+        types.extend(section.types.iter().map(|t| to_sym(t, Some(section.role))));
+        // Imported names resolve in this file too, but their definition lives
+        // in the owning spec — they are handled by the import goto/hover path,
+        // not listed here.
+    }
+
+    let systems = doc
+        .systems
         .iter()
-        .map(|t| {
-            let name = t.name();
-            let (def_span, is_struct) = match t {
-                TypeDef::Struct { span, .. } => (*span, true),
-                TypeDef::Enum { span, .. } => (*span, false),
-            };
-            TypeSym {
-                name: name.value.clone(),
-                name_span: name.span,
-                def_span,
-                is_struct,
-            }
+        .map(|s| SystemSym {
+            name: s.name.value.clone(),
+            name_span: s.name.span,
+            responsibility: s.responsibility.value.clone(),
+            schedule: s.access.schedule.as_ref().map(|s| s.value.clone()),
+            path: s.path.clone(),
         })
         .collect();
-    Symbols { modules, types }
+
+    Symbols {
+        modules,
+        types,
+        systems,
+    }
 }
 
 pub fn module_named<'a>(s: &'a Symbols, name: &str) -> Option<&'a ModuleSym> {
@@ -265,6 +367,56 @@ pub fn module_named<'a>(s: &'a Symbols, name: &str) -> Option<&'a ModuleSym> {
 
 pub fn type_named<'a>(s: &'a Symbols, name: &str) -> Option<&'a TypeSym> {
     s.types.iter().find(|t| t.name == name)
+}
+
+pub fn system_named<'a>(s: &'a Symbols, name: &str) -> Option<&'a SystemSym> {
+    s.systems.iter().find(|sy| sy.name == name)
+}
+
+// ---- access blocks (grammar §8.3) -------------------------------------------
+
+/// The access-list entry whose span contains `offset`, with the key it sits
+/// under and the roles that key accepts. Drives hover, goto, and references on
+/// a `reads:` / `query:` / `emits:` name.
+pub fn access_item_at<'a>(
+    doc: &'a Document,
+    offset: usize,
+) -> Option<(&'static str, &'a [Role], &'a Spanned<String>)> {
+    for (_, block) in doc.access_blocks() {
+        for (key, roles, items) in block.world_lists() {
+            for item in items {
+                if offset >= item.span.start && offset <= item.span.end {
+                    return Some((key, roles, item));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// The ordering reference (`after:` / `before:`) whose span contains `offset`.
+pub fn ordering_ref_at(doc: &Document, offset: usize) -> Option<&Spanned<String>> {
+    doc.access_blocks()
+        .into_iter()
+        .flat_map(|(_, b)| b.ordering_refs())
+        .find(|r| offset >= r.span.start && offset <= r.span.end)
+}
+
+/// Every access block that names `name` in a world list, with the key it was
+/// named under — "who writes this component?", the payoff of role-checked
+/// access lists.
+pub fn access_mentions(doc: &Document, name: &str) -> Vec<(&'static str, Span)> {
+    let mut out = Vec::new();
+    for (_, block) in doc.access_blocks() {
+        for (key, _, items) in block.world_lists() {
+            for item in items {
+                if item.value == name {
+                    out.push((key, item.span));
+                }
+            }
+        }
+    }
+    out
 }
 
 // ---- cross-spec references (grammar §5.4) -----------------------------------
@@ -283,9 +435,7 @@ pub fn spec_ref_at(doc: &Document, offset: usize) -> Option<&Spanned<String>> {
 /// The spec ref of a `use` import whose ref span contains `offset` (inclusive
 /// end). Used for goto/hover on the `use system/unit` part of an import line.
 pub fn import_ref_at(doc: &Document, offset: usize) -> Option<&Spanned<String>> {
-    doc.data
-        .imports
-        .iter()
+    doc.all_imports()
         .find_map(|i| (offset >= i.spec.span.start && offset <= i.spec.span.end).then_some(&i.spec))
 }
 
@@ -295,7 +445,7 @@ pub fn import_type_at(
     doc: &Document,
     offset: usize,
 ) -> Option<(&Spanned<String>, &Spanned<String>)> {
-    for import in &doc.data.imports {
+    for import in doc.all_imports() {
         for ty in &import.types {
             if offset >= ty.span.start && offset <= ty.span.end {
                 return Some((&import.spec, ty));
@@ -308,9 +458,7 @@ pub fn import_type_at(
 /// The `use` import whose whole-line span contains `offset` (used by completion
 /// to find which import's target to list types from).
 pub fn import_on_line(doc: &Document, offset: usize) -> Option<&mml_parser::ast::Import> {
-    doc.data
-        .imports
-        .iter()
+    doc.all_imports()
         .find(|i| offset >= i.span.start && offset <= i.span.end)
 }
 
@@ -333,10 +481,58 @@ fn in_spec_ref(prefix: &str) -> bool {
 
 // ---- completion context ----------------------------------------------------
 
+/// What an access key's value position accepts (grammar §8.3) — the completion
+/// list for the right-hand side of `schedule:` / `reads:` / `after:` / ….
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccessValue {
+    /// `schedule:` — the built-in schedule labels.
+    Schedule,
+    /// `after:` / `before:` / `set:` — the systems and sets in this file.
+    Ordering,
+    /// `run_if:` — free prose; nothing useful to offer.
+    Free,
+    /// `query:` / `spawns:` / `despawns:` — components only.
+    Components,
+    /// `reads:` / `writes:` — components and resources.
+    ComponentsOrResources,
+    /// `emits:` / `consumes:` — events only.
+    Events,
+}
+
+impl AccessValue {
+    /// The value kind an access key takes, or `None` if `key` is not one.
+    pub fn of(key: &str) -> Option<AccessValue> {
+        Some(match key {
+            "schedule" => AccessValue::Schedule,
+            "set" | "after" | "before" => AccessValue::Ordering,
+            "run_if" => AccessValue::Free,
+            "query" | "spawns" | "despawns" => AccessValue::Components,
+            "reads" | "writes" => AccessValue::ComponentsOrResources,
+            "emits" | "consumes" => AccessValue::Events,
+            _ => return None,
+        })
+    }
+
+    /// The roles this value position accepts, for filtering completions.
+    pub fn roles(self) -> &'static [Role] {
+        match self {
+            AccessValue::Components => &[Role::Component],
+            AccessValue::ComponentsOrResources => &[Role::Component, Role::Resource],
+            AccessValue::Events => &[Role::Event],
+            _ => &[],
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompletionContext {
     /// A `#`-starting line — offer the section headers.
     SectionHeader,
+    /// Start of an attribute line in `## systems` / `## access` — offer the
+    /// closed access-key set.
+    AccessKey,
+    /// The value position of an access key — offer what that key accepts.
+    AccessValue(AccessValue),
     /// Start of a header line — offer `system:`/`unit:`/`kind:`/`source:`.
     HeaderKey,
     /// After `kind:` — offer `endpoint`/`workflow`/`job`.
@@ -404,7 +600,8 @@ pub fn completion_context(text: &str, offset: usize) -> CompletionContext {
                 CompletionContext::HeaderKey
             }
         }
-        SectionKind::Data => {
+        // `## data` and the three world sections share a body grammar.
+        section if section.declares_types() => {
             // A `use` import line takes precedence over the generic
             // `key: Type` classification (it also contains a `:`).
             if let Some(after_use) = prefix.trim_start().strip_prefix("use ") {
@@ -417,6 +614,26 @@ pub fn completion_context(text: &str, offset: usize) -> CompletionContext {
                 CompletionContext::Type
             } else {
                 CompletionContext::Other
+            }
+        }
+        // A `## systems` entry line sits at column 0 and reads like a module
+        // line; its indented attributes, and every line of a `## access`
+        // section, are access keys.
+        section if section.has_access() => {
+            if in_spec_ref(prefix) {
+                return CompletionContext::SpecRef;
+            }
+            let is_attribute =
+                section == SectionKind::Access || line.starts_with(' ') || line.starts_with('\t');
+            if !is_attribute {
+                return CompletionContext::Other;
+            }
+            match key_before_colon(prefix) {
+                Some(key) => match AccessValue::of(key) {
+                    Some(v) => CompletionContext::AccessValue(v),
+                    None => CompletionContext::Other,
+                },
+                None => CompletionContext::AccessKey,
             }
         }
         section @ (SectionKind::Behavior | SectionKind::Invariants) => {
@@ -443,7 +660,7 @@ pub fn completion_context(text: &str, offset: usize) -> CompletionContext {
             }
         }
         SectionKind::Modules if in_spec_ref(prefix) => CompletionContext::SpecRef,
-        SectionKind::Modules | SectionKind::Unknown => CompletionContext::Other,
+        _ => CompletionContext::Other,
     }
 }
 
@@ -607,7 +824,12 @@ mod tests {
         let names: Vec<&str> = syms.modules.iter().map(|m| m.name.as_str()).collect();
         assert_eq!(
             names,
-            ["ChunkScheduler", "HeightSampler", "ChunkMesher", "MeshCache"]
+            [
+                "ChunkScheduler",
+                "HeightSampler",
+                "ChunkMesher",
+                "MeshCache"
+            ]
         );
         let cs = module_named(&syms, "ChunkScheduler").unwrap();
         assert!(cs.responsibility.contains("pulls chunk coords"));
@@ -616,7 +838,9 @@ mod tests {
         let tnames: Vec<&str> = syms.types.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(tnames, ["ChunkCoord", "HeightTile", "ChunkMesh"]);
         let mesh = type_named(&syms, "ChunkMesh").unwrap();
-        assert!(mesh.is_struct);
+        assert_eq!(mesh.shape, TypeShape::Struct);
+        // A classic-dialect type carries no ECS role.
+        assert_eq!(mesh.role, None);
         assert_eq!(
             &SAMPLE[mesh.name_span.start..mesh.name_span.end],
             "ChunkMesh"
@@ -803,5 +1027,201 @@ mod tests {
         // MeshCache is mentioned inside nested if/else branches.
         let hits = find_mentions(&doc.behavior, "MeshCache");
         assert_eq!(hits.len(), 2);
+    }
+
+    // --- Bevy dialect ---
+
+    const PLUGIN: &str = include_str!("../../mml-parser/tests/fixtures/examples/enemy-waves.mml");
+    const SYSTEM: &str = include_str!("../../mml-parser/tests/fixtures/examples/spawn-enemies.mml");
+
+    #[test]
+    fn sections_cover_the_bevy_kinds() {
+        let kinds: Vec<_> = sections(PLUGIN).iter().map(|(k, _)| *k).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                SectionKind::Header,
+                SectionKind::Modules,
+                SectionKind::World(Role::Component),
+                SectionKind::World(Role::Resource),
+                SectionKind::World(Role::Event),
+                SectionKind::Systems,
+                SectionKind::Behavior,
+                SectionKind::Invariants,
+            ]
+        );
+        // A `kind: system` file has an `## access` section instead.
+        assert!(
+            sections(SYSTEM)
+                .iter()
+                .any(|(k, _)| *k == SectionKind::Access)
+        );
+        // The classifiers agree with the section list.
+        assert!(SectionKind::World(Role::Event).declares_types());
+        assert!(SectionKind::Data.declares_types());
+        assert!(SectionKind::Systems.has_access());
+        assert!(SectionKind::Access.has_access());
+        assert!(!SectionKind::Behavior.has_access());
+    }
+
+    #[test]
+    fn symbols_carry_roles_and_systems() {
+        let (doc, _) = analyze(PLUGIN);
+        let syms = symbols(&doc);
+
+        let system_names: Vec<&str> = syms.systems.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(
+            system_names,
+            ["tick_wave_timer", "spawn_enemies", "detect_cleared"]
+        );
+        let spawn = system_named(&syms, "spawn_enemies").unwrap();
+        assert_eq!(spawn.schedule.as_deref(), Some("FixedUpdate"));
+
+        // Every declared type knows its ECS role, and a marker keeps its shape.
+        let wave = type_named(&syms, "Wave").unwrap();
+        assert_eq!(wave.role, Some(Role::Component));
+        assert_eq!(wave.detail(), "component struct");
+        let spawner = type_named(&syms, "Spawner").unwrap();
+        assert_eq!(spawner.shape, TypeShape::Marker);
+        let state = type_named(&syms, "WaveState").unwrap();
+        assert_eq!(state.role, Some(Role::Resource));
+        let cleared = type_named(&syms, "WaveCleared").unwrap();
+        assert_eq!(cleared.role, Some(Role::Event));
+
+        let components: Vec<&str> = syms
+            .with_role(Role::Component)
+            .map(|t| t.name.as_str())
+            .collect();
+        assert_eq!(components, ["Wave", "EnemyHealth", "Spawner"]);
+    }
+
+    #[test]
+    fn access_item_and_ordering_lookups() {
+        let (doc, _) = analyze(PLUGIN);
+
+        // Cursor on `WaveState` in spawn_enemies' `writes:` line.
+        let off = PLUGIN
+            .find(
+                "writes:   WaveState
+  spawns",
+            )
+            .unwrap()
+            + "writes:   ".len();
+        let (key, roles, item) = access_item_at(&doc, off).expect("access item");
+        assert_eq!(key, "writes");
+        assert_eq!(item.value, "WaveState");
+        assert!(roles.contains(&Role::Resource));
+
+        // Cursor on the `after:` target.
+        let off = PLUGIN.find("after:    tick_wave_timer").unwrap() + "after:    ".len();
+        assert_eq!(
+            ordering_ref_at(&doc, off).map(|r| r.value.as_str()),
+            Some("tick_wave_timer")
+        );
+        // An access item is not an ordering ref and vice versa.
+        assert!(access_item_at(&doc, off).is_none());
+    }
+
+    #[test]
+    fn access_mentions_answer_who_touches_this() {
+        let (doc, _) = analyze(PLUGIN);
+        let mut keys: Vec<&str> = access_mentions(&doc, "WaveState")
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
+        keys.sort_unstable();
+        // tick_wave_timer writes it, spawn_enemies writes it, detect_cleared reads it.
+        assert_eq!(keys, ["reads", "writes", "writes"]);
+
+        // A component named in a query and a spawn list.
+        let keys: Vec<&str> = access_mentions(&doc, "Spawner")
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
+        assert_eq!(keys, ["query"]);
+        assert!(access_mentions(&doc, "Nonexistent").is_empty());
+    }
+
+    #[test]
+    fn access_completion_contexts() {
+        // Attribute key position: indented, no colon yet.
+        let a = "## systems\ngo — does it\n  ";
+        assert_eq!(completion_context(a, a.len()), CompletionContext::AccessKey);
+        // Every line of a `## access` section is an attribute, unindented.
+        let b = "## access\n";
+        assert_eq!(completion_context(b, b.len()), CompletionContext::AccessKey);
+
+        // Value positions, one per accepted role set.
+        let cases = [
+            ("  schedule: ", AccessValue::Schedule),
+            ("  after: ", AccessValue::Ordering),
+            ("  set: ", AccessValue::Ordering),
+            ("  run_if: ", AccessValue::Free),
+            ("  query: ", AccessValue::Components),
+            ("  spawns: ", AccessValue::Components),
+            ("  reads: ", AccessValue::ComponentsOrResources),
+            ("  writes: ", AccessValue::ComponentsOrResources),
+            ("  emits: ", AccessValue::Events),
+            ("  consumes: ", AccessValue::Events),
+        ];
+        for (line, want) in cases {
+            let text = format!("## systems\ngo — does it\n{line}");
+            assert_eq!(
+                completion_context(&text, text.len()),
+                CompletionContext::AccessValue(want),
+                "for {line:?}"
+            );
+        }
+
+        // A system declaration line itself offers nothing type-ish.
+        let d = "## systems\ngo — does ";
+        assert_eq!(completion_context(d, d.len()), CompletionContext::Other);
+        // `@ spec` on a system entry still completes spec refs.
+        let e = "## systems\ngo — does it @ spec ";
+        assert_eq!(completion_context(e, e.len()), CompletionContext::SpecRef);
+    }
+
+    #[test]
+    fn world_sections_complete_like_data() {
+        let a = "## components\nstruct A {\n  x: ";
+        assert_eq!(completion_context(a, a.len()), CompletionContext::Type);
+        let b = "## resources\nuse ";
+        assert_eq!(completion_context(b, b.len()), CompletionContext::ImportRef);
+        let c = "## events\nuse other: ";
+        assert_eq!(
+            completion_context(c, c.len()),
+            CompletionContext::ImportType
+        );
+    }
+
+    #[test]
+    fn access_value_role_mapping() {
+        assert_eq!(AccessValue::of("mutates"), None);
+        assert_eq!(
+            AccessValue::of("query").unwrap().roles(),
+            &[Role::Component]
+        );
+        assert_eq!(AccessValue::of("emits").unwrap().roles(), &[Role::Event]);
+        assert_eq!(
+            AccessValue::of("reads").unwrap().roles(),
+            &[Role::Component, Role::Resource]
+        );
+        // Non-role keys constrain nothing.
+        assert!(AccessValue::of("schedule").unwrap().roles().is_empty());
+    }
+
+    #[test]
+    fn imports_are_found_across_world_sections() {
+        let (doc, _) = analyze(SYSTEM);
+        // `use enemy-waves: ...` in `## resources`, not `## data`.
+        let off = SYSTEM.find("use enemy-waves: WaveConfig").unwrap() + "use ".len();
+        assert_eq!(
+            import_ref_at(&doc, off).map(|r| r.value.as_str()),
+            Some("enemy-waves")
+        );
+        let off = SYSTEM.find("WaveConfig, WaveState").unwrap() + 1;
+        let (spec, ty) = import_type_at(&doc, off).expect("imported type");
+        assert_eq!(spec.value, "enemy-waves");
+        assert_eq!(ty.value, "WaveConfig");
     }
 }

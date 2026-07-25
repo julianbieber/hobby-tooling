@@ -64,6 +64,35 @@ Lenses:
 - **maintainability** — clarity of the resulting code, naming, duplication vs
   reuse of what already exists at `source.paths`, testability of the behaviour.
 
+**For a `kind: plugin` / `kind: system` spec, add a sixth lens and drop
+`security` unless the spec genuinely crosses a trust boundary (asset loading
+from disk, netcode, save files) — a local game loop usually does not:**
+
+- **ecs** — the Bevy-specific hazards the access blocks make visible:
+  - **Ordering and one-frame lag.** Does every `writes:`→`reads:` pair between
+    two systems in the same schedule have an `after:` forcing the order? An
+    unordered pair is a one-frame lag at best and a nondeterministic read at
+    worst — the single most common Bevy bug and the one this dialect exists to
+    surface.
+  - **Schedule fit.** Is anything touching physics or fixed-step state in
+    `Update` rather than `FixedUpdate`, or vice versa? Does anything spawn in a
+    schedule where its consumers have already run?
+  - **Parallelism.** Does a `writes:` on a widely-read component or resource
+    serialize the schedule unnecessarily? Would a narrower `query:` filter or a
+    split system restore parallelism?
+  - **Command latency.** `spawns:` / `despawns:` go through `Commands` and do not
+    apply until the next sync point — does any behavior step assume the entity
+    exists in the same system run?
+  - **Event lifetime.** Does every `emits:` have a `consumes:` in a schedule that
+    runs before the event is dropped (events live two frames)? An event emitted
+    and never consumed, or consumed in an earlier schedule, is dead.
+  - **Archetype churn.** Do the `spawns:` / `despawns:` lists imply
+    add/remove-component churn in a hot loop where a marker toggle or a
+    disabled flag would be cheaper?
+  - **Role modelling.** Is anything a `## resources` singleton that should be a
+    component (or the reverse)? A resource that conceptually belongs to one
+    entity is the classic modelling smell.
+
 Each subagent returns a compact list of concerns, each with: a one-line
 statement, a priority (critical/high/medium/low), and — crucially — **what the
 implementation plan should do about it**.

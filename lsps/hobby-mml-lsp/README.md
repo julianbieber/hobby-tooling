@@ -10,13 +10,14 @@
 
 ## Description
 
-Fork of the work `mml-lsp` for hobby specs. Language server (completion, hover,
+Fork of the work `mml-lsp` for hobby specs, now carrying its **own grammar**
+([`grammar.md`](grammar.md), hobby MML v2). Language server (completion, hover,
 goto-definition, references, document symbols, diagnostics) plus the
 `hobby-mml-parser --lint` CLI the `mml-*` skills shell out to.
 
 ## Why a fork rather than a shared binary
 
-The only real difference is spec→source path resolution:
+Originally: spec→source path resolution.
 
 | | work | hobby |
 |---|---|---|
@@ -25,12 +26,37 @@ The only real difference is spec→source path resolution:
 | fallback | `~/projects/<repo>` | `~/fun_repos/<repo>` |
 
 The hobby layout has **no repo level** — a task is one repo, so the task
-directory *is* the checkout. `mml-parser/src/paths.rs` is the only module that
-changed; the lexer, parser, lint, and validate passes are untouched.
+directory *is* the checkout.
 
-Parameterizing one binary by env var was the alternative and would avoid the
-duplication, but it meant editing a work repo for a personal need. The fork keeps
-work untouched at the cost of hand-cherry-picking upstream `mml-parser` fixes.
+Since **v2 the fork is a genuine dialect, not a path tweak.** Hobby projects are
+overwhelmingly Bevy games, and MML v1's founding assumption — a unit is a
+function with `in: T` / `out: T` — does not hold in an ECS, where data flows
+through the World. v2 adds `kind: plugin` / `kind: system` and the sections
+`## components`, `## resources`, `## events`, `## systems`, `## access`, and
+makes the legal section set a function of `kind:`. The classic kinds are
+untouched, so every v1 spec still parses.
+
+That divergence ends any prospect of re-merging with the work binary, and makes
+upstream `mml-parser` cherry-picks a manual job — a cost accepted deliberately,
+since the Bevy dialect has no business in a work repo.
+
+## Grammar
+
+[`grammar.md`](grammar.md) in this directory is the source of truth, and the
+`mml-*` skills point at it. The work `01-language-spec/grammar.md` describes v1
+and no longer governs anything here.
+
+The always-parsing examples are the parser's own fixtures under
+`mml-parser/tests/fixtures/examples/` — they are compiled into the test suite, so
+docs and parser cannot drift:
+
+| Fixture | Shows |
+|---|---|
+| `enemy-waves.mml` | `kind: plugin` — world sections, systems, ordering, `marker`, `where:` |
+| `spawn-enemies.mml` | `kind: system` — `## access`, cross-spec imports, query exclusion |
+| `get-map-tile.mml` | `kind: endpoint` — `method`, param sources |
+| `mesh-terrain-chunks.mml` | `kind: workflow` — `Queue`/`Stream` |
+| `shared-data-imports.mml` / `cross-spec-refs.mml` | `use` imports, `@ spec` refs |
 
 ## Helix routing
 
@@ -67,9 +93,16 @@ just install-mml     # installs hobby-mml-lsp, hobby-mml-parser, hobby-mml-index
 
 ## Known Limitations
 
-- **Depends on the work repo for the grammar.** `grammar = "mml"` points at
-  `team-constellation-tooling/lsps/tree-sitter-mml`. Moving or deleting that
-  checkout breaks hobby MML highlighting.
-- Upstream `mml-parser` fixes must be cherry-picked by hand.
-- The MML *language spec* is not vendored here — it stays at its work path, to
-  keep work-authored content out of a repo that gets pushed to GitHub.
+- **Depends on the work repo for the tree-sitter grammar.** `grammar = "mml"`
+  points at `team-constellation-tooling/lsps/tree-sitter-mml`. Moving or
+  deleting that checkout breaks hobby MML highlighting. The v2 sections
+  (`## components`, `## systems`, …) parse and lint fine but are highlighted by
+  a v1 tree-sitter grammar, so a section header may render plainly. Cosmetic
+  only — every diagnostic comes from `hobby-mml-parser`, not the grammar.
+- Upstream `mml-parser` fixes must be cherry-picked by hand, and v2 has moved
+  the two apart far enough that this is real work rather than a patch apply.
+- The built-in Bevy name lists (`BUILTIN_COMPONENTS`, `BUILTIN_RESOURCES`,
+  `BUILTIN_EVENTS` in `mml-parser/src/validate.rs`) are hand-maintained and
+  cover the common engine types, not all of Bevy. An unlisted engine type reads
+  as `undefined-access-item`; the fix is to add it to the list, not to declare
+  it locally.
