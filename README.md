@@ -37,7 +37,7 @@ just uninstall       # remove the symlinks (keeps your login and repos)
 
 | | |
 |---|---|
-| `HELIX_REPO` | Helix checkout holding `languages.toml` (default `~/outside_repos/helix`) |
+| `HELIX_REPO` | Helix checkout holding `languages.toml` (default `~/fun_repos/helix`, branch `custom`) |
 | `HOBBY_NOTES_REMOTE` | where `clone-notes` clones from |
 
 ### What needs the work machine

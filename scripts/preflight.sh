@@ -50,8 +50,7 @@ for b in lsp-mcp julian-tree-extract-mcp just_mcp; do
         printf '  \033[33m-\033[0m %-26s \033[33mnot on PATH — that MCP is skipped\033[0m\n' "$b"
     fi
 done
-if [ -d "${HELIX_REPO:-$HOME/outside_repos/helix}/languages.toml" ] ||
-   [ -f "${HELIX_REPO:-$HOME/outside_repos/helix}/languages.toml" ]; then
+if [ -f "${HELIX_REPO:-$HOME/fun_repos/helix}/languages.toml" ]; then
     printf '  \033[32m✓\033[0m %-26s Helix config repo\n' "helix checkout"
 else
     printf '  \033[33m-\033[0m %-26s \033[33mnot found — Helix wiring skipped\033[0m\n' "helix checkout"

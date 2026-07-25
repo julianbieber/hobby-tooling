@@ -9,7 +9,8 @@ CFG="$HOME/.claude-hobby"
 NU="${XDG_CONFIG_HOME:-$HOME/.config}/nushell"
 HX="${XDG_CONFIG_HOME:-$HOME/.config}/helix"
 NOTES="$HOME/fun_repos/hobby-mimisbrunnr"
-HELIX_REPO="${HELIX_REPO:-$HOME/outside_repos/helix}"
+HELIX_REPO="${HELIX_REPO:-$HOME/fun_repos/helix}"
+HELIX_BRANCH="${HELIX_BRANCH:-custom}"
 
 gaps=0
 
@@ -90,6 +91,12 @@ if [ -f "$HELIX_REPO/languages.toml" ]; then
     # the work `mml` language for every work spec.
     if grep -q '^name = "mml-hobby"$' "$HELIX_REPO/languages.toml"; then
         bad "Helix: legacy mml-hobby language still present" "just wire-helix"
+    fi
+    # wire-helix writes into the checkout, so the wrong branch means the hmml entry
+    # is committed somewhere it will not survive a rebuild.
+    br=$(git -C "$HELIX_REPO" branch --show-current 2>/dev/null || true)
+    if [ -n "$br" ] && [ "$br" != "$HELIX_BRANCH" ]; then
+        warn "Helix: on branch $br, not $HELIX_BRANCH" "git -C $HELIX_REPO switch $HELIX_BRANCH"
     fi
 else
     warn "Helix: no checkout at $HELIX_REPO" "set HELIX_REPO, or skip"

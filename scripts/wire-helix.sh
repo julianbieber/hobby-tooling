@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-REPO="${1:-${HELIX_REPO:-$HOME/outside_repos/helix}}"
+REPO="${1:-${HELIX_REPO:-$HOME/fun_repos/helix}}"
 CFG="${XDG_CONFIG_HOME:-$HOME/.config}/helix"
 LANGS="$REPO/languages.toml"
 QUERIES="$REPO/runtime/queries/hmml"

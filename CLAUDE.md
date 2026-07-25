@@ -86,9 +86,10 @@ justfile: `preflight.sh` (dependency check), `wire-nushell.sh` (append the `use`
 lines once), `wire-helix.sh` (register the forked HMML server), `doctor.sh`.
 
 **Helix config is edited in the Helix checkout, not in `~/.config/helix`.**
-`languages.toml` is copied from the repo into place, so editing the installed copy
-loses the change on the next refresh. `wire-helix.sh` handles this; keep any future
-Helix change going through it.
+The checkout is `~/fun_repos/helix` on branch **`custom`** (override with
+`HELIX_REPO`). `languages.toml` is copied from the repo into place, so editing the
+installed copy loses the change on the next refresh. `wire-helix.sh` handles this;
+keep any future Helix change going through it.
 
 ## Paths
 
@@ -97,6 +98,7 @@ Helix change going through it.
 ~/fun_worktrees/<project>/<topic>/<task>       the worktree itself
 ~/fun_repos/hobby-mimisbrunnr/notes/
     <project>/<topic>/<task>                   task notes
+~/fun_repos/helix                              Helix checkout, branch `custom`
 ~/.claude-hobby                                CLAUDE_CONFIG_DIR
 ```
 

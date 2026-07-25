@@ -30,7 +30,7 @@ ZJ_LAYOUTS := env('HOME') / '.config/zellij/layouts'
 BIN_DIR    := env('HOME') / '.local/bin'
 FUN_REPOS  := env('HOME') / 'fun_repos'
 NOTES_DIR  := env('HOME') / 'fun_repos/hobby-mimisbrunnr'
-HELIX_REPO := env('HELIX_REPO', env('HOME') / 'outside_repos/helix')
+HELIX_REPO := env('HELIX_REPO', env('HOME') / 'fun_repos/helix')
 # Overridable so a fork, a rename, or a local clone can be used instead.
 NOTES_REMOTE := env('HOBBY_NOTES_REMOTE', 'git@github.com:julianbieber/hobby-mimisbrunnr.git')
 GIT_NAME   := 'julianbieber'
