@@ -1,0 +1,16 @@
+// Hobby dev layout: Helix on the left, Claude (hobby account) on the right.
+// cwd is inherited from the launching shell.
+//
+// The Claude pane runs `chobby`, not `claude`. That matters: zellij panes inherit
+// the zellij *server's* environment, not the client's, so when zellij reuses an
+// existing server the CLAUDE_CONFIG_DIR that `hcdev` exported may never reach the
+// pane. `chobby` sets it itself, so the pane is on the hobby account either way.
+//
+// No experts pane — a hobby task is a single repo, so there is only ever one
+// expert to talk to, and the per-task socket path would sit three levels deep.
+layout {
+    pane split_direction="vertical" {
+        pane size="65%" name="editor"
+        pane size="35%" command="chobby" name="claude" close_on_exit=false
+    }
+}
