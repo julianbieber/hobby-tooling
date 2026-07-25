@@ -31,13 +31,29 @@ Consequences, all of which make this tooling smaller than its work counterpart:
 dotfiles/
   nushell/{hwt.nu, hcdev.nu}          # symlinked into ~/.config/nushell/
   zellij/layouts/hobby-dev.kdl        # symlinked into ~/.config/zellij/layouts/
-  claude-md/                          # symlinked into ~/ and ~/fun_worktrees/
+  claude-md/                          # symlinked into ~/.claude-hobby/ and ~/fun_worktrees/
 hooks/<name>/hook.sh                  # symlinked into ~/.claude-hobby/hooks/
 skills/<name>/{skill.md, README.md}   # symlinked into ~/.claude-hobby/commands/
 settings/hobby.settings.json          # symlinked to ~/.claude-hobby/settings.json
+scripts/                              # install logic too involved for a justfile recipe
 lsps/hobby-mml-lsp/                   # forked MML language server
 tools/{hobby-mml-index, hwt-overview}/
 ```
+
+## Installing
+
+`just bootstrap` is the fresh-machine entry point; `just doctor` diagnoses an
+existing install and names the recipe that fixes each gap. Every recipe is
+idempotent.
+
+Anything more involved than a symlink lives in `scripts/` rather than inline in the
+justfile: `preflight.sh` (dependency check), `wire-nushell.sh` (append the `use`
+lines once), `wire-helix.sh` (register the forked MML server), `doctor.sh`.
+
+**Helix config is edited in the Helix checkout, not in `~/.config/helix`.**
+`languages.toml` is copied from the repo into place, so editing the installed copy
+loses the change on the next refresh. `wire-helix.sh` handles this; keep any future
+Helix change going through it.
 
 ## Paths
 
