@@ -7,6 +7,23 @@
 # symlinks but NOT regular files — if a target already exists as a real file, remove
 # it first.
 
+# The MAIN checkout, even when this justfile is invoked from a worktree.
+#
+# Every install-* recipe symlinks into ~/.claude-hobby and ~/.config. Those links
+# must point at the main checkout: a worktree is deleted by `hwt rm`, which would
+# leave the whole installation dangling — 18 skills, 5 hooks, chobby, the lot.
+# `git rev-parse --git-common-dir` reports the main repo's .git from inside any
+# linked worktree, so its parent is the main checkout. Falls back to the invocation
+# directory when this isn't a git repo at all (e.g. an extracted tarball).
+REPO_ROOT := ```
+    if root=$(git rev-parse --git-common-dir 2>/dev/null); then
+        case "$root" in /*) ;; *) root="$PWD/$root" ;; esac
+        cd "$(dirname "$root")" && pwd
+    else
+        pwd
+    fi
+    ```
+
 CONFIG_DIR := env('HOME') / '.claude-hobby'
 NU_DIR     := env('HOME') / '.config/nushell'
 ZJ_LAYOUTS := env('HOME') / '.config/zellij/layouts'
@@ -48,9 +65,20 @@ bootstrap: preflight clone-notes git-identity bootstrap-config install-chobby in
 bootstrap-full: bootstrap install-mcps install-overview install-mml
     @echo "Full install done. Still need: chobby, then /login."
 
+# Say so when invoked from a worktree — the install still targets the main checkout,
+# and silently doing that would be worse than mentioning it.
+[private]
+_root-notice:
+    #!/usr/bin/env bash
+    if [ "$PWD" != "{{REPO_ROOT}}" ]; then
+        echo "  note: invoked from $PWD"
+        echo "        installing from the main checkout {{REPO_ROOT}} — symlinks must not"
+        echo "        point into a worktree, since \`hwt rm\` would delete it."
+    fi
+
 # Check this machine has what the install needs
 preflight:
-    @./scripts/preflight.sh
+    @"{{REPO_ROOT}}"/scripts/preflight.sh
 
 # ---------------------------------------------------------------------------
 # Repos + identity
@@ -76,7 +104,7 @@ clone-notes:
 git-identity:
     #!/usr/bin/env bash
     set -euo pipefail
-    for r in "$(pwd)" "{{NOTES_DIR}}"; do
+    for r in "{{REPO_ROOT}}" "{{NOTES_DIR}}"; do
         [ -d "$r/.git" ] || continue
         git -C "$r" config user.name  "{{GIT_NAME}}"
         git -C "$r" config user.email "{{GIT_EMAIL}}"
@@ -88,18 +116,18 @@ git-identity:
 # ---------------------------------------------------------------------------
 
 # Create ~/.claude-hobby and link the settings + account CLAUDE.md into it
-bootstrap-config:
+bootstrap-config: _root-notice
     @mkdir -p "{{CONFIG_DIR}}/commands" "{{CONFIG_DIR}}/hooks" "{{CONFIG_DIR}}/agents" "{{CONFIG_DIR}}/skills"
-    @ln -sf "$(pwd)/settings/hobby.settings.json" "{{CONFIG_DIR}}/settings.json"
-    @ln -sf "$(pwd)/dotfiles/claude-md/hobby.CLAUDE.md" "{{CONFIG_DIR}}/CLAUDE.md"
+    @ln -sf "{{REPO_ROOT}}/settings/hobby.settings.json" "{{CONFIG_DIR}}/settings.json"
+    @ln -sf "{{REPO_ROOT}}/dotfiles/claude-md/hobby.CLAUDE.md" "{{CONFIG_DIR}}/CLAUDE.md"
     @echo "  config dir ready: {{CONFIG_DIR}}"
 
 # The `chobby` wrapper — bare claude on the hobby account
-install-chobby:
+install-chobby: _root-notice
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p "{{BIN_DIR}}"
-    ln -sf "$(pwd)/bin/chobby" "{{BIN_DIR}}/chobby"
+    ln -sf "{{REPO_ROOT}}/bin/chobby" "{{BIN_DIR}}/chobby"
     echo "  linked chobby -> {{BIN_DIR}}/chobby"
     case ":$PATH:" in
         *":{{BIN_DIR}}:"*) ;;
@@ -107,30 +135,30 @@ install-chobby:
     esac
 
 # Hooks into the hobby config dir
-install-hooks:
+install-hooks: _root-notice
     @mkdir -p "{{CONFIG_DIR}}/hooks"
-    @for d in hooks/*/; do \
+    @for d in "{{REPO_ROOT}}"/hooks/*/; do \
         n=$(basename "$d"); \
         [ -f "$d/hook.sh" ] || continue; \
         chmod +x "$d/hook.sh"; \
-        ln -sf "$(pwd)/$d/hook.sh" "{{CONFIG_DIR}}/hooks/$n.sh"; \
+        ln -sf "$d/hook.sh" "{{CONFIG_DIR}}/hooks/$n.sh"; \
         echo "  hook: $n"; \
     done
 
 # Skills as slash commands in the hobby config dir
-install-skills:
+install-skills: _root-notice
     @mkdir -p "{{CONFIG_DIR}}/commands"
-    @for d in skills/*/; do \
+    @for d in "{{REPO_ROOT}}"/skills/*/; do \
         n=$(basename "$d"); \
         [ -f "$d/skill.md" ] || continue; \
-        ln -sf "$(pwd)/$d/skill.md" "{{CONFIG_DIR}}/commands/$n.md"; \
+        ln -sf "$d/skill.md" "{{CONFIG_DIR}}/commands/$n.md"; \
         echo "  skill: /$n"; \
     done
 
 # CLAUDE.md for the worktree tree
-install-claude-md:
+install-claude-md: _root-notice
     @mkdir -p "$HOME/fun_worktrees"
-    @ln -sf "$(pwd)/dotfiles/claude-md/fun_worktrees.CLAUDE.md" "$HOME/fun_worktrees/CLAUDE.md"
+    @ln -sf "{{REPO_ROOT}}/dotfiles/claude-md/fun_worktrees.CLAUDE.md" "$HOME/fun_worktrees/CLAUDE.md"
     @echo "  linked fun_worktrees.CLAUDE.md"
     @echo "  (~/CLAUDE.md stays the WORK file; the hobby account reads {{CONFIG_DIR}}/CLAUDE.md)"
 
@@ -139,16 +167,16 @@ install-claude-md:
 # ---------------------------------------------------------------------------
 
 # Symlink the nushell modules + zellij layout
-install-shell:
+install-shell: _root-notice
     @mkdir -p "{{NU_DIR}}" "{{ZJ_LAYOUTS}}"
-    @ln -sf "$(pwd)/dotfiles/nushell/hwt.nu"   "{{NU_DIR}}/hwt.nu"
-    @ln -sf "$(pwd)/dotfiles/nushell/hcdev.nu" "{{NU_DIR}}/hcdev.nu"
-    @ln -sf "$(pwd)/dotfiles/zellij/layouts/hobby-dev.kdl" "{{ZJ_LAYOUTS}}/hobby-dev.kdl"
+    @ln -sf "{{REPO_ROOT}}/dotfiles/nushell/hwt.nu"   "{{NU_DIR}}/hwt.nu"
+    @ln -sf "{{REPO_ROOT}}/dotfiles/nushell/hcdev.nu" "{{NU_DIR}}/hcdev.nu"
+    @ln -sf "{{REPO_ROOT}}/dotfiles/zellij/layouts/hobby-dev.kdl" "{{ZJ_LAYOUTS}}/hobby-dev.kdl"
     @echo "  linked hwt.nu, hcdev.nu, hobby-dev.kdl"
 
 # Add `use hwt.nu *` / `use hcdev.nu *` to config.nu (idempotent)
 wire-nushell:
-    @./scripts/wire-nushell.sh
+    @"{{REPO_ROOT}}"/scripts/wire-nushell.sh
 
 # languages.toml lives in a local Helix checkout and is COPIED into ~/.config/helix,
 # so the edit goes to the repo and is installed from there — editing the installed
@@ -156,7 +184,7 @@ wire-nushell:
 
 # Register hobby-mml-lsp with Helix, via the local Helix checkout
 wire-helix:
-    @HELIX_REPO="{{HELIX_REPO}}" ./scripts/wire-helix.sh
+    @HELIX_REPO="{{HELIX_REPO}}" "{{REPO_ROOT}}"/scripts/wire-helix.sh
 
 # ---------------------------------------------------------------------------
 # Optional extras
@@ -204,7 +232,7 @@ install-mml:
 
 # Report what is and isn't wired up on this machine
 doctor:
-    @./scripts/doctor.sh
+    @cd "{{REPO_ROOT}}" && ./scripts/doctor.sh
 
 # Run every test in the repo (MML parser/LSP + the dashboard)
 test:

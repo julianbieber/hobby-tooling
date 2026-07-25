@@ -50,7 +50,15 @@ fi
 echo ""
 echo "Repos"
 [ -d "$NOTES/.git" ] && ok "notes repo at $NOTES" || bad "notes repo missing" "just clone-notes"
-for r in "$(pwd)" "$NOTES"; do
+# Resolve the main checkout: from inside a worktree, git-common-dir points at the
+# main repo's .git, so its parent is the checkout whose identity actually matters.
+if common=$(git rev-parse --git-common-dir 2>/dev/null); then
+    case "$common" in /*) ;; *) common="$PWD/$common" ;; esac
+    MAIN_CHECKOUT=$(cd "$(dirname "$common")" && pwd)
+else
+    MAIN_CHECKOUT=$PWD
+fi
+for r in "$MAIN_CHECKOUT" "$NOTES"; do
     [ -d "$r/.git" ] || continue
     e=$(git -C "$r" config user.email 2>/dev/null || true)
     if [ "$e" = "julian.bieber.1992@gmail.com" ]; then
