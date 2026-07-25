@@ -60,9 +60,9 @@ if [ -d "$NOTES_DIR" ]; then
   # Most recent journal entry, so a resume knows where to pick up.
   LAST=$(find "$NOTES_DIR" -maxdepth 1 -type f -name '????-??-??.md' -printf '%f\n' 2>/dev/null | sort -r | head -n1 || true)
   [ -n "$LAST" ] && CTX="${CTX}Latest journal entry: ${LAST%.md}"$'\n'
-  # Flag MML specs so the mml-* skills don't have to hunt for them.
-  MML_COUNT=$(find "$NOTES_DIR" -maxdepth 1 -type f -name '*.mml' 2>/dev/null | wc -l)
-  [ "$MML_COUNT" -gt 0 ] && CTX="${CTX}MML specs in notes: ${MML_COUNT}"$'\n'
+  # Flag HMML specs so the hmml-* skills don't have to hunt for them.
+  MML_COUNT=$(find "$NOTES_DIR" -maxdepth 1 -type f -name '*.hmml' 2>/dev/null | wc -l)
+  [ "$MML_COUNT" -gt 0 ] && CTX="${CTX}HMML specs in notes: ${MML_COUNT}"$'\n'
 else
   CTX="${CTX}Notes dir does not exist yet (would be \`${NOTES_DIR/#$HOME/\~}\`)."$'\n'
 fi

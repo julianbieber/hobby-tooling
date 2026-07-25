@@ -1,14 +1,14 @@
 ---
-description: Analyze one unit of existing code and emit a .mml (Mental Model Language) spec
+description: Analyze one unit of existing code and emit a .hmml (Mental Model Language) spec
 allowed-tools: Read, Grep, Glob, Write, Bash(ls:*), Bash(pwd:*), Bash(hobby-mml-parser:*), Bash(git -C * rev-parse:*), Bash(git rev-parse:*), mcp__tree-extract__build_graph, mcp__tree-extract__list_modules, mcp__tree-extract__get_neighbors, mcp__tree-extract__call_path, mcp__tree-extract__get_symbol, mcp__tree-extract__search_symbols, mcp__lsp-mcp__document_symbol, mcp__lsp-mcp__find_references, mcp__lsp-mcp__goto_definition, mcp__lsp-mcp__hover
 ---
 
 Analyze one unit of an existing system — an endpoint, a message/queue workflow,
-or a scheduled job — and emit a valid `.mml` spec capturing my mental model of
+or a scheduled job — and emit a valid `.hmml` spec capturing my mental model of
 it (modules / data / behavior / invariants). Emit the file and stop; editing it
 is the human's job — that is the point of the artifact.
 
-A `.mml` is a **lossy mental-model view, not a regeneration source.** Dropping
+A `.hmml` is a **lossy mental-model view, not a regeneration source.** Dropping
 infrastructure the mental model doesn't dwell on — DI wiring, config loading,
 metrics, serializers — is *correct*, not a miss: aim for the collaborators and
 decisions a human would narrate, and accept that the code has more than the spec
@@ -97,7 +97,7 @@ code you are extracting is a `Plugin` or a system, use `kind: plugin` /
 
    - Derive `struct`s from the request/response and the types that flow through
      the entry point. Field names `snake_case`; translate source types into the
-     MML subset:
+     HMML subset:
      - **When the input is loose params, not a single type** (e.g. a GET whose
        args are query/path parameters, so there is no request DTO in code), you
        may **synthesize** a request `struct` for the mental model — but emit a
@@ -127,7 +127,7 @@ code you are extracting is a `Plugin` or a system, use `kind: plugin` /
      not every field of every DTO.
    - **Reuse before redeclaring**: before defining a struct/enum, check whether
      a sibling unit in the same task dir already specs that same data model
-     (scan the other `.mml` files in the task dir). If so, bring it in with a
+     (scan the other `.hmml` files in the task dir). If so, bring it in with a
      `use unit: Type` line at the top of `## data` instead of copying the
      definition — the shared type then has one home and can't drift. Import from
      the unit that *owns* the type (defines it locally), not one that itself
@@ -224,8 +224,8 @@ Read the access set off the code instead — it is the interface.
      failure/retry story (see the shader-reload example).
    - **Cross-spec refs**: when a step delegates to behaviour that is itself a
      specced unit, do not inline that unit's details — keep the step at one line
-     and end it with `@ spec unit`, resolving to a sibling `<unit>.mml` in the
-     same task dir. Check the other `.mml` files in the task dir for an existing
+     and end it with `@ spec unit`, resolving to a sibling `<unit>.hmml` in the
+     same task dir. Check the other `.hmml` files in the task dir for an existing
      spec before adding a ref; never invent a ref to a spec that doesn't exist.
 
 6. **`## invariants`** — one `-` bullet per property that must always hold, flat
@@ -240,7 +240,7 @@ Read the access set off the code instead — it is the interface.
    `## invariants`. Then write to the current task's notes dir:
 
    ```
-   ~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/<unit>.mml
+   ~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/<unit>.hmml
    ```
 
    where `{project}`, `{topic}`, and `{task}` are the first, second, and third
@@ -249,7 +249,7 @@ Read the access set off the code instead — it is the interface.
    itself, there is no repo level below it; use `{task}` verbatim, including any
    blurb suffix, and fall back to the git branch if the path doesn't match — the
    same detection `resume-journal` uses). The
-   filename is the `unit:` header + `.mml`, placed **directly** in the task dir
+   filename is the `unit:` header + `.hmml`, placed **directly** in the task dir
    (no `<system>` subdirectory). The `system:` header is now an optional label,
    not a path component. Fill the `source` block:
 
@@ -261,7 +261,7 @@ Read the access set off the code instead — it is the interface.
        - ...
    ```
 
-   Do **not** put a sha or timestamp anywhere in the `.mml` — the grammar stays
+   Do **not** put a sha or timestamp anywhere in the `.hmml` — the grammar stays
    pure.
 
 8. **Lint the written file.** Run `hobby-mml-parser <written-path> --lint` and fix
@@ -276,7 +276,7 @@ Read the access set off the code instead — it is the interface.
 
 9. **Stop.** Report the path you wrote and a one-line summary. Do **not**
    iterate on the spec, and do **not** run `git add` / `git commit` in the notes
-   repo or the tooling repo — reviewing and editing the `.mml`, and committing
+   repo or the tooling repo — reviewing and editing the `.hmml`, and committing
    it, are the human's job.
 
 ## Grammar cheat-sheet
@@ -304,7 +304,7 @@ Read the access set off the code instead — it is the interface.
   `path`|`query`|`body`|`header` (endpoints).
 - Type imports (grammar §4.5): `## data` may start with `use unit: Type, …`
   lines that bring a data model defined by another unit into scope. The `unit`
-  is a sibling `.mml` in the same task directory. Reuse a shared type this way
+  is a sibling `.hmml` in the same task directory. Reuse a shared type this way
   instead of redeclaring it; resolves like `@ spec`. Unresolved target/type =
   warning.
 - `## behavior`: nested `-` bullets; control-flow keywords
@@ -314,8 +314,8 @@ Read the access set off the code instead — it is the interface.
 - `## invariants`: flat `-` bullets, each a checkable claim.
 - Cross-spec refs (grammar §5.4): a module line, **system entry**, behavior step,
   or invariant may end with `@ spec unit` — "more specification under" a sibling
-  `.mml` in the same task directory. At most one per line, always the last
-  annotation (after an `@ path`); it resolves to `<unit>.mml` in the referencing
+  `.hmml` in the same task directory. At most one per line, always the last
+  annotation (after an `@ path`); it resolves to `<unit>.hmml` in the referencing
   file's own directory. Unresolved target = warning, not error.
 
 **Bevy dialect (grammar §8):**
@@ -346,9 +346,9 @@ Read the access set off the code instead — it is the interface.
 Match the altitude and formatting of these (from the finalized grammar). Pick
 the one whose `kind` matches your unit.
 
-### Workflow (queue) — `mesh-terrain-chunks.mml`
+### Workflow (queue) — `mesh-terrain-chunks.hmml`
 
-```mml
+```hmml
 system: terrain-erosion
 unit: mesh-terrain-chunks
 kind: workflow
@@ -407,12 +407,12 @@ out: Stream<ChunkMesh>
 - neighbouring chunks at the same lod agree on the vertex positions along their shared edge
 ```
 
-### Endpoint — `get-map-tile.mml`
+### Endpoint — `get-map-tile.hmml`
 
 Note the `@path` / `@query` annotations on the request struct: for an endpoint,
 record *how* it is called, not only its input type.
 
-```mml
+```hmml
 system: mosaik-map
 unit: get-map-tile
 kind: endpoint
@@ -472,11 +472,11 @@ out: Tile
 - the response format always equals the requested format
 ```
 
-### Workflow (with error handling) — `reload-shader-batch.mml`
+### Workflow (with error handling) — `reload-shader-batch.hmml`
 
 Note the `try` / `on error` form and the per-item skip decision.
 
-```mml
+```hmml
 system: shader-runner
 unit: reload-shader-batch
 kind: workflow
@@ -546,14 +546,14 @@ out: Stream<ReloadResult>
 - a failed batch is dropped rather than retried — the next filesystem event re-triggers it
 ```
 
-### Bevy plugin — `enemy-waves.mml`
+### Bevy plugin — `enemy-waves.hmml`
 
 Note what is *not* here: no `## data`, no `in:`/`out:`. The interface is the
 access blocks. `Transform` and `Time` are Bevy built-ins, so they are used
 without being declared; `Spawner` is a unit struct in the code and so becomes a
 `marker`.
 
-```mml
+```hmml
 system: bevy-survivor
 unit: enemy-waves
 kind: plugin
@@ -635,12 +635,12 @@ where:
 - exactly one WaveCleared is emitted per wave index
 ```
 
-### Bevy system — `spawn-enemies.mml`
+### Bevy system — `spawn-enemies.hmml`
 
 The split-out form: one system, its access block as a section, and the shapes it
 touches imported rather than redeclared.
 
-```mml
+```hmml
 system: bevy-survivor
 unit: spawn-enemies
 kind: system

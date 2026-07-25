@@ -56,7 +56,7 @@ bootstrap: preflight clone-notes git-identity bootstrap-config install-chobby in
     @echo "Then, optionally:"
     @echo "    just install-mcps      MCP servers (needs the work repo's binaries)"
     @echo "    just install-overview  the hwt-overview dashboard (Rust build)"
-    @echo "    just install-mml       forked MML language server (Rust build)"
+    @echo "    just install-mml       forked HMML language server (Rust build)"
     @echo ""
     @echo "Check the result any time with:  just doctor"
     @echo "════════════════════════════════════════════════════════════════"
@@ -145,9 +145,15 @@ install-hooks: _root-notice
         echo "  hook: $n"; \
     done
 
+# Renaming a skill dir orphans its old symlink, which then lingers as a slash
+# command pointing at nothing. `-xtype l` matches exactly the dangling links, so
+# live commands are never touched.
+
 # Skills as slash commands in the hobby config dir
 install-skills: _root-notice
     @mkdir -p "{{CONFIG_DIR}}/commands"
+    @find "{{CONFIG_DIR}}/commands" -maxdepth 1 -xtype l -print -delete \
+        | sed 's|^.*/|  pruned stale skill: /|; s|\.md$||'
     @for d in "{{REPO_ROOT}}"/skills/*/; do \
         n=$(basename "$d"); \
         [ -f "$d/skill.md" ] || continue; \
@@ -218,9 +224,9 @@ install-mcps:
 install-overview:
     cd tools/hwt-overview && cargo install --path crates/hwt_app
 
-# The parser CLI matters: the mml-* skills shell out to `hobby-mml-parser --lint`.
+# The parser CLI matters: the hmml-* skills shell out to `hobby-mml-parser --lint`.
 
-# Build + install the forked MML language server, parser CLI, and index
+# Build + install the forked HMML language server, parser CLI, and index
 install-mml:
     cd lsps/hobby-mml-lsp && cargo install --path mml-lsp
     cd lsps/hobby-mml-lsp && cargo install --path mml-parser
@@ -234,7 +240,7 @@ install-mml:
 doctor:
     @cd "{{REPO_ROOT}}" && ./scripts/doctor.sh
 
-# Run every test in the repo (MML parser/LSP + the dashboard)
+# Run every test in the repo (HMML parser/LSP + the dashboard)
 test:
     cd lsps/hobby-mml-lsp && cargo test --workspace
     cd tools/hwt-overview && cargo test --workspace
@@ -257,4 +263,4 @@ uninstall:
     echo "Unlinked. Still present on purpose:"
     echo "  {{CONFIG_DIR}}          (holds your login — delete by hand to log out)"
     echo "  the `use` lines in config.nu   (remove by hand)"
-    echo "  the mml-hobby entry in the Helix repo's languages.toml"
+    echo "  the hmml entry in the Helix repo's languages.toml"

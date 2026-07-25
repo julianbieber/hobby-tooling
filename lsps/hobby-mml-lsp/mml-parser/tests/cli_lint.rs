@@ -27,7 +27,7 @@ fn lint_clean_spec_exits_zero() {
     // Both referenced files exist next to the spec (the spec-dir fallback).
     fs::write(dir.path().join("supervisor.py"), "x").unwrap();
     fs::write(dir.path().join("child.py"), "x").unwrap();
-    let spec = dir.path().join("one.mml");
+    let spec = dir.path().join("one.hmml");
     fs::write(&spec, SPEC).unwrap();
 
     let (ok, stdout) = run_lint(&spec);
@@ -39,7 +39,7 @@ fn lint_clean_spec_exits_zero() {
 fn lint_missing_source_paths_exit_one_with_diagnostics() {
     let dir = tempfile::tempdir().unwrap();
     // Neither supervisor.py nor child.py exists anywhere.
-    let spec = dir.path().join("one.mml");
+    let spec = dir.path().join("one.hmml");
     fs::write(&spec, SPEC).unwrap();
 
     let (ok, stdout) = run_lint(&spec);
@@ -53,7 +53,7 @@ fn lint_missing_source_paths_exit_one_with_diagnostics() {
 fn check_mode_ignores_source_paths() {
     let dir = tempfile::tempdir().unwrap();
     // Same broken spec: plain --check stays a structural pass and exits 0.
-    let spec = dir.path().join("one.mml");
+    let spec = dir.path().join("one.hmml");
     fs::write(&spec, SPEC).unwrap();
 
     let out = Command::new(env!("CARGO_BIN_EXE_hobby-mml-parser"))

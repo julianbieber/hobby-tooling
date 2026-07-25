@@ -1,5 +1,5 @@
-# MML spec template — Bevy plugin. Copied to
-# notes/{project}/{topic}/{task}/<unit>.mml and filled in by hand.
+# HMML spec template — Bevy plugin. Copied to
+# notes/{project}/{topic}/{task}/<unit>.hmml and filled in by hand.
 #
 # A plugin has no in:/out: — data flows through the World, so the interface is
 # each system's access block. `## systems`, `## behavior` and `## invariants`

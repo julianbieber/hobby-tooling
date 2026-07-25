@@ -1,4 +1,4 @@
-# mml-index — generate index.md for a repository of MML specs
+# hobby-mml-index — generate index.md for a repository of HMML specs
 
 # List all recipes
 default:
@@ -12,17 +12,18 @@ build:
 release:
     cargo build --release
 
-# Regenerate index.md for the given spec root (defaults to ~/projects/mml-specs)
+# Regenerate index.md for the given spec root
+# (defaults to ~/fun_repos/hobby-mimisbrunnr/notes)
 run root="":
     cargo run -- {{root}}
 
-# Install the `mml-index` binary to ~/.cargo/bin
+# Install the `hobby-mml-index` binary to ~/.cargo/bin
 install:
     cargo install --path .
 
 # Uninstall the binary
 uninstall:
-    cargo uninstall julian-mml-index
+    cargo uninstall hobby-mml-index
 
 # Type-check
 check:

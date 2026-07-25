@@ -1,22 +1,22 @@
-# MML Validate
+# HMML Validate
 
 | Field        | Value                                                                                                                                                                                                                 |
 | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Type         | skill                                                                                                                                                                                                                 |
-| Install path | `~/.claude-hobby/commands/mml-validate.md`                                                                                                                                                                                              |
+| Install path | `~/.claude-hobby/commands/hmml-validate.md`                                                                                                                                                                                              |
 | Owner        | @julianbieber                                                                                                                                                                                                         |
-| Dependencies | hobby MML grammar (`lsps/hobby-mml-lsp/grammar.md`), per-task specs in the notes repo (`~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/`), `tree-extract` + `lsp-mcp`, `mml-{extract,translate}` |
+| Dependencies | HMML grammar (`lsps/hobby-mml-lsp/grammar.md`), per-task specs in the notes repo (`~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/`), `tree-extract` + `lsp-mcp`, `hmml-{extract,translate}` |
 | Status       | experimental                                                                                                                                                                                                          |
 
 ## Description
 
 Read-only **conformance / drift check**: does the implementation still do what
-its [`.mml`](../../lsps/hobby-mml-lsp/grammar.md) spec says? This is the
-closing step of the MML loop and the mirror of `mml-translate`:
+its [`.hmml`](../../lsps/hobby-mml-lsp/grammar.md) spec says? This is the
+closing step of the HMML loop and the mirror of `hmml-translate`:
 
-- `mml-extract` — code → `.mml`
-- `mml-translate` — an edited `.mml` → a code change
-- **`mml-validate` — code vs the current `.mml` → a drift report** (edits
+- `hmml-extract` — code → `.hmml`
+- `hmml-translate` — an edited `.hmml` → a code change
+- **`hmml-validate` — code vs the current `.hmml` → a drift report** (edits
   nothing)
 
 Over time code and spec drift apart — someone changes the code and forgets the
@@ -37,8 +37,8 @@ an invariant).
 
 Produces: a per-section verdict table + an overall CONFORMS/DRIFTED verdict,
 with a **recommended remediation for each drift — but performs none of it.** If
-the spec is the intent, it points you at `mml-translate`; if the code is
-the truth, at `mml-extract`. Deciding which side is right is your call.
+the spec is the intent, it points you at `hmml-translate`; if the code is
+the truth, at `hmml-extract`. Deciding which side is right is your call.
 
 ## Installation
 
@@ -46,22 +46,22 @@ Installed by `just install-skills` from `~/fun_repos/hobby-tooling`, or manually
 
 ```bash
 mkdir -p ~/.claude-hobby/commands/
-ln -s ~/fun_repos/hobby-tooling/skills/mml-validate/skill.md \
-  ~/.claude-hobby/commands/mml-validate.md
+ln -s ~/fun_repos/hobby-tooling/skills/hmml-validate/skill.md \
+  ~/.claude-hobby/commands/hmml-validate.md
 ```
 
 ## Usage
 
 ```
-/mml-validate mesh-terrain-chunks
-/mml-validate get-product-identifier-mapping
+/hmml-validate mesh-terrain-chunks
+/hmml-validate get-product-identifier-mapping
 ```
 
-Point it at a bare `unit` (or a `.mml` path). It resolves to the spec in the
+Point it at a bare `unit` (or a `.hmml` path). It resolves to the spec in the
 current task's notes directory, reads the spec and the code, never writing
 either, and prints a drift report. Typical follow-ups it will recommend:
-`/mml-translate <unit>` (make code match an intended spec) or
-`/mml-extract` (refresh a spec the code has outgrown).
+`/hmml-translate <unit>` (make code match an intended spec) or
+`/hmml-extract` (refresh a spec the code has outgrown).
 
 ## Known Limitations
 
@@ -79,5 +79,5 @@ either, and prints a drift report. Typical follow-ups it will recommend:
   failed.
 - **Altitude-sensitive.** A reworded-but-equivalent behavior step conforms; the
   judgement of "equivalent" is the model's, same as extract's altitude calls.
-- No `.mml` parser is wired in yet by default (task 06 `mml-parse`); structural
-  validity is checked by eye against the grammar until it is.
+- Structural validity comes from `hobby-mml-parser <path> --lint`; anything the
+  grammar cannot express (altitude, intent) is still a judgement call.

@@ -11,9 +11,9 @@
 ## Description
 
 Fork of the work `mml-lsp` for hobby specs, now carrying its **own grammar**
-([`grammar.md`](grammar.md), hobby MML v2). Language server (completion, hover,
+([`grammar.md`](grammar.md), HMML v2). Language server (completion, hover,
 goto-definition, references, document symbols, diagnostics) plus the
-`hobby-mml-parser --lint` CLI the `mml-*` skills shell out to.
+`hobby-mml-parser --lint` CLI the `hmml-*` skills shell out to.
 
 ## Why a fork rather than a shared binary
 
@@ -21,7 +21,7 @@ Originally: spec→source path resolution.
 
 | | work | hobby |
 |---|---|---|
-| spec | `notes/{topic}/{task}/<unit>.mml` | `notes/{project}/{topic}/{task}/<unit>.mml` |
+| spec | `notes/{topic}/{task}/<unit>.hmml` | `notes/{project}/{topic}/{task}/<unit>.hmml` |
 | checkout | `~/worktrees/{topic}/{task}/{repo}` | `~/fun_worktrees/{project}/{topic}/{task}` |
 | fallback | `~/projects/<repo>` | `~/fun_repos/<repo>` |
 
@@ -43,7 +43,7 @@ since the Bevy dialect has no business in a work repo.
 ## Grammar
 
 [`grammar.md`](grammar.md) in this directory is the source of truth, and the
-`mml-*` skills point at it. The work `01-language-spec/grammar.md` describes v1
+`hmml-*` skills point at it. The work `01-language-spec/grammar.md` describes v1
 and no longer governs anything here.
 
 The always-parsing examples are the parser's own fixtures under
@@ -52,11 +52,11 @@ docs and parser cannot drift:
 
 | Fixture | Shows |
 |---|---|
-| `enemy-waves.mml` | `kind: plugin` — world sections, systems, ordering, `marker`, `where:` |
-| `spawn-enemies.mml` | `kind: system` — `## access`, cross-spec imports, query exclusion |
-| `get-map-tile.mml` | `kind: endpoint` — `method`, param sources |
-| `mesh-terrain-chunks.mml` | `kind: workflow` — `Queue`/`Stream` |
-| `shared-data-imports.mml` / `cross-spec-refs.mml` | `use` imports, `@ spec` refs |
+| `enemy-waves.hmml` | `kind: plugin` — world sections, systems, ordering, `marker`, `where:` |
+| `spawn-enemies.hmml` | `kind: system` — `## access`, cross-spec imports, query exclusion |
+| `get-map-tile.hmml` | `kind: endpoint` — `method`, param sources |
+| `mesh-terrain-chunks.hmml` | `kind: workflow` — `Queue`/`Stream` |
+| `shared-data-imports.hmml` / `cross-spec-refs.hmml` | `use` imports, `@ spec` refs |
 
 ## Helix routing
 
@@ -72,8 +72,8 @@ hobby-mml-lsp = { command = "hobby-mml-lsp" }
 # "mml" extension.
 [[language]]
 name = "mml-hobby"
-scope = "source.mml"
-file-types = [{ glob = "**/hobby-mimisbrunnr/notes/**/*.mml" }]
+scope = "source.hmml"
+file-types = [{ glob = "**/hobby-mimisbrunnr/notes/**/*.hmml" }]
 grammar = "mml"                       # reuse the existing tree-sitter grammar
 language-servers = ["hobby-mml-lsp"]
 ```
@@ -95,7 +95,7 @@ just install-mml     # installs hobby-mml-lsp, hobby-mml-parser, hobby-mml-index
 
 - **Depends on the work repo for the tree-sitter grammar.** `grammar = "mml"`
   points at `team-constellation-tooling/lsps/tree-sitter-mml`. Moving or
-  deleting that checkout breaks hobby MML highlighting. The v2 sections
+  deleting that checkout breaks HMML highlighting. The v2 sections
   (`## components`, `## systems`, …) parse and lint fine but are highlighted by
   a v1 tree-sitter grammar, so a section header may render plainly. Cosmetic
   only — every diagnostic comes from `hobby-mml-parser`, not the grammar.

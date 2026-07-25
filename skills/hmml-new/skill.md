@@ -1,13 +1,13 @@
 ---
-description: Scaffold a skeleton .mml (Mental Model Language) spec for a new feature — a blank template or a first-pass draft from a rough idea — for me to hand-edit
+description: Scaffold a skeleton .hmml (Mental Model Language) spec for a new feature — a blank template or a first-pass draft from a rough idea — for me to hand-edit
 allowed-tools: Read, Grep, Glob, Write, Bash(ls:*), Bash(pwd:*), Bash(hobby-mml-parser:*), Bash(git -C * rev-parse:*), Bash(git -C * status:*)
 ---
 
-Scaffold a skeleton `.mml` spec for a **new** unit of behaviour — one that has
+Scaffold a skeleton `.hmml` spec for a **new** unit of behaviour — one that has
 no code yet — so I can edit it into the shape I want before
-`mml-translate` turns it into code. This is the "building a new feature"
-entry to the MML loop (its sibling `mml-extract` is the "adjusting an
-existing feature" entry: it goes code → `.mml`; this skill goes idea → `.mml`).
+`hmml-translate` turns it into code. This is the "building a new feature"
+entry to the HMML loop (its sibling `hmml-extract` is the "adjusting an
+existing feature" entry: it goes code → `.hmml`; this skill goes idea → `.hmml`).
 
 There are two paths, and you pick from what I give you:
 
@@ -15,14 +15,14 @@ There are two paths, and you pick from what I give you:
   drop a correctly-structured empty spec at the right path so I start
   well-formed.
 - **Draft from a rough idea** — I describe the feature in a sentence or two and
-  you draft a first-pass `.mml` (best-guess modules / data / behavior /
+  you draft a first-pass `.hmml` (best-guess modules / data / behavior /
   invariants) that I then edit down. **The draft is a starting point, explicitly
   not final** — a thinking aid to react to, not a spec to trust. Err toward too
   few behavior steps that I add to over an over-specified guess.
 
 Write the file and **stop** — reviewing, editing, and committing it are my job
 (same contract as extract and translate). The spec becomes real when I edit it
-and commit it as the baseline `mml-translate` diffs against.
+and commit it as the baseline `hmml-translate` diffs against.
 
 Read `~/fun_repos/hobby-tooling/lsps/hobby-mml-lsp/grammar.md` (the authoritative
 hobby grammar, v2 — **not** the work one) before your first scaffold if you are
@@ -47,7 +47,7 @@ sections, not `## data` with `in:`/`out:`.
    - `unit` — a unique identifier (kebab-case): verb-first for endpoints
      (`get-product-identifier-mapping`); the message/job name for workflows/jobs
      (`reload-shader-batch`, `prune-stale-chunk-cache`). This is the
-     filename (`<unit>.mml`), so it must be unique within the task dir.
+     filename (`<unit>.hmml`), so it must be unique within the task dir.
    - `kind` — exactly one of `endpoint` | `workflow` | `job` | `plugin` |
      `system`. A Bevy feature is a `plugin`; a single system worth its own file
      is a `system`. When I describe a game feature and say nothing about the
@@ -58,14 +58,14 @@ sections, not `## data` with `in:`/`out:`.
      say.
 
    The file lives at
-   `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/<unit>.mml`,
+   `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/<unit>.hmml`,
    where `{topic}` and `{task}` are the first and second directories under
    `~/fun_worktrees` on the current worktree path
    (`~/fun_worktrees/{project}/{topic}/{task}`) — the same task/topic detection
    `resume-journal` uses. Use `{task}` verbatim (including any blurb
    suffix); fall back to the git branch name if not under `~/fun_worktrees`. There
    is no `<system>` directory — the file sits directly in the task dir and its
-   name is the `unit:` header value + `.mml`.
+   name is the `unit:` header value + `.hmml`.
 
 3. **Blank template.** Copy the skill asset matching the `kind`. Only `skill.md`
    is symlinked into the config dir, so read the asset from the repo by its full
@@ -73,11 +73,11 @@ sections, not `## data` with `in:`/`out:`.
 
    | `kind` | asset |
    |---|---|
-   | `endpoint` / `workflow` / `job` | `~/fun_repos/hobby-tooling/skills/mml-new/template.mml` |
-   | `plugin` | `~/fun_repos/hobby-tooling/skills/mml-new/template-plugin.mml` |
-   | `system` | `~/fun_repos/hobby-tooling/skills/mml-new/template-system.mml` |
+   | `endpoint` / `workflow` / `job` | `~/fun_repos/hobby-tooling/skills/hmml-new/template.hmml` |
+   | `plugin` | `~/fun_repos/hobby-tooling/skills/hmml-new/template-plugin.hmml` |
+   | `system` | `~/fun_repos/hobby-tooling/skills/hmml-new/template-system.hmml` |
 
-   Copy it to `{topic}/{task}/<unit>.mml`, then replace only the placeholder
+   Copy it to `{topic}/{task}/<unit>.hmml`, then replace only the placeholder
    header values (`my-system` / `my-unit` / the sample `kind`) with the real
    ones. **Leave the section bodies as the template's comment prompts** — the
    point is a pleasant, well-formed file I fill in by hand, with the LSP guiding
@@ -102,7 +102,7 @@ sections, not `## data` with `in:`/`out:`.
      grammar error. Workflows/jobs usually take `Queue<T>` / emit `Stream<T>`;
      endpoints use a request struct / response type. If a shape the idea needs
      is already defined by another unit in the **same task dir** (check the
-     sibling `.mml` files), bring it in with a `use <unit>: Type` line at the
+     sibling `.hmml` files), bring it in with a `use <unit>: Type` line at the
      top of `## data` rather than redeclaring it.
    - **`## components` / `## resources` / `## events`** *(Bevy kinds)* — the
      shapes the idea implies, split by ECS role: entity data, global singletons,
@@ -125,7 +125,7 @@ sections, not `## data` with `in:`/`out:`.
      nested); everything else is prose. Reference declared module/struct/enum
      names **verbatim** so the LSP cross-links them. Use literal `X` / `Y` / `N`
      for abstract quantities rather than baking in a number. When a step
-     delegates to an **already-specced** unit (check the sibling `.mml` files in
+     delegates to an **already-specced** unit (check the sibling `.hmml` files in
      the same task dir), end it with `@ spec <unit>` instead of restating that
      unit's behaviour; never ref a spec that doesn't exist.
    - **`## invariants`** — flat `-` bullets, each a checkable property the idea
@@ -149,13 +149,13 @@ sections, not `## data` with `in:`/`out:`.
    ```
 
 7. **Sanity-check the structure.** Confirm: header has `unit`/`kind` (kind in
-   the closed set, `system` optional) and the filename equals `<unit>.mml`; the
+   the closed set, `system` optional) and the filename equals `<unit>.hmml`; the
    four `##` sections are present **in order** (`modules`, `data`, `behavior`,
    `invariants`); indentation is uniform 2-space; behavior control flow uses
    only the closed keyword set; every `## data` type resolves.
 
 8. **Write, lint, stop.** Write to
-   `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/<unit>.mml`,
+   `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/<unit>.hmml`,
    then run `hobby-mml-parser <written-path> --lint` and fix every diagnostic until it
    exits clean (a skeleton without a `source` block lints clean — the structure
    checks still apply; if you filled in `source`/`@ path`s, an
@@ -163,7 +163,7 @@ sections, not `## data` with `in:`/`out:`.
    don't drop the reference). If the binary is missing, validate by eye against
    the cheat-sheet. Do **not** run `git add` / `git commit` in the notes repo.
    Report the path you wrote and the next step: **I** edit the draft, commit it
-   as the baseline, then run `/mml-translate <unit>` to turn it into
+   as the baseline, then run `/hmml-translate <unit>` to turn it into
    code.
 
 ## Grammar cheat-sheet
@@ -189,7 +189,7 @@ sections, not `## data` with `in:`/`out:`.
   `Queue<T>`/`Stream<T>`, or a defined struct/enum. Undefined type = hard error.
 - Type imports (grammar §4.5): `## data` may start with `use unit: Type, …`
   lines that bring a data model defined by another unit into scope. The target
-  is a bare `<unit>` resolving to a sibling `<unit>.mml` in the same task dir.
+  is a bare `<unit>` resolving to a sibling `<unit>.hmml` in the same task dir.
   Reuse a shared type this way instead of redeclaring it; resolves like
   `@ spec`. Unresolved target/type = warning.
 - `## behavior`: nested `-` bullets; control-flow keywords
@@ -198,8 +198,8 @@ sections, not `## data` with `in:`/`out:`.
 - `## invariants`: flat `-` bullets, each a checkable claim.
 - Cross-spec refs (grammar §5.4): a module line, **system entry**, behavior step,
   or invariant may end with `@ spec <unit>` — "more specification under" that
-  unit's `.mml`. At most one per line, always the last annotation (after an
-  `@ path`); the target is a bare `<unit>` resolving to a sibling `<unit>.mml` in
+  unit's `.hmml`. At most one per line, always the last annotation (after an
+  `@ path`); the target is a bare `<unit>` resolving to a sibling `<unit>.hmml` in
   the same task dir. Unresolved target = warning, not error.
 
 **Bevy dialect (grammar §8):**
@@ -233,7 +233,7 @@ I say: *"a nightly job that purges price-history older than the retention
 window, per contract, in batches."* You draft (note the `# DRAFT` marker, no
 `source` yet, and behavior kept deliberately sparse for me to sharpen):
 
-```mml
+```hmml
 # DRAFT — best-guess scaffold from a rough idea; edit me down before translating.
 system: bevy-survivor
 unit: prune-stale-chunk-cache
@@ -279,11 +279,11 @@ draft.
 ### Blank template — hand-authoring
 
 I say: *"give me a blank endpoint spec for bevy-survivor called
-`spawn-wave` to fill in myself."* You copy `template.mml`, set the
+`spawn-wave` to fill in myself."* You copy `template.hmml`, set the
 header, and leave the section prompts intact:
 
-```mml
-# MML spec template — copied to notes/{project}/{topic}/{task}/<unit>.mml and filled in.
+```hmml
+# HMML spec template — copied to notes/{project}/{topic}/{task}/<unit>.hmml and filled in.
 # Lines starting with # at column 0 are comments and are ignored by the parser.
 # ...
 
@@ -316,7 +316,7 @@ and something fires when the wave is cleared."* You draft (note: no `## data`,
 no `in:`/`out:`; `Transform` and `Time` are used without being declared; the
 behavior bullets are the system names):
 
-```mml
+```hmml
 # DRAFT — best-guess scaffold from a rough idea; edit me down before translating.
 system: bevy-survivor
 unit: enemy-waves

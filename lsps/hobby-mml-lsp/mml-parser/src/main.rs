@@ -1,4 +1,4 @@
-//! `mml-parser` CLI — validate a `.mml` file and report diagnostics.
+//! `mml-parser` CLI — validate a `.hmml` file and report diagnostics.
 //!
 //! Usage:
 //!   mml-parser <file>           # same as --check

@@ -1,15 +1,15 @@
 ---
-description: Review an adjusted/new .mml spec through parallel engineering lenses (security, architecture, correctness, performance, maintainability) and synthesize an implementation plan for the intended behaviour
-argument-hint: '[<unit> | path/to/spec.mml] [--min-priority critical|high|medium|low]'
+description: Review an adjusted/new .hmml spec through parallel engineering lenses (security, architecture, correctness, performance, maintainability) and synthesize an implementation plan for the intended behaviour
+argument-hint: '[<unit> | path/to/spec.hmml] [--min-priority critical|high|medium|low]'
 ---
 
-# MML Spec Review → Implementation Plan
+# HMML Spec Review → Implementation Plan
 
-Review a `.mml` spec that expresses the **intended behaviour** of a task — a
+Review a `.hmml` spec that expresses the **intended behaviour** of a task — a
 freshly adjusted spec (extracted from code, then edited toward the task's goal)
 or a new-feature spec — and turn it into a **concrete implementation plan**.
 
-This is **not** `mml-validate`. `mml-validate` checks whether *existing code*
+This is **not** `hmml-validate`. `hmml-validate` checks whether *existing code*
 conforms to a spec; that is the wrong question here, because the spec was just
 deliberately edited *away* from the current code to describe the change we want.
 Here the spec **is** the intent, the code does **not** yet match it, and the job
@@ -23,12 +23,12 @@ in the plan.
 
 ## Step 1 — Resolve the spec and its code
 
-1. **Locate the `.mml`.** From `$ARGUMENTS`: a path resolves directly; a bare
-   `<unit>` resolves to `<unit>.mml` in the current task's spec directory
+1. **Locate the `.hmml`.** From `$ARGUMENTS`: a path resolves directly; a bare
+   `<unit>` resolves to `<unit>.hmml` in the current task's spec directory
    `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/` (topic =
    first dir under `~/fun_worktrees`, task = second, from the worktree path — the
    same detection `resume-journal` uses). With no argument, if the task
-   dir holds exactly one `.mml`, use it; if several, list them and ask which.
+   dir holds exactly one `.hmml`, use it; if several, list them and ask which.
 2. **Read the spec** in full. Note its four sections (data, behaviour,
    invariants, and the `source:` block). Run `hobby-mml-parser <path> --lint` first
    (if installed): a parse error means the spec can't be reviewed — report and
@@ -123,4 +123,4 @@ plan inline so the caller (and `dev-flow`'s GATE 1) can act on it.
 - Ground every concern in the spec or the real code; drop speculation. A concern
   with no bearing on this change does not belong in the plan.
 - If invoked by `/julian:dev-flow` at step 3, the plan you produce is what the
-  human reviews at GATE 1 alongside the `.mml`.
+  human reviews at GATE 1 alongside the `.hmml`.

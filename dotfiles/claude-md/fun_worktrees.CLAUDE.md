@@ -31,7 +31,7 @@ task, and the main checkout it derives from is `~/fun_repos/<project>`.
 | Journal entries | same dir, `YYYY-MM-DD.md` |
 | Done/blocked state | same dir, `task.json` (gitignored — local state) |
 | PRs opened | same dir, `prs.json` (written by the track-pr hook) |
-| MML specs | same dir, `<unit>.mml` |
+| HMML specs | same dir, `<unit>.hmml` |
 
 Derive topic and task from the path: they are the **second and third** components
 under `~/fun_worktrees`, with the project first.

@@ -76,15 +76,20 @@ for b in hobby-mml-lsp hobby-mml-parser hobby-mml-index; do
     if command -v "$b" >/dev/null 2>&1; then ok "$b built"; else warn "$b not built" "just install-mml"; fi
 done
 if [ -f "$HELIX_REPO/languages.toml" ]; then
-    if grep -q '^name = "mml-hobby"$' "$HELIX_REPO/languages.toml"; then
-        ok "Helix: mml-hobby in the repo's languages.toml"
+    if grep -q '^name = "hmml"$' "$HELIX_REPO/languages.toml"; then
+        ok "Helix: hmml in the repo's languages.toml"
         if cmp -s "$HELIX_REPO/languages.toml" "$HX/languages.toml"; then
             ok "Helix: installed copy matches the repo"
         else
             bad "Helix: installed copy is stale" "just wire-helix"
         fi
     else
-        warn "Helix: mml-hobby not registered" "just wire-helix"
+        warn "Helix: hmml not registered" "just wire-helix"
+    fi
+    # The pre-.hmml entry claimed `.mml` by path glob; left in place it fights
+    # the work `mml` language for every work spec.
+    if grep -q '^name = "mml-hobby"$' "$HELIX_REPO/languages.toml"; then
+        bad "Helix: legacy mml-hobby language still present" "just wire-helix"
     fi
 else
     warn "Helix: no checkout at $HELIX_REPO" "set HELIX_REPO, or skip"

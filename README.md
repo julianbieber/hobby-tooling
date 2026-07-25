@@ -62,8 +62,8 @@ land in the repo's `runtime/queries/`, which `~/.config/helix/runtime` symlinks 
 | `hcdev` | Zellij dev sessions with Helix + Claude side by side, on the hobby account |
 | `chobby` | Bare `claude` on the hobby account |
 | `hwt-overview` | Bevy dashboard over all projects/topics/tasks |
-| `hobby-mml-lsp` | MML language server, routed to hobby specs by path glob |
-| 18 skills | Task loop (journal, resume, spawn, subtask, triage, reflect), MML suite, PR + dev-flow, GitHub issues |
+| `hobby-mml-lsp` | HMML language server, routed to `.hmml` specs by file type |
+| 18 skills | Task loop (journal, resume, spawn, subtask, triage, reflect), HMML suite, PR + dev-flow, GitHub issues |
 
 ## Account Separation
 

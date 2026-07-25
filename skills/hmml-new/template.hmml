@@ -1,11 +1,11 @@
-# MML spec template (classic kinds) — copied to
-# notes/{project}/{topic}/{task}/<unit>.mml and filled in by hand.
+# HMML spec template (classic kinds) — copied to
+# notes/{project}/{topic}/{task}/<unit>.hmml and filled in by hand.
 #
 # Lines starting with # at column 0 are comments and are ignored by the parser.
 # ## at column 0 is always a section header, never a comment.
 # Indentation is spaces only, 2 spaces per nesting level.
 #
-# For a Bevy plugin or system, use template-plugin.mml / template-system.mml
+# For a Bevy plugin or system, use template-plugin.hmml / template-system.hmml
 # instead — those kinds have no in:/out:.
 
 system: my-system

@@ -1,17 +1,17 @@
 ---
-description: Translate an edited .mml spec into a minimal code change that makes the real system match it
+description: Translate an edited .hmml spec into a minimal code change that makes the real system match it
 allowed-tools: Read, Grep, Glob, Edit, Write, MultiEdit, Bash(hobby-mml-parser:*), Bash(git -C * diff:*), Bash(git -C * show:*), Bash(git -C * cat-file:*), Bash(git -C * ls-files:*), Bash(git -C * rev-parse:*), Bash(git -C * status:*), Bash(git -C * worktree list:*), Bash(git -C * log:*), Bash(git diff:*), Bash(ls:*), Bash(pwd:*), Bash(sbt *), Bash(cargo *), Bash(npm *), Bash(just *), Bash(uv *), Bash(mise exec *), mcp__tree-extract__build_graph, mcp__tree-extract__list_modules, mcp__tree-extract__get_neighbors, mcp__tree-extract__call_path, mcp__tree-extract__get_symbol, mcp__tree-extract__search_symbols, mcp__lsp-mcp__document_symbol, mcp__lsp-mcp__find_references, mcp__lsp-mcp__goto_definition, mcp__lsp-mcp__hover
 ---
 
-Translate an **edited** `.mml` spec into the **code change** that makes the real
+Translate an **edited** `.hmml` spec into the **code change** that makes the real
 system match it — spec → code, not prose → code. This is the payoff step of the
-MML loop: `mml-extract` turns code into a `.mml`, the human edits the
-`.mml` to express the change they want, and this skill turns that edit into a
+HMML loop: `hmml-extract` turns code into a `.hmml`, the human edits the
+`.hmml` to express the change they want, and this skill turns that edit into a
 minimal, reviewable diff against the real repo.
 
 The default and best path is **delta-based**: specs live per-task inside the
 notes repo `~/fun_repos/hobby-mimisbrunnr`, which is a git repo, so
-the last *committed* `.mml` there is the baseline and the human's working-tree
+the last *committed* `.hmml` there is the baseline and the human's working-tree
 edits are the delta. Translate **only the delta** — do not regenerate the unit
 (regeneration produces noisy diffs and rewrites code the spec never mentioned).
 Full generation is a fallback for a brand-new spec with no committed baseline.
@@ -28,13 +28,13 @@ end of this file are the reference.
 ## Instructions
 
 1. **Identify the spec.** Specs live per-task in the notes repo at
-   `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/<unit>.mml`,
+   `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/<unit>.hmml`,
    where `{topic}` is the first dir under `~/fun_worktrees` and `{task}` is the
    second (from `~/fun_worktrees/{project}/{topic}/{task}`; `{task}` verbatim including
    any blurb, falling back to the git branch) — the same detection
-   `resume-journal` uses. The filename is the `unit:` header plus `.mml`,
+   `resume-journal` uses. The filename is the `unit:` header plus `.hmml`,
    **directly in the task dir** — there is no `<system>` subdirectory (the
-   `system:` header is now an optional label). The human points at one `.mml` (a
+   `system:` header is now an optional label). The human points at one `.hmml` (a
    path, or a `unit` name). Resolve it to the task dir and confirm the file
    exists. Validate it with `hobby-mml-parser <path> --lint` (grammar + linkage: an
    `unresolved-source-path` warning means a `source.paths`/`@ path` entry names
@@ -48,7 +48,7 @@ end of this file are the reference.
    spec; the delta is the human's working-tree edit on top of it:
 
    ```sh
-   # <path> = notes/{project}/{topic}/{task}/<unit>.mml (relative to the notes repo)
+   # <path> = notes/{project}/{topic}/{task}/<unit>.hmml (relative to the notes repo)
    git -C ~/fun_repos/hobby-mimisbrunnr diff HEAD -- <path>   # the delta
    git -C ~/fun_repos/hobby-mimisbrunnr show HEAD:<path>      # the old spec
    ```
@@ -117,7 +117,7 @@ end of this file are the reference.
 
 5. **Map the delta to code changes.** The spec is **intent, not a literal
    template** — fit the existing code's idioms. Invert the grammar's
-   type-mapping tables (MML `i64` → the source language's 64-bit int, `Vec<T>` →
+   type-mapping tables (HMML `i64` → the source language's 64-bit int, `Vec<T>` →
    its list type, an `enum` → its closed value set, etc.). Per section:
 
    - **`## data` `use` import added/removed** → *not* a data-model change to
@@ -197,7 +197,7 @@ end of this file are the reference.
      usually means "delegate here": wire the hand-off (enqueue to that queue,
      call that endpoint, schedule that job) and nothing more. A ref *removed*
      changes nothing by itself; only the step's own prose delta matters. Read
-     the referenced `.mml` (a sibling `.mml` in the **same task dir**; the ref
+     the referenced `.hmml` (a sibling `.hmml` in the **same task dir**; the ref
      is a bare `<unit>`) when you need the collaborator's contract — its
      `in:`/`out:` types are the interface to code against.
    - **`where:` binding value change** → this is the payoff for value-only
@@ -243,7 +243,7 @@ end of this file are the reference.
    yet), generate the whole unit from the spec into the files named by
    `source.paths` (creating new files for a new unit), fitting the target repo's
    idioms, then verify (step 7) and report (step 8). This overlaps
-   `mml-new`'s "new unit" territory; prefer delta mode whenever a
+   `hmml-new`'s "new unit" territory; prefer delta mode whenever a
    baseline exists.
 
    **Caution — full-generation is destructive at file granularity.** A file in
@@ -291,8 +291,8 @@ end of this file are the reference.
 - `## invariants`: flat `-` bullets, each a checkable claim.
 - Cross-spec refs (grammar §5.4): a module line, **system entry**, behavior step,
   or invariant may end with `@ spec unit` — "more specification under" that
-  unit's `.mml`. At most one per line, always the last annotation (after an
-  `@ path`); it resolves to a sibling `.mml` in the same task dir. Unresolved
+  unit's `.hmml`. At most one per line, always the last annotation (after an
+  `@ path`); it resolves to a sibling `.hmml` in the same task dir. Unresolved
   target = warning, not error.
 
 **Bevy dialect (grammar §8):**
@@ -315,14 +315,14 @@ end of this file are the reference.
 ## Worked examples
 
 These show the shape of a translation: a **spec delta** (what the human changed
-in the `.mml`) and the **code change** it drives. The reference specs live in
+in the `.hmml`) and the **code change** it drives. The reference specs live in
 the task dir under
 `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/`.
 
 ### Behavior-step delta → minimal routed diff
 
 The human changes one `## behavior` step in the task dir's
-`mesh-terrain-chunks.mml` — the cookie-session threshold. The spec delta from
+`mesh-terrain-chunks.hmml` — the cookie-session threshold. The spec delta from
 `git -C ~/fun_repos/hobby-mimisbrunnr diff HEAD`:
 
 ```diff
@@ -344,7 +344,7 @@ correct diff in exactly one module.
 ### Data enum-variant delta → closed-value-set change
 
 The human adds a variant to a `## data` enum in the task dir's
-`get-product-identifier-mapping.mml`:
+`get-product-identifier-mapping.hmml`:
 
 ```diff
  enum InputType {

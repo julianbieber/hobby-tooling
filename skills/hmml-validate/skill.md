@@ -1,20 +1,20 @@
 ---
-description: Validate the implementation against its current .mml spec — report where code has drifted from the mental model, without editing anything
+description: Validate the implementation against its current .hmml spec — report where code has drifted from the mental model, without editing anything
 allowed-tools: Read, Grep, Glob, Bash(git -C * diff:*), Bash(git -C * show:*), Bash(git -C * cat-file:*), Bash(git -C * ls-files:*), Bash(git -C * rev-parse:*), Bash(git -C * status:*), Bash(git -C * worktree list:*), Bash(git -C * log:*), Bash(git diff:*), Bash(ls:*), Bash(pwd:*), Bash(sbt *), Bash(cargo *), Bash(npm *), Bash(just *), Bash(uv *), Bash(mise exec *), Bash(hobby-mml-parser:*), mcp__tree-extract__build_graph, mcp__tree-extract__list_modules, mcp__tree-extract__get_neighbors, mcp__tree-extract__call_path, mcp__tree-extract__get_symbol, mcp__tree-extract__search_symbols, mcp__lsp-mcp__document_symbol, mcp__lsp-mcp__find_references, mcp__lsp-mcp__goto_definition, mcp__lsp-mcp__hover
 ---
 
-Validate that the **implementation still matches its `.mml` spec** — a read-only
+Validate that the **implementation still matches its `.hmml` spec** — a read-only
 **conformance / drift check**, the mirror of translate. This is the closing step
-of the MML loop: `mml-extract` turns code into a `.mml`, the human edits
-the `.mml`, `mml-translate` turns that edit into a code change — and over
+of the HMML loop: `hmml-extract` turns code into a `.hmml`, the human edits
+the `.hmml`, `hmml-translate` turns that edit into a code change — and over
 time code and spec drift apart. This skill answers **"does the code still do
 what the current spec says?"** and reports *where and which way* they have
 diverged.
 
 It **never edits** — not the code, not the spec. Deciding which side is right is
 the human's call, and that is the point: if the spec is the intent, run
-`mml-translate` to make the code match; if the code is now the truth,
-re-run `mml-extract` to refresh the spec. This skill only tells you
+`hmml-translate` to make the code match; if the code is now the truth,
+re-run `hmml-extract` to refresh the spec. This skill only tells you
 *that* they diverged and *how*.
 
 Read `~/fun_repos/hobby-tooling/lsps/hobby-mml-lsp/grammar.md` (the authoritative
@@ -50,15 +50,15 @@ Every finding is one of four verdicts. Use them exactly:
    is the first dir and `{task}` the second (verbatim, including any blurb
    suffix); fall back to the git branch name if the path is not under
    `~/fun_worktrees`. Resolve the human's pointer (a path, or a bare `unit`) to
-   `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/<unit>.mml`
-   (the filename is the `unit:` header plus `.mml`; the `system:` header is an
-   optional label only) and confirm it exists. "The current version of the mml"
+   `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/<unit>.hmml`
+   (the filename is the `unit:` header plus `.hmml`; the `system:` header is an
+   optional label only) and confirm it exists. "The current version of the hmml"
    is the **on-disk** spec (the file as it is now). Record its git state and let
    it colour the report:
 
    ```sh
-   git -C ~/fun_repos/hobby-mimisbrunnr status --short -- notes/{project}/{topic}/{task}/<unit>.mml
-   git -C ~/fun_repos/hobby-mimisbrunnr diff HEAD -- notes/{project}/{topic}/{task}/<unit>.mml   # pending spec edits
+   git -C ~/fun_repos/hobby-mimisbrunnr status --short -- notes/{project}/{topic}/{task}/<unit>.hmml
+   git -C ~/fun_repos/hobby-mimisbrunnr diff HEAD -- notes/{project}/{topic}/{task}/<unit>.hmml   # pending spec edits
    ```
 
    - **Clean (matches HEAD)** → you are validating code against the committed
@@ -66,7 +66,7 @@ Every finding is one of four verdicts. Use them exactly:
    - **Uncommitted spec edits present** → you are validating against a spec that
      *itself* has a pending change. That change is almost always a **planned**
      edit not yet in code — expect it to show up as SPEC-AHEAD, and say
-     explicitly that the fix is `mml-translate`, not a code bug.
+     explicitly that the fix is `hmml-translate`, not a code bug.
 
    Then check the spec is **structurally well-formed**: run
    `hobby-mml-parser <path> --lint` (grammar + linkage — an `unresolved-source-path`
@@ -104,7 +104,7 @@ Every finding is one of four verdicts. Use them exactly:
      comment has **no real code type by design** (extract emits it for
      loose-param inputs) — never flag it SPEC-AHEAD for not existing.
    - **`## data` `use` imports** — each `use unit: Type` must resolve, against
-     the sibling `<unit>.mml` in the same task directory, to a type that owning
+     the sibling `<unit>.hmml` in the same task directory, to a type that owning
      unit's spec actually defines (an `unresolved-import` warning means it does
      not — the owning spec was renamed, the type removed, or the import points
      at the wrong unit). An imported type is checked against the code the same
@@ -164,7 +164,7 @@ Every finding is one of four verdicts. Use them exactly:
      reads that parameter. A mismatch (spec says `@query`, code binds it from
      the path) is **SPEC-AHEAD**.
    - **`@ spec` cross-refs** — each ref (bare `<unit>`) must resolve to a
-     sibling `<unit>.mml` in the **same task directory** as this spec. A
+     sibling `<unit>.hmml` in the **same task directory** as this spec. A
      dangling ref is **SPEC-AHEAD** (the referenced spec was renamed/removed, or
      never written). Do **not** validate the referenced unit's own conformance
      here — that is its own validate run; only check that delegating to that
@@ -188,10 +188,10 @@ Every finding is one of four verdicts. Use them exactly:
    count and the most important items first). For each drift, recommend the
    remediation **without performing it**:
 
-   - **SPEC-AHEAD** and the spec is the intent → `/mml-translate <unit>`
+   - **SPEC-AHEAD** and the spec is the intent → `/hmml-translate <unit>`
      to make the code match.
    - **CODE-AHEAD** and the code is now the truth → re-run
-     `/mml-extract`, review, and recommit the refreshed spec as the new
+     `/hmml-extract`, review, and recommit the refreshed spec as the new
      baseline.
 
    **Never `Edit`/`Write`, never `git add`/`git commit`** — not the code, the
@@ -224,7 +224,7 @@ Every finding is one of four verdicts. Use them exactly:
   `@ source` is `path`|`query`|`body`|`header` (endpoints).
 - Type imports (grammar §4.5): `## data` may start with `use unit: Type, …`
   lines that bring a data model defined by another unit into scope. Resolves
-  like `@ spec` (a sibling `<unit>.mml` in the same task directory); unresolved
+  like `@ spec` (a sibling `<unit>.hmml` in the same task directory); unresolved
   target/type = warning.
 - `## behavior`: nested `-` bullets; control-flow keywords
   `if…: / else: / for each…: / while…: / try: / on error…:`; else free prose;
@@ -234,8 +234,8 @@ Every finding is one of four verdicts. Use them exactly:
 - `## invariants`: flat `-` bullets, each a checkable claim.
 - Cross-spec refs (grammar §5.4): a module line, **system entry**, behavior step,
   or invariant may end with `@ spec unit` (bare unit) — "more specification
-  under" that unit's `.mml`. At most one per line, always the last annotation
-  (after an `@ path`); it resolves to a sibling `<unit>.mml` in the same task
+  under" that unit's `.hmml`. At most one per line, always the last annotation
+  (after an `@ path`); it resolves to a sibling `<unit>.hmml` in the same task
   directory. Unresolved target = warning, not error.
 
 **Bevy dialect (grammar §8):**
@@ -272,19 +272,19 @@ guarantee, from the read side.)
 
 ### SPEC-AHEAD — an invariant the code no longer upholds
 
-`mesh-terrain-chunks.mml` invariant *"at most X CIDs are in-flight … each an
+`mesh-terrain-chunks.hmml` invariant *"at most X CIDs are in-flight … each an
 AMQP consumer with prefetch 1"*, but `child.py` now sets
 `set_qos(prefetch_count=10)`. Route via the `Child @ src/chunk/mesher.rs`
 anchor, find the `set_qos` site, see `10 ≠ 1`. Report **SPEC-AHEAD** on that
 invariant (and note it also contradicts the `## behavior` "prefetch 1" step — a
 self-consistent spec that the *code* broke). Overall **DRIFTED**. Recommend: if
-prefetch 1 is still the intent, `/mml-translate` to restore it; if the
+prefetch 1 is still the intent, `/hmml-translate` to restore it; if the
 code intentionally moved to 10, re-extract to refresh the spec. Do not touch
 either.
 
 ### CODE-AHEAD — a value set the spec is missing
 
-`get-product-identifier-mapping.mml` has `enum InputType { gtin, asin }`, but
+`get-product-identifier-mapping.hmml` has `enum InputType { gtin, asin }`, but
 the controller's `validIdentifiers` allowlist is now
 `Seq("gtin", "asin", "ean")` and `IdentifierTypes` gained `ean`. The code
 accepts a value the spec's closed set does not list — a behaviorally significant

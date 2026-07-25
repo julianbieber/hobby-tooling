@@ -10,7 +10,7 @@
 
 ## Description
 
-Walks the hobby notes tree, parses every `.mml`, and writes an `index.md`
+Walks the hobby notes tree, parses every `.hmml`, and writes an `index.md`
 summarizing units by system — plus warnings for cross-spec refs and imports that
 point at specs which do not exist.
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Wire the hobby MML language server into Helix.
+# Wire the hobby HMML language server into Helix.
 #
 # Helix's languages.toml is maintained in a local Helix checkout (branch `custom`)
 # and *copied* into ~/.config/helix/. Editing the installed copy directly loses the
@@ -19,7 +19,8 @@ set -euo pipefail
 REPO="${1:-${HELIX_REPO:-$HOME/outside_repos/helix}}"
 CFG="${XDG_CONFIG_HOME:-$HOME/.config}/helix"
 LANGS="$REPO/languages.toml"
-QUERIES="$REPO/runtime/queries/mml-hobby"
+QUERIES="$REPO/runtime/queries/hmml"
+LEGACY_QUERIES="$REPO/runtime/queries/mml-hobby"
 
 if [ ! -f "$LANGS" ]; then
     echo "wire-helix: no languages.toml at $LANGS" >&2
@@ -28,14 +29,45 @@ if [ ! -f "$LANGS" ]; then
     exit 0
 fi
 
-# The forked server only makes sense if the plain `mml` language exists to borrow a
-# grammar from. Without it, there is no MML support to extend.
+# Routing no longer depends on the work `mml` language — `.hmml` is its own file
+# type. But `grammar = "mml"` below still borrows the tree-sitter-mml build the
+# `mml` entry declares, so without that entry there is no grammar to reuse and
+# hobby specs would parse as plain text.
 if ! grep -q '^name = "mml"$' "$LANGS"; then
-    echo "wire-helix: no \`mml\` language in $LANGS — nothing to extend, skipping." >&2
+    echo "wire-helix: no \`mml\` language in $LANGS — no grammar to borrow, skipping." >&2
     exit 0
 fi
 
 changed=0
+
+# --- 0. drop the pre-.hmml `mml-hobby` language ------------------------------
+# Before the rename, both dialects claimed `.mml` and hobby specs were singled
+# out by the path glob `**/hobby-mimisbrunnr/notes/**/*.mml`. That entry is dead
+# now and would fight the `hmml` block below for any `.mml` file, so remove it.
+# Guarded on presence: a fresh machine no-ops straight through.
+if grep -q '^name = "mml-hobby"$' "$LANGS"; then
+    awk '
+      NR == FNR { line[FNR] = $0; n = FNR; if ($0 ~ /^name = "mml-hobby"$/) hit = FNR; next }
+      FNR == 1 {
+        # Walk back to the [[language]] header, then over its comment preamble.
+        h = hit; while (h > 1 && line[h] !~ /^\[\[language\]\]$/) h--
+        s = h;   while (s > 1 && line[s - 1] ~ /^#/) s--
+        # Forward to the line before the next top-level header, plus any blanks.
+        e = h + 1; while (e <= n && line[e] !~ /^\[/) e++
+        e--
+        while (e < n && line[e + 1] == "") e++
+        for (i = 1; i <= n; i++) if (i < s || i > e) print line[i]
+      }
+    ' "$LANGS" "$LANGS" > "$LANGS.tmp"
+    mv "$LANGS.tmp" "$LANGS"
+    echo "  languages.toml: removed the legacy glob-routed mml-hobby language"
+    changed=1
+fi
+if [ -d "$LEGACY_QUERIES" ]; then
+    rm -rf "$LEGACY_QUERIES"
+    echo "  queries: removed legacy mml-hobby/"
+    changed=1
+fi
 
 # --- 1. language-server entry ------------------------------------------------
 if grep -q '^hobby-mml-lsp = ' "$LANGS"; then
@@ -51,61 +83,54 @@ else
     changed=1
 fi
 
-# --- 2. the mml-hobby language, routed by path glob --------------------------
-if grep -q '^name = "mml-hobby"$' "$LANGS"; then
-    echo "  languages.toml: mml-hobby language already present"
+# --- 2. the hmml language, routed by extension -------------------------------
+# No ordering constraint: `hmml` and `mml` claim disjoint file types, so this can
+# simply be appended. (Before the rename both claimed `.mml` and this block had
+# to be spliced in above the `mml` entry to win.)
+if grep -q '^name = "hmml"$' "$LANGS"; then
+    echo "  languages.toml: hmml language already present"
 else
-    # Must precede the plain `[[language]] name = "mml"` block. Verified empirically:
-    # a spec under hobby-mimisbrunnr/notes starts hobby-mml-lsp, one outside starts
-    # mml-lsp.
-    block=$(mktemp)
-    cat > "$block" <<'TOML'
-# Hobby specs get the forked server, routed by path. This entry must come BEFORE
-# the plain `mml` entry below: the hobby parser resolves spec->source against
-# ~/fun_worktrees/<project>/<topic>/<task> rather than ~/worktrees/<topic>/<task>/<repo>.
-# `grammar = "mml"` reuses the tree-sitter grammar the `mml` entry declares, so
-# there is no second grammar to build.
+    cat >> "$LANGS" <<'TOML'
+
+# Hobby specs are `.hmml` and get the forked server, which resolves spec->source
+# against ~/fun_worktrees/<project>/<topic>/<task> rather than the work layout
+# ~/worktrees/<topic>/<task>/<repo>. `grammar = "mml"` reuses the tree-sitter
+# grammar the `mml` entry declares, so there is no second grammar to build.
 [[language]]
-name = "mml-hobby"
-scope = "source.mml"
-injection-regex = "mml"
-file-types = [{ glob = "**/hobby-mimisbrunnr/notes/**/*.mml" }]
+name = "hmml"
+scope = "source.hmml"
+injection-regex = "hmml"
+file-types = ["hmml"]
 comment-token = "#"
 indent = { tab-width = 2, unit = "  " }
 grammar = "mml"
 language-servers = ["hobby-mml-lsp"]
-
 TOML
-    # Find the [[language]] header that introduces `name = "mml"` and insert above it.
-    line=$(grep -n '^name = "mml"$' "$LANGS" | head -1 | cut -d: -f1)
-    hdr=$(awk -v n="$line" 'NR<n && /^\[\[language\]\]$/ {l=NR} END {print l}' "$LANGS")
-    sed -i "$((hdr - 1))r $block" "$LANGS"
-    rm -f "$block"
-    echo "  languages.toml: added mml-hobby language (glob-routed)"
+    echo "  languages.toml: added hmml language (routed by the .hmml extension)"
     changed=1
 fi
 
 # --- 3. highlight queries ----------------------------------------------------
-# Helix resolves queries by *language name*, not grammar, so mml-hobby needs its own
-# directory even though it reuses the mml grammar. Without this, hobby specs parse
-# but render unhighlighted.
+# Helix resolves queries by *language name*, not grammar, so hmml needs its own
+# directory even though it reuses the mml grammar. Without this, hobby specs
+# parse but render unhighlighted.
 if [ -f "$QUERIES/highlights.scm" ]; then
-    echo "  queries: mml-hobby/highlights.scm already present"
+    echo "  queries: hmml/highlights.scm already present"
 else
     mkdir -p "$QUERIES"
     cat > "$QUERIES/highlights.scm" <<'SCM'
-; MML highlighting for hobby specs.
+; HMML highlighting.
 ;
-; `mml-hobby` is the same language as `mml` — it exists only so Helix can route
-; hobby specs to the forked `hobby-mml-lsp`, which resolves spec->source against
-; ~/fun_worktrees instead of ~/worktrees. Helix looks queries up by *language
-; name*, not by grammar, so without this file hobby specs would render
+; `hmml` is the same grammar as `mml` — it is a separate Helix language so that
+; `.hmml` files reach the forked `hobby-mml-lsp`, which resolves spec->source
+; against ~/fun_worktrees instead of ~/worktrees. Helix looks queries up by
+; *language name*, not by grammar, so without this file hobby specs would render
 ; unhighlighted even though `grammar = "mml"` gives them the right parser.
 ;
 ; Inherit rather than copy, so the two stay in sync.
 ; inherits: mml
 SCM
-    echo "  queries: wrote mml-hobby/highlights.scm"
+    echo "  queries: wrote hmml/highlights.scm"
     changed=1
 fi
 
@@ -126,10 +151,11 @@ fi
 if [ ! -L "$CFG/runtime" ] && [ -d "$CFG/runtime" ]; then
     echo "  NOTE: $CFG/runtime is a real directory, not a symlink into $REPO."
     echo "        Copy the queries yourself:  cp -r $QUERIES $CFG/runtime/queries/"
+    echo "        And drop the stale one:     rm -rf $CFG/runtime/queries/mml-hobby"
 fi
 
 if [ "$changed" -eq 0 ]; then
     echo "  Helix already wired; nothing to do."
 else
-    echo "  Helix wired. Verify:  hx --health mml-hobby   and   hx --health mml"
+    echo "  Helix wired. Verify:  hx --health hmml   and   hx --health mml"
 fi

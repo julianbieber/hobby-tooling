@@ -36,15 +36,29 @@ hooks/<name>/hook.sh                  # symlinked into ~/.claude-hobby/hooks/
 skills/<name>/{skill.md, README.md}   # symlinked into ~/.claude-hobby/commands/
 settings/hobby.settings.json          # symlinked to ~/.claude-hobby/settings.json
 scripts/                              # install logic too involved for a justfile recipe
-lsps/hobby-mml-lsp/                   # forked MML language server + grammar.md
+lsps/hobby-mml-lsp/                   # forked HMML language server + grammar.md
 tools/{hobby-mml-index, hwt-overview}/
 ```
 
-## MML is a Bevy dialect here
+## HMML is a Bevy dialect here
 
-`lsps/hobby-mml-lsp/grammar.md` is the **source of truth** for hobby MML (v2) and
-what the `mml-*` skills read. The work `01-language-spec/grammar.md` describes v1
+`lsps/hobby-mml-lsp/grammar.md` is the **source of truth** for HMML (v2) and
+what the `hmml-*` skills read. The work `01-language-spec/grammar.md` describes v1
 and governs nothing in this repo.
+
+Hobby specs are **`.hmml`**, never `.mml`. The extension is what keeps the two
+dialects apart: Helix routes `.hmml` to `hobby-mml-lsp` by file type, and work
+`.mml` to `mml-lsp`, with no path globs or block-ordering tricks involved.
+`mml_parser::SPEC_EXT` is the single definition — every place that builds or
+filters a spec filename goes through it, so the extension stays a one-line
+change.
+
+The **binaries keep their `hobby-mml-*` names** (`hobby-mml-lsp`,
+`hobby-mml-parser`, `hobby-mml-index`), as do the crate directories. That is
+deliberate, not an oversight: they never collided with the work `mml-lsp` /
+`mml-parser` / `mml-index` on `PATH` in the first place, so renaming them would
+buy nothing and cost a `cargo uninstall` dance plus stale `~/.cargo/bin`
+entries. The language is HMML; the programs that read it are `hobby-mml-*`.
 
 The fork exists because hobby projects are Bevy games and MML v1 assumes a unit
 is a function (`in: T` / `out: T`). An ECS has no such contract — data flows
@@ -69,7 +83,7 @@ idempotent.
 
 Anything more involved than a symlink lives in `scripts/` rather than inline in the
 justfile: `preflight.sh` (dependency check), `wire-nushell.sh` (append the `use`
-lines once), `wire-helix.sh` (register the forked MML server), `doctor.sh`.
+lines once), `wire-helix.sh` (register the forked HMML server), `doctor.sh`.
 
 **Helix config is edited in the Helix checkout, not in `~/.config/helix`.**
 `languages.toml` is copied from the repo into place, so editing the installed copy
