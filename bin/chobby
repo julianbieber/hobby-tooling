@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Launch Claude Code on the private hobby account.
+#
+# CLAUDE_CONFIG_DIR relocates the entire config surface — .claude.json (MCP
+# servers, project trust), .credentials.json (the OAuth login), settings.json,
+# commands/, hooks/, agents/, skills/, and history. Setting it is the whole
+# mechanism for running two accounts on one machine; there is no flag for it.
+#
+# A bare `claude` always means the work account. This wrapper is how you get the
+# hobby one from outside an `hcdev` session (which exports the same var so every
+# zellij pane inherits it).
+#
+# Any arguments are passed straight through: `chobby -p "..."`, `chobby --resume`.
+
+set -euo pipefail
+
+export CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR_HOBBY:-$HOME/.claude-hobby}"
+
+if [ ! -d "$CLAUDE_CONFIG_DIR" ]; then
+    echo "chobby: config dir $CLAUDE_CONFIG_DIR does not exist." >&2
+    echo "Run 'just bootstrap-config' in ~/fun_repos/hobby-tooling first." >&2
+    exit 1
+fi
+
+exec claude "$@"

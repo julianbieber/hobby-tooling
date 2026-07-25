@@ -1,0 +1,16 @@
+# Rust
+target/
+**/target/
+
+# Editor
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Local overrides
+CLAUDE.local.md
