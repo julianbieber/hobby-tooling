@@ -1,6 +1,6 @@
 ---
 description: Analyze one unit of existing code and emit a .mml (Mental Model Language) spec
-allowed-tools: Read, Grep, Glob, Write, Bash(ls:*), Bash(pwd:*), Bash(mml-parser:*), Bash(git -C * rev-parse:*), Bash(git rev-parse:*), mcp__tree-extract__build_graph, mcp__tree-extract__list_modules, mcp__tree-extract__get_neighbors, mcp__tree-extract__call_path, mcp__tree-extract__get_symbol, mcp__tree-extract__search_symbols, mcp__lsp-mcp__document_symbol, mcp__lsp-mcp__find_references, mcp__lsp-mcp__goto_definition, mcp__lsp-mcp__hover
+allowed-tools: Read, Grep, Glob, Write, Bash(ls:*), Bash(pwd:*), Bash(hobby-mml-parser:*), Bash(git -C * rev-parse:*), Bash(git rev-parse:*), mcp__tree-extract__build_graph, mcp__tree-extract__list_modules, mcp__tree-extract__get_neighbors, mcp__tree-extract__call_path, mcp__tree-extract__get_symbol, mcp__tree-extract__search_symbols, mcp__lsp-mcp__document_symbol, mcp__lsp-mcp__find_references, mcp__lsp-mcp__goto_definition, mcp__lsp-mcp__hover
 ---
 
 Analyze one unit of an existing system — an endpoint, a message/queue workflow,
@@ -192,13 +192,13 @@ and formatting.
    Do **not** put a sha or timestamp anywhere in the `.mml` — the grammar stays
    pure.
 
-8. **Lint the written file.** Run `mml-parser <written-path> --lint` and fix
+8. **Lint the written file.** Run `hobby-mml-parser <written-path> --lint` and fix
    every diagnostic until it exits clean. An `unresolved-source-path` warning
    means a `source.paths` entry or module `@ path` names a file that does not
    exist — go back to the checkout and find the real path; **never delete the
    reference just to silence the warning** (a spec without working linkage is
    the bug this step exists to prevent: goto-definition silently no-ops on it).
-   If the `mml-parser` binary is not installed
+   If the `hobby-mml-parser` binary is not installed
    (`cargo install --path ~/fun_repos/hobby-tooling/lsps/hobby-mml-lsp/mml-parser`),
    fall back to verifying each path with `ls` against the checkout root.
 
@@ -424,14 +424,15 @@ out: Stream<ReloadResult>
   - for each change in the batch:
     - if the digest matches the digest already registered for that path:
       - record an unchanged result and move on
-    - else if the path is not referenced by any live pipeline:
-      - record a skipped result — nothing to swap into
     - else:
-      - validate the source with ShaderCompiler
-      - if validation produced errors:
-        - record a rejected result carrying the diagnostics and keep the previous module bound
+      - if the path is not referenced by any live pipeline:
+        - record a skipped result — nothing to swap into
       - else:
-        - swap the module into PipelineRegistry and record a swapped result
+        - validate the source with ShaderCompiler
+        - if validation produced errors:
+          - record a rejected result carrying the diagnostics and keep the previous module bound
+        - else:
+          - swap the module into PipelineRegistry and record a swapped result
   - if any result was rejected:
     - push the collected diagnostics to DiagnosticSink
 - on error e:

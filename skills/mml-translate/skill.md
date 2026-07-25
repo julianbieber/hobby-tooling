@@ -1,6 +1,6 @@
 ---
 description: Translate an edited .mml spec into a minimal code change that makes the real system match it
-allowed-tools: Read, Grep, Glob, Edit, Write, MultiEdit, Bash(mml-parser:*), Bash(git -C * diff:*), Bash(git -C * show:*), Bash(git -C * cat-file:*), Bash(git -C * ls-files:*), Bash(git -C * rev-parse:*), Bash(git -C * status:*), Bash(git -C * worktree list:*), Bash(git -C * log:*), Bash(git diff:*), Bash(ls:*), Bash(pwd:*), Bash(sbt *), Bash(cargo *), Bash(npm *), Bash(just *), Bash(uv *), Bash(mise exec *), mcp__tree-extract__build_graph, mcp__tree-extract__list_modules, mcp__tree-extract__get_neighbors, mcp__tree-extract__call_path, mcp__tree-extract__get_symbol, mcp__tree-extract__search_symbols, mcp__lsp-mcp__document_symbol, mcp__lsp-mcp__find_references, mcp__lsp-mcp__goto_definition, mcp__lsp-mcp__hover
+allowed-tools: Read, Grep, Glob, Edit, Write, MultiEdit, Bash(hobby-mml-parser:*), Bash(git -C * diff:*), Bash(git -C * show:*), Bash(git -C * cat-file:*), Bash(git -C * ls-files:*), Bash(git -C * rev-parse:*), Bash(git -C * status:*), Bash(git -C * worktree list:*), Bash(git -C * log:*), Bash(git diff:*), Bash(ls:*), Bash(pwd:*), Bash(sbt *), Bash(cargo *), Bash(npm *), Bash(just *), Bash(uv *), Bash(mise exec *), mcp__tree-extract__build_graph, mcp__tree-extract__list_modules, mcp__tree-extract__get_neighbors, mcp__tree-extract__call_path, mcp__tree-extract__get_symbol, mcp__tree-extract__search_symbols, mcp__lsp-mcp__document_symbol, mcp__lsp-mcp__find_references, mcp__lsp-mcp__goto_definition, mcp__lsp-mcp__hover
 ---
 
 Translate an **edited** `.mml` spec into the **code change** that makes the real
@@ -39,7 +39,7 @@ file are the reference.
    **directly in the task dir** — there is no `<system>` subdirectory (the
    `system:` header is now an optional label). The human points at one `.mml` (a
    path, or a `unit` name). Resolve it to the task dir and confirm the file
-   exists. Validate it with `mml-parser <path> --lint` (grammar + linkage: an
+   exists. Validate it with `hobby-mml-parser <path> --lint` (grammar + linkage: an
    `unresolved-source-path` warning means a `source.paths`/`@ path` entry names
    a file that doesn't exist — surface it to the human rather than guessing; in
    full-generation mode intended-but-not-yet-created paths are expected to warn

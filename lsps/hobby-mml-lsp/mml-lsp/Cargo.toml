@@ -1,0 +1,16 @@
+[package]
+name = "hobby-mml-lsp"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "hobby-mml-lsp"
+path = "src/main.rs"
+
+[dependencies]
+mml-parser = { path = "../mml-parser", package = "hobby-mml-parser" }
+tower-lsp = "0.20"
+tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros"] }
+
+[dev-dependencies]
+tempfile = "3"

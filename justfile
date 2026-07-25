@@ -92,9 +92,11 @@ install-mcps:
 install-overview:
     cd tools/hwt-overview && cargo install --path crates/hwt_app
 
-# Build + install the forked MML language server and index
+# Build + install the forked MML language server, parser CLI, and index.
+# The parser CLI matters: the mml-* skills shell out to `hobby-mml-parser --lint`.
 install-mml:
     cd lsps/hobby-mml-lsp && cargo install --path mml-lsp
+    cd lsps/hobby-mml-lsp && cargo install --path mml-parser
     cd tools/hobby-mml-index && cargo install --path .
 
 # Show what's currently linked

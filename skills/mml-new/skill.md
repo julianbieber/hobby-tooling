@@ -1,6 +1,6 @@
 ---
 description: Scaffold a skeleton .mml (Mental Model Language) spec for a new feature — a blank template or a first-pass draft from a rough idea — for me to hand-edit
-allowed-tools: Read, Grep, Glob, Write, Bash(ls:*), Bash(pwd:*), Bash(mml-parser:*), Bash(git -C * rev-parse:*), Bash(git -C * status:*)
+allowed-tools: Read, Grep, Glob, Write, Bash(ls:*), Bash(pwd:*), Bash(hobby-mml-parser:*), Bash(git -C * rev-parse:*), Bash(git -C * status:*)
 ---
 
 Scaffold a skeleton `.mml` spec for a **new** unit of behaviour — one that has
@@ -124,7 +124,7 @@ formatting.
 
 8. **Write, lint, stop.** Write to
    `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/<unit>.mml`,
-   then run `mml-parser <written-path> --lint` and fix every diagnostic until it
+   then run `hobby-mml-parser <written-path> --lint` and fix every diagnostic until it
    exits clean (a skeleton without a `source` block lints clean — the structure
    checks still apply; if you filled in `source`/`@ path`s, an
    `unresolved-source-path` warning means the path is wrong — fix the path,

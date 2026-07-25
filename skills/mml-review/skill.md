@@ -30,7 +30,7 @@ in the plan.
    same detection `resume-journal` uses). With no argument, if the task
    dir holds exactly one `.mml`, use it; if several, list them and ask which.
 2. **Read the spec** in full. Note its four sections (data, behaviour,
-   invariants, and the `source:` block). Run `mml-parser <path> --lint` first
+   invariants, and the `source:` block). Run `hobby-mml-parser <path> --lint` first
    (if installed): a parse error means the spec can't be reviewed — report and
    stop; an `unresolved-source-path` warning means the `source:` linkage is
    broken — flag it in the plan so it gets fixed alongside the change.

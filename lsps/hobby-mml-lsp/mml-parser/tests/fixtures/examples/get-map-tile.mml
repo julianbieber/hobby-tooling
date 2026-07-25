@@ -1,0 +1,57 @@
+system: mosaik-map
+unit: get-map-tile
+kind: endpoint
+method: GET
+source:
+  repo: mosaik_map
+  paths:
+    - src/server/routes.rs
+    - src/server/tile_handler.rs
+    - src/tiles/store.rs
+
+## modules
+TileHandler  — HTTP layer: validates zoom/coords, renders or serves a cached tile as PNG @ src/server/tile_handler.rs
+TileStore    — reads pre-rendered tiles off disk, keyed by zoom/x/y @ src/tiles/store.rs
+TileRenderer — rasterizes a tile from vector source data on a cache miss
+
+## data
+enum TileFormat {
+  png,
+  webp,
+}
+# synthesized: a GET whose args are path + query params, so there is no request type in code
+struct TileRequest {
+  zoom: u8 @path,
+  x: u32 @path,
+  y: u32 @path,
+  format: TileFormat @query,
+  retina: Option<bool> @query,
+}
+struct Tile {
+  bytes: Vec<u8>,
+  format: TileFormat,
+  from_cache: bool,
+}
+
+in:  TileRequest
+out: Tile
+
+## behavior
+- if zoom is outside the supported range:
+  - respond 400 Bad Request naming the valid zoom range
+- if x or y is outside the 2^zoom grid for the given zoom:
+  - respond 400 Bad Request
+- ask TileStore for the tile at zoom/x/y in the requested format
+- if the store has it:
+  - respond 200 OK with the bytes and a long cache-control header
+- else:
+  - render the tile with TileRenderer at 2x resolution when retina is set
+  - if the source data covers no features in this tile's extent:
+    - respond 204 No Content so the client stops asking
+  - else:
+    - write the rendered tile into TileStore and respond 200 OK
+
+## invariants
+- zoom, x, and y are validated before any disk or render work happens
+- a rendered tile is always written to the store before being returned, so a tile is rendered at most once
+- the response format always equals the requested format

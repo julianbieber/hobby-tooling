@@ -1,6 +1,6 @@
 ---
 description: Validate the implementation against its current .mml spec — report where code has drifted from the mental model, without editing anything
-allowed-tools: Read, Grep, Glob, Bash(git -C * diff:*), Bash(git -C * show:*), Bash(git -C * cat-file:*), Bash(git -C * ls-files:*), Bash(git -C * rev-parse:*), Bash(git -C * status:*), Bash(git -C * worktree list:*), Bash(git -C * log:*), Bash(git diff:*), Bash(ls:*), Bash(pwd:*), Bash(sbt *), Bash(cargo *), Bash(npm *), Bash(just *), Bash(uv *), Bash(mise exec *), Bash(mml-parser:*), mcp__tree-extract__build_graph, mcp__tree-extract__list_modules, mcp__tree-extract__get_neighbors, mcp__tree-extract__call_path, mcp__tree-extract__get_symbol, mcp__tree-extract__search_symbols, mcp__lsp-mcp__document_symbol, mcp__lsp-mcp__find_references, mcp__lsp-mcp__goto_definition, mcp__lsp-mcp__hover
+allowed-tools: Read, Grep, Glob, Bash(git -C * diff:*), Bash(git -C * show:*), Bash(git -C * cat-file:*), Bash(git -C * ls-files:*), Bash(git -C * rev-parse:*), Bash(git -C * status:*), Bash(git -C * worktree list:*), Bash(git -C * log:*), Bash(git diff:*), Bash(ls:*), Bash(pwd:*), Bash(sbt *), Bash(cargo *), Bash(npm *), Bash(just *), Bash(uv *), Bash(mise exec *), Bash(hobby-mml-parser:*), mcp__tree-extract__build_graph, mcp__tree-extract__list_modules, mcp__tree-extract__get_neighbors, mcp__tree-extract__call_path, mcp__tree-extract__get_symbol, mcp__tree-extract__search_symbols, mcp__lsp-mcp__document_symbol, mcp__lsp-mcp__find_references, mcp__lsp-mcp__goto_definition, mcp__lsp-mcp__hover
 ---
 
 Validate that the **implementation still matches its `.mml` spec** — a read-only
@@ -72,7 +72,7 @@ Every finding is one of four verdicts. Use them exactly:
      explicitly that the fix is `mml-translate`, not a code bug.
 
    Then check the spec is **structurally well-formed**: run
-   `mml-parser <path> --lint` (grammar + linkage — an `unresolved-source-path`
+   `hobby-mml-parser <path> --lint` (grammar + linkage — an `unresolved-source-path`
    warning is direct drift evidence, see step 2); if the binary is missing,
    validate by eye against the cheat-sheet. A spec that does not parse cannot be
    conformance-checked — report that and stop. If it ends in an ambiguous

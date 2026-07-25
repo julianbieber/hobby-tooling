@@ -1,0 +1,28 @@
+system: shader-runner
+unit: shared-data-imports
+kind: workflow
+source:
+  repo: bevy_shader_runner
+  paths:
+    - src/watch/writer.rs
+
+## modules
+Writer — groups reload results into batches @ src/watch/writer.rs
+
+## data
+use terrain-erosion/mesh-terrain-chunks: ChunkMesh, ChunkCoord
+use get-map-tile: TileFormat
+struct MeshBatch {
+  kind: TileFormat,
+  items: Vec<ChunkMesh>,
+}
+
+in:  Queue<ChunkCoord>
+out: Stream<MeshBatch>
+
+## behavior
+- pull a ChunkCoord from the queue
+- collect ChunkMeshes into a MeshBatch keyed by TileFormat
+
+## invariants
+- every ChunkMesh belongs to exactly one MeshBatch
