@@ -1,0 +1,11 @@
+[package]
+name = "feathers_kit"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+description = "A small reusable UI kit built on top of bevy_feathers and raw bevy_ui."
+
+[dependencies]
+bevy.workspace = true
+bevy_feathers.workspace = true
+bevy_ui_widgets.workspace = true

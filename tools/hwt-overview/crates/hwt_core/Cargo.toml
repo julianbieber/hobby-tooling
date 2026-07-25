@@ -1,0 +1,9 @@
+[package]
+name = "hwt_core"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+description = "Shared non-UI helpers for the hobby worktree dashboard (paths, process spawning, time formatting)."
+
+[dependencies]
+log = "0.4"
