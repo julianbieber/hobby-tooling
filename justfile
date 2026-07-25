@@ -22,10 +22,11 @@ install: bootstrap-config install-chobby install-shell install-hooks install-ski
     @echo ""
     @echo "Optional Rust builds: just install-overview / just install-mml"
 
-# Create ~/.claude-hobby and link the settings file into it
+# Create ~/.claude-hobby and link the settings + account CLAUDE.md into it
 bootstrap-config:
     @mkdir -p "{{CONFIG_DIR}}/commands" "{{CONFIG_DIR}}/hooks" "{{CONFIG_DIR}}/agents" "{{CONFIG_DIR}}/skills"
     @ln -sf "$(pwd)/settings/hobby.settings.json" "{{CONFIG_DIR}}/settings.json"
+    @ln -sf "$(pwd)/dotfiles/claude-md/hobby.CLAUDE.md" "{{CONFIG_DIR}}/CLAUDE.md"
     @echo "Config dir ready: {{CONFIG_DIR}}"
 
 # The `chobby` wrapper — bare claude on the hobby account
@@ -74,11 +75,17 @@ install-claude-md:
     @echo "Note: ~/CLAUDE.md is the WORK repo's file. The hobby account reads"
     @echo "{{CONFIG_DIR}}/CLAUDE.md instead — linked by bootstrap-config."
 
-# MCP servers for the hobby account (generic ones only — no work MCPs)
+# MCP servers for the hobby account (generic ones only — no work MCPs).
+# Binaries come from ~/.cargo/bin, installed out of the work tooling repo. The
+# `julian-` prefix on tree-extract is just its crate name; the tool itself is
+# domain-agnostic.
+#
+# -s user is essential: the default `local` scope binds a server to the single
+# directory it was added from, so hobby projects would see no MCPs at all.
 install-mcps:
-    @CLAUDE_CONFIG_DIR="{{CONFIG_DIR}}" claude mcp add lsp-mcp      -- lsp-mcp
-    @CLAUDE_CONFIG_DIR="{{CONFIG_DIR}}" claude mcp add tree-extract -- tree-extract-mcp
-    @CLAUDE_CONFIG_DIR="{{CONFIG_DIR}}" claude mcp add just-mcp     -- just-mcp
+    @CLAUDE_CONFIG_DIR="{{CONFIG_DIR}}" claude mcp add -s user lsp-mcp      -- lsp-mcp
+    @CLAUDE_CONFIG_DIR="{{CONFIG_DIR}}" claude mcp add -s user tree-extract -- julian-tree-extract-mcp
+    @CLAUDE_CONFIG_DIR="{{CONFIG_DIR}}" claude mcp add -s user just-mcp     -- just_mcp
     @CLAUDE_CONFIG_DIR="{{CONFIG_DIR}}" claude mcp list
 
 # Build + install the hwt-overview dashboard
