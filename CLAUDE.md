@@ -150,8 +150,19 @@ absolute, differs per machine, and does not exist at all on a hobby-only one —
 path fails the whole `hx` build on every other machine. Committing that line was
 what previously required commenting it out per machine. Now it is generated.
 
-A machine with no `tree-sitter-mml` still gets the HMML language server,
-diagnostics and goto-definition; it loses syntax highlighting only.
+That reasoning applied to `.hmml` too, until HMML got its own grammar —
+`lsps/tree-sitter-hmml`, forked from the work `tree-sitter-mml`. Because it ships
+in this repo, `wire-helix` derives its path from the repo root and declares it
+unconditionally, so **every machine highlights `.hmml`**. `TREE_SITTER_MML` now
+only affects the work `.mml` dialect.
+
+Two invariants for that fork: the grammar name, the exported symbol in
+`src/parser.c`, and `name:` in `grammar.js` must all say `hmml` (Helix `dlsym`s
+`tree_sitter_<name>`, and a mismatch silently yields no parser); and
+`src/parser.c` stays committed, so a machine needs only a C compiler — requiring
+the tree-sitter CLI everywhere would reintroduce the portability problem. The
+queries are a real copy, not `; inherits: mml`, which was a second hidden
+dependency on the work grammar.
 
 `just helix-build` rebuilds `hx` with `HELIX_DISABLE_AUTO_GRAMMAR_BUILD=1` (the
 automatic path runs `--grammar fetch` first, which dies on any grammar whose remote

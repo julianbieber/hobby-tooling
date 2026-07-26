@@ -37,6 +37,11 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./helix-paths.sh
 source "$HERE/helix-paths.sh"
 
+# This repo ships HMML's own grammar, so its path is derived rather than
+# discovered: same relative location on every machine that has hobby-tooling.
+HOBBY_ROOT="$(cd "$HERE/.." && pwd)"
+HMML_GRAMMAR="$HOBBY_ROOT/lsps/tree-sitter-hmml"
+
 [ -n "${1:-}" ] && HELIX_REPO="$1"
 
 if ! resolve_repo; then
@@ -143,14 +148,28 @@ fi
 # highlighting — the LSP, diagnostics and goto-definition all still work.
 if grep -q '^name = "hmml"$' "$LANGS"; then
     echo "  languages.toml: hmml language already present"
+    # Migration: hmml used to borrow the work grammar. Now that it has its own,
+    # the borrow is what would keep highlighting broken wherever `mml` is absent.
+    if awk '/^name = "hmml"$/ { h = 1; next } h && /^\[/ { h = 0 } h && /^grammar = "mml"$/ { found = 1 } END { exit !found }' "$LANGS"; then
+        awk '
+          /^name = "hmml"$/ { h = 1; print; next }
+          h && /^\[/ { h = 0 }
+          h && /^grammar = "mml"$/ { next }
+          { print }
+        ' "$LANGS" > "$LANGS.tmp"
+        mv "$LANGS.tmp" "$LANGS"
+        echo "  languages.toml: hmml no longer borrows the work mml grammar"
+        changed=1
+    fi
 else
     cat >> "$LANGS" <<'TOML'
 
 # Hobby specs are `.hmml` and get the forked server, which resolves spec->source
 # against ~/fun_worktrees/<project>/<topic>/<task> rather than the work layout
-# ~/worktrees/<topic>/<task>/<repo>. `grammar = "mml"` reuses the tree-sitter
-# grammar declared in ~/.config/helix/languages.local.toml, so there is no second
-# grammar to build. Machines without that grammar lose highlighting only.
+# ~/worktrees/<topic>/<task>/<repo>. No `grammar =` line: the grammar is `hmml`,
+# hobby-tooling's own fork, declared in ~/.config/helix/languages.local.toml.
+# This used to borrow `grammar = "mml"`, which meant highlighting only worked on a
+# machine that had the work checkout.
 [[language]]
 name = "hmml"
 scope = "source.hmml"
@@ -158,7 +177,6 @@ injection-regex = "hmml"
 file-types = ["hmml"]
 comment-token = "#"
 indent = { tab-width = 2, unit = "  " }
-grammar = "mml"
 language-servers = ["hobby-mml-lsp"]
 TOML
     echo "  languages.toml: added hmml language (routed by the .hmml extension)"
@@ -170,26 +188,37 @@ fi
 # or deleted grammar checkout instead of going stale. Anything you add outside
 # the markers is preserved.
 mkdir -p "$CFG"
-BEGIN='# >>> hobby-tooling: mml grammar (generated — edit wire-helix.sh, not this) >>>'
-END='# <<< hobby-tooling: mml grammar <<<'
+BEGIN='# >>> hobby-tooling: grammars (generated — edit wire-helix.sh, not this) >>>'
+END='# <<< hobby-tooling: grammars <<<'
+# The pre-fork marker, when the block held only the mml grammar.
+OLD_BEGIN='# >>> hobby-tooling: mml grammar (generated — edit wire-helix.sh, not this) >>>'
+OLD_END='# <<< hobby-tooling: mml grammar <<<'
 
 local_body=""
-[ -f "$LOCAL" ] && local_body=$(awk -v b="$BEGIN" -v e="$END" '
-    $0 == b { skip = 1 } !skip { print } $0 == e { skip = 0 }' "$LOCAL")
+[ -f "$LOCAL" ] && local_body=$(awk -v b="$BEGIN" -v e="$END" -v ob="$OLD_BEGIN" -v oe="$OLD_END" '
+    $0 == b || $0 == ob { skip = 1 } !skip { print } $0 == e || $0 == oe { skip = 0 }' "$LOCAL")
 
+# hmml first, and unconditional: it is this repo's own grammar, at a path derived
+# from the repo root, so every machine gets `.hmml` highlighting with no setup.
+grammars=$(printf '[[grammar]]\nname = "hmml"\nsource = { path = "%s" }\n' "$HMML_GRAMMAR")
+echo "  local overlay: hmml grammar -> $HMML_GRAMMAR"
+
+# The work `mml` language is a different dialect with a different grammar, and its
+# checkout is outside the hobby tree — so this one stays conditional.
 if resolve_grammar_mml; then
-    block=$(printf '%s\n[[grammar]]\nname = "mml"\nsource = { path = "%s" }\n%s' \
-        "$BEGIN" "$MML_GRAMMAR_RESOLVED" "$END")
-    if [ -n "$local_body" ]; then
-        new_local=$(printf '%s\n\n%s' "$local_body" "$block")
-    else
-        new_local="$block"
-    fi
-    echo "  local overlay: mml grammar -> $MML_GRAMMAR_RESOLVED"
+    grammars=$(printf '%s\n[[grammar]]\nname = "mml"\nsource = { path = "%s" }\n' \
+        "$grammars" "$MML_GRAMMAR_RESOLVED")
+    echo "  local overlay: mml grammar  -> $MML_GRAMMAR_RESOLVED"
 else
-    new_local="$local_body"
-    echo "  local overlay: no tree-sitter-mml on this machine — no grammar declared"
-    echo "                 (.hmml keeps the LSP; it loses syntax highlighting only)"
+    echo "  local overlay: no tree-sitter-mml — work .mml files lose highlighting here"
+    echo "                 (.hmml is unaffected; it has its own grammar now)"
+fi
+
+block=$(printf '%s\n%s\n%s' "$BEGIN" "$grammars" "$END")
+if [ -n "$local_body" ]; then
+    new_local=$(printf '%s\n\n%s' "$local_body" "$block")
+else
+    new_local="$block"
 fi
 
 # Keep a header on an otherwise-empty overlay so the file explains itself.
@@ -231,23 +260,16 @@ fi
 # Helix resolves queries by *language name*, not grammar, so hmml needs its own
 # directory even though it reuses the mml grammar. Without this, hobby specs
 # parse but render unhighlighted.
-if [ -f "$QUERIES/highlights.scm" ]; then
-    echo "  queries: hmml/highlights.scm already present"
+# Installed from the grammar fork, not inherited. `; inherits: mml` used to be the
+# whole file, which was a second hidden dependency on the work grammar: on a machine
+# without the `mml` language there is nothing to inherit, so specs rendered plain
+# even once a parser existed.
+mkdir -p "$QUERIES"
+if cmp -s "$HMML_GRAMMAR/queries/highlights.scm" "$QUERIES/highlights.scm"; then
+    echo "  queries: hmml/highlights.scm up to date"
 else
-    mkdir -p "$QUERIES"
-    cat > "$QUERIES/highlights.scm" <<'SCM'
-; HMML highlighting.
-;
-; `hmml` is the same grammar as `mml` — it is a separate Helix language so that
-; `.hmml` files reach the forked `hobby-mml-lsp`, which resolves spec->source
-; against ~/fun_worktrees instead of ~/worktrees. Helix looks queries up by
-; *language name*, not by grammar, so without this file hobby specs would render
-; unhighlighted even though `grammar = "mml"` gives them the right parser.
-;
-; Inherit rather than copy, so the two stay in sync.
-; inherits: mml
-SCM
-    echo "  queries: wrote hmml/highlights.scm"
+    cp "$HMML_GRAMMAR/queries/highlights.scm" "$QUERIES/highlights.scm"
+    echo "  queries: installed hmml/highlights.scm from the grammar fork"
     changed=1
 fi
 

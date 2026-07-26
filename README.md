@@ -48,11 +48,15 @@ never committed — for a path that discovery gets wrong.
 
 ### What needs the work machine
 
-Three MCP binaries (`lsp-mcp`, `julian-tree-extract-mcp`, `just_mcp`) and the
-`tree-sitter-mml` grammar are built out of my work tooling repo. On a hobby-only
-machine `install-mcps` skips the missing ones by name, and `.hmml` files keep the
-language server and diagnostics — only syntax highlighting needs the grammar.
-`hwt`, `hcdev`, and all 18 skills work regardless.
+Three MCP binaries (`lsp-mcp`, `julian-tree-extract-mcp`, `just_mcp`) are built out
+of my work tooling repo, and `install-mcps` skips the missing ones by name. `hwt`,
+`hcdev`, and all 18 skills work regardless.
+
+Nothing about HMML needs that checkout any more. `.hmml` gets its language server,
+diagnostics **and** syntax highlighting anywhere, because the grammar
+(`lsps/tree-sitter-hmml`) ships here with its C parser committed — a C compiler is
+the only requirement. `TREE_SITTER_MML` is now purely about the work `.mml`
+dialect.
 
 The language servers no longer do. `claude-lsp`, `claude-skills-lsp`,
 `treesitter-class-lsp` and `path-lsp` are vendored into `lsps/`, so

@@ -1,0 +1,304 @@
+==================
+header fields
+==================
+
+system: google-scraper
+kind: workflow
+
+---
+
+(source_file
+  (field
+    (identifier)
+    (value))
+  (field
+    (identifier)
+    (value)))
+
+==================
+section header and module
+==================
+
+## modules
+QueueWorker — pulls URLs off the queue @ src/queue.py
+
+---
+
+(source_file
+  (section_header
+    (marker)
+    (section_name))
+  (module_entry
+    (identifier)
+    (separator)
+    (responsibility)
+    (path)))
+
+==================
+struct definition
+==================
+
+## data
+struct Offer {
+  seller: String,
+  price: Money,
+}
+
+---
+
+(source_file
+  (section_header
+    (marker)
+    (section_name))
+  (type_definition
+    (identifier)
+    (member
+      (identifier)
+      (type
+        (identifier)))
+    (member
+      (identifier)
+      (type
+        (identifier)))))
+
+==================
+io declaration with generics
+==================
+
+in:  Queue<ProductUrl>
+out: Stream<Offer>
+
+---
+
+(source_file
+  (io_declaration
+    (type
+      (identifier)
+      (type
+        (identifier))))
+  (io_declaration
+    (type
+      (identifier)
+      (type
+        (identifier)))))
+
+==================
+behavior control flow
+==================
+
+## behavior
+- for each product url:
+  - if sessions < Y:
+    - use an empty set
+  - else:
+    - pick a session
+
+---
+
+(source_file
+  (section_header
+    (marker)
+    (section_name))
+  (bullet
+    (control_flow
+      (keyword)
+      (prose)))
+  (bullet
+    (control_flow
+      (keyword)
+      (prose)))
+  (bullet
+    (prose))
+  (bullet
+    (control_flow
+      (keyword)
+      (prose)))
+  (bullet
+    (prose)))
+
+==================
+comment
+==================
+
+# this is a comment
+system: x
+
+---
+
+(source_file
+  (comment)
+  (field
+    (identifier)
+    (value)))
+
+==================
+struct field parameter source
+==================
+
+struct Req {
+  contract_id: String @path,
+  identifiers: Vec<String> @query,
+}
+
+---
+
+(source_file
+  (type_definition
+    (identifier)
+    (member
+      (identifier)
+      (type
+        (identifier))
+      (identifier))
+    (member
+      (identifier)
+      (type
+        (identifier)
+        (type
+          (identifier)))
+      (identifier))))
+
+==================
+module with path and spec ref
+==================
+
+## modules
+Dispatcher — routes tasks @ src/d.py @ spec google-scraper/scrape-product-queue
+Writer — persists results @ spec write-results
+
+---
+
+(source_file
+  (section_header
+    (marker)
+    (section_name))
+  (module_entry
+    (identifier)
+    (separator)
+    (responsibility)
+    (path)
+    (spec_annotation
+      (spec_keyword)
+      (spec_ref)))
+  (module_entry
+    (identifier)
+    (separator)
+    (responsibility)
+    (spec_annotation
+      (spec_keyword)
+      (spec_ref))))
+
+==================
+behavior and invariant spec refs
+==================
+
+## behavior
+- enqueue a scrape task @ spec scrape-product-queue
+- for each url: @ spec google-scraper/fetch-url
+
+## invariants
+- every failure reaches the tribunal @ spec monitoring-pipeline/process-tribunal-task
+
+---
+
+(source_file
+  (section_header
+    (marker)
+    (section_name))
+  (bullet
+    (prose)
+    (spec_annotation
+      (spec_keyword)
+      (spec_ref)))
+  (bullet
+    (control_flow
+      (keyword)
+      (prose))
+    (spec_annotation
+      (spec_keyword)
+      (spec_ref)))
+  (section_header
+    (marker)
+    (section_name))
+  (bullet
+    (prose)
+    (spec_annotation
+      (spec_keyword)
+      (spec_ref))))
+
+==================
+spec-like path is not a spec ref
+==================
+
+## modules
+Foo — reads config @ spec_utils/x.py
+
+---
+
+(source_file
+  (section_header
+    (marker)
+    (section_name))
+  (module_entry
+    (identifier)
+    (separator)
+    (responsibility)
+    (path)))
+
+==================
+where bindings
+==================
+
+## behavior
+- spawn X children
+where:
+  X = 4 @ GOOFY_NUM_CHILDREN
+  N = 10
+
+---
+
+(source_file
+  (section_header
+    (marker)
+    (section_name))
+  (bullet
+    (prose))
+  (where_clause)
+  (binding
+    (identifier)
+    (binding_value)
+    (path))
+  (binding
+    (identifier)
+    (binding_value)))
+
+==================
+type imports (use)
+==================
+
+## data
+use google-scraper/scrape-product-queue: Offer, ProductUrl
+use get-product-identifier-mapping: InputType
+struct Batch {
+  item: Offer,
+}
+
+---
+
+(source_file
+  (section_header
+    (marker)
+    (section_name))
+  (use_import
+    (spec_ref)
+    (identifier)
+    (identifier))
+  (use_import
+    (spec_ref)
+    (identifier))
+  (type_definition
+    (identifier)
+    (member
+      (identifier)
+      (type
+        (identifier)))))

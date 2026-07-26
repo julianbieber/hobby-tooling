@@ -144,10 +144,23 @@ else
     warn "no Helix checkout found" "just local-paths, set HELIX_REPO"
 fi
 
+# hmml owns its grammar, so this one is about the WORK `.mml` dialect only.
 if resolve_grammar_mml; then
     ok "tree-sitter-mml at $MML_GRAMMAR_RESOLVED"
 else
-    warn "no tree-sitter-mml — .hmml has no highlighting" "just local-paths"
+    warn "no tree-sitter-mml — work .mml loses highlighting" "just local-paths"
+fi
+HMML_GRAMMAR_DIR="$MAIN_CHECKOUT/lsps/tree-sitter-hmml"
+if [ -f "$HMML_GRAMMAR_DIR/src/parser.c" ]; then
+    # Built by `hx --grammar build` into the checkout's runtime; without the .so
+    # the language still works, it just renders unhighlighted.
+    if resolve_repo && [ -f "$HELIX_REPO_RESOLVED/runtime/grammars/hmml.so" ]; then
+        ok "hmml grammar built"
+    else
+        warn "hmml grammar not built — .hmml renders plain" "hx --grammar build"
+    fi
+else
+    bad "lsps/tree-sitter-hmml missing" "git pull"
 fi
 
 # Derived, so it cannot go stale the way a hand-written table does.

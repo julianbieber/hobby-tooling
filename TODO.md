@@ -31,8 +31,15 @@ tooling regardless — `just local-paths` reports what this machine resolved, an
       locations.
 - [x] **`wire-helix` no longer bails out on hobby-only machines.** It used to skip
       everything when the `mml` language was absent, which left those machines with
-      no HMML server at all. `.hmml` now always gets the language server; only
-      highlighting depends on the grammar.
+      no HMML server at all. `.hmml` now always gets the language server.
+- [x] **`.hmml` no longer loses highlighting anywhere.** HMML borrowed the work
+      grammar via `grammar = "mml"`, and its queries were a bare `; inherits: mml` —
+      two dependencies on a checkout hobby-only machines do not have. It now has its
+      own fork, `lsps/tree-sitter-hmml`, whose path `wire-helix` derives from the
+      repo root, so it is declared unconditionally. `src/parser.c` is committed, so
+      building needs a C compiler and nothing else. `TREE_SITTER_MML` is now only
+      about the work `.mml` dialect.
+      Still v1 in shape, so v2 sections render plainly — but that is now ours to fix.
 - [x] **Every personal language server but one is now buildable anywhere.**
       `claude-lsp`, `claude-skills-lsp`, `treesitter-class-lsp` and `path-lsp` were
       copied into `lsps/`; `just install-lsps` builds those four plus a cloned
@@ -100,11 +107,14 @@ In order — the first item has to happen *before* the pull, or the pull fails.
       `bevy_asset_lsp`, which matters most there since hobby projects are Bevy.
       This is the step that was impossible before: none of them needed the work
       checkout any more.
+- [ ] **`hx --grammar build`** (or `just helix-build`) once, to compile the
+      vendored `hmml` grammar. Needs only a C compiler. Individual failures for
+      other grammars are expected and harmless — `gotmpl`'s remote is gone.
 - [ ] **`just doctor`** should come back with only the login gap. Expected
       non-gaps: `tree-sitter-mml` reports missing (correct — no work checkout, so
-      `.hmml` keeps its language server and loses only highlighting), and
-      `helix-servers` lists `static_completions_lsp` and `mml-lsp` as missing
-      (also correct — Helix ignores a server whose binary is absent).
+      only the *work* `.mml` dialect loses highlighting; `.hmml` has its own
+      grammar), and `helix-servers` lists `static_completions_lsp` and `mml-lsp` as
+      missing (also correct — Helix ignores a server whose binary is absent).
 - [ ] **`chobby`, then `/login`** with the private account. Still the one step
       that cannot be scripted, and the last real gap in `just doctor`.
 
