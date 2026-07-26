@@ -211,7 +211,7 @@ pub struct Task {
     /// removed but the metadata was kept — see [`Task::present`].
     pub dir: PathBuf,
     /// Whether the worktree task directory exists on disk. `false` for a removed-but-remembered
-    /// task (its metadata still lives in the notes repo; use `wt restore` to re-create it).
+    /// task (its metadata still lives in the notes repo; use `hwt restore` to re-create it).
     pub present: bool,
     /// Whether the task is marked done in its `task.json`.
     pub done: bool,
@@ -438,7 +438,8 @@ fn write_pr_cache_at(path: &Path, cache: &std::collections::HashMap<String, Cach
     }
 }
 
-/// Resolve a task's notes location: either `notes/TOPIC/TASK/` (dir) or `notes/TOPIC/TASK.md`.
+/// Resolve a task's notes location: either `notes/PROJECT/TOPIC/TASK/` (dir) or
+/// `notes/PROJECT/TOPIC/TASK.md`.
 pub fn notes_path(id: &TaskId) -> Option<PathBuf> {
     let base = notes_root().join(&id.project).join(&id.topic);
     let dir = notes_root().join(id.rel());
@@ -517,10 +518,10 @@ fn collect_tasks(
     }
 }
 
-/// Build the task model from the union of two sources: live worktree dirs under `~/worktrees` and
-/// notes dirs carrying a `task.json`. The union keeps live tasks visible (even before migration)
-/// while surfacing removed-but-remembered tasks from their retained metadata. Git status is left
-/// unloaded (filled in async).
+/// Build the task model from the union of two sources: live worktree dirs under `~/fun_worktrees`
+/// and notes dirs carrying a `task.json`. The union keeps live tasks visible (even before
+/// migration) while surfacing removed-but-remembered tasks from their retained metadata. Git
+/// status is left unloaded (filled in async).
 ///
 /// A hobby task is a single repo, so `repos` holds at most one entry: the task
 /// directory itself, named after its project. Keeping it a vector rather than a
@@ -603,21 +604,23 @@ pub fn scan() -> Worktrees {
     Worktrees { topics }
 }
 
-
-/// A task's `task.json` in the notes repo: done/blocked state and the recorded repo list. All
-/// fields default so a missing or partial file is tolerated. Written by the `wt`/`cdev` commands;
-/// this app reads it (and edits `done` via [`toggle_done`]).
+/// A task's `task.json` in the notes repo: `{ done, blocked }` and nothing else. Both fields
+/// default so a missing or partial file is tolerated, and both are always written back — `hwt`
+/// emits `"blocked": null` when a task is unblocked, and these files are tracked in the notes
+/// repo, so omitting the key would make every dashboard toggle a spurious diff. There is no
+/// `repos` field: the project is in the path and a hobby task is exactly one repo.
+///
+/// Written by the `hwt`/`hcdev` commands; this app reads it (and edits `done` via
+/// [`toggle_done`]).
 #[derive(Debug, Default, serde::Serialize, Deserialize)]
 struct TaskMeta {
     #[serde(default)]
     done: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    blocked: Option<Block>,
     #[serde(default)]
-    repos: Vec<String>,
+    blocked: Option<Block>,
 }
 
-/// Path to a task's `task.json` in the notes tree: `notes/TOPIC/TASK/task.json`.
+/// Path to a task's `task.json` in the notes tree: `notes/PROJECT/TOPIC/TASK/task.json`.
 pub fn meta_path(id: &TaskId) -> PathBuf {
     notes_root().join(id.rel()).join("task.json")
 }
@@ -625,8 +628,11 @@ pub fn meta_path(id: &TaskId) -> PathBuf {
 /// Read a task's `task.json`. Returns the all-default meta if the file is absent, empty, or
 /// malformed — a bad file must never abort the scan. Mirrors [`read_prs`].
 fn read_meta(id: &TaskId) -> TaskMeta {
-    let path = meta_path(id);
-    let Ok(content) = std::fs::read_to_string(&path) else {
+    read_meta_at(&meta_path(id))
+}
+
+fn read_meta_at(path: &Path) -> TaskMeta {
+    let Ok(content) = std::fs::read_to_string(path) else {
         return TaskMeta::default();
     };
     if content.trim().is_empty() {
@@ -641,18 +647,20 @@ fn read_meta(id: &TaskId) -> TaskMeta {
     }
 }
 
-/// Write a task's `task.json` (creating the notes dir if needed). Never touches git.
-fn write_meta(id: &TaskId, meta: &TaskMeta) -> std::io::Result<()> {
-    let path = meta_path(id);
+/// Write a task's `task.json`, creating the notes dir if needed. Never touches git.
+///
+/// Serializes with `to_string_pretty` and no trailing newline — byte-for-byte what nushell's
+/// `to json --indent 2 | save` produces in `hwt`, so the two writers never fight over a file.
+fn write_meta_at(path: &Path, meta: &TaskMeta) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let json = serde_json::to_string_pretty(meta)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    std::fs::write(&path, json)
+    std::fs::write(path, json)
 }
 
-/// Path to a task's `prs.json` in the notes tree: `notes/TOPIC/TASK/prs.json`.
+/// Path to a task's `prs.json` in the notes tree: `notes/PROJECT/TOPIC/TASK/prs.json`.
 pub fn prs_path(id: &TaskId) -> PathBuf {
     notes_root().join(id.rel()).join("prs.json")
 }
@@ -676,7 +684,7 @@ fn read_prs(id: &TaskId) -> Vec<Pr> {
     }
 }
 
-/// Path to a task's `subtasks.json` in the notes tree: `notes/TOPIC/TASK/subtasks.json`.
+/// Path to a task's `subtasks.json` in the notes tree: `notes/PROJECT/TOPIC/TASK/subtasks.json`.
 pub fn subtasks_path(id: &TaskId) -> PathBuf {
     notes_root().join(id.rel()).join("subtasks.json")
 }
@@ -774,9 +782,13 @@ pub fn read_pr_status(url: &str) -> (PrStatus, Option<u64>, Option<String>) {
 /// Toggle the `done` flag in a task's `task.json`, preserving its other fields. Returns the new
 /// done state. Creates the file (and notes dir) if absent.
 pub fn toggle_done(id: &TaskId) -> std::io::Result<bool> {
-    let mut meta = read_meta(id);
+    toggle_done_at(&meta_path(id))
+}
+
+fn toggle_done_at(path: &Path) -> std::io::Result<bool> {
+    let mut meta = read_meta_at(path);
     meta.done = !meta.done;
-    write_meta(id, &meta)?;
+    write_meta_at(path, &meta)?;
     Ok(meta.done)
 }
 
@@ -956,6 +968,82 @@ mod tests {
         assert_eq!(gone.repos[0].path, gone.dir);
 
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// `task.json` is tracked in the notes repo and has two writers, so a toggle must produce
+    /// the exact bytes `hwt` would have written — otherwise every dashboard click shows up as a
+    /// schema diff. Asserted at the byte level so a re-added `repos` field, a dropped
+    /// `"blocked": null`, or a changed indent all fail here.
+    ///
+    /// Goes through `toggle_done_at` rather than `toggle_done` to stay off the process-global
+    /// `HOME` that `scan_unions_across_projects` owns.
+    #[test]
+    fn toggle_done_round_trips_hwt_nu_bytes() {
+        let dir = std::env::temp_dir().join("hwt_overview_meta_fixture");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("nested/task.json");
+
+        // Byte-for-byte what `{ done: false, blocked: null } | to json --indent 2 | save` writes:
+        // two-space indent, `blocked` present and null, no trailing newline.
+        let undone = "{\n  \"done\": false,\n  \"blocked\": null\n}";
+        let done = "{\n  \"done\": true,\n  \"blocked\": null\n}";
+
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, undone).unwrap();
+
+        assert!(toggle_done_at(&path).unwrap(), "toggled to done");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            done,
+            "only the done flag may change"
+        );
+
+        assert!(!toggle_done_at(&path).unwrap(), "toggled back to not-done");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            undone,
+            "a round trip leaves the file exactly as hwt wrote it"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Toggling done must not disturb a block. `hwt block` with no flags writes `"blocked": {}`,
+    /// which has to survive the round trip as `{}` and not become `null` or vanish.
+    #[test]
+    fn toggle_done_preserves_block() {
+        let dir = std::env::temp_dir().join("hwt_overview_meta_block_fixture");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("task.json");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        std::fs::write(
+            &path,
+            r#"{"done": false, "blocked": {"until": "2030-01-01", "reason": "waiting"}}"#,
+        )
+        .unwrap();
+
+        assert!(toggle_done_at(&path).unwrap());
+        let back = read_meta_at(&path);
+        assert!(back.done);
+        let block = back.blocked.expect("block preserved");
+        assert_eq!(block.until.as_deref(), Some("2030-01-01"));
+        assert_eq!(block.reason.as_deref(), Some("waiting"));
+        // Nested indent matches nushell's `to json --indent 2` (four spaces one level in).
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "{\n  \"done\": true,\n  \"blocked\": {\n    \"until\": \"2030-01-01\",\n    \"reason\": \"waiting\"\n  }\n}"
+        );
+
+        // An empty block (bare `hwt block`) stays an empty object, not null.
+        std::fs::write(&path, r#"{"done": false, "blocked": {}}"#).unwrap();
+        toggle_done_at(&path).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "{\n  \"done\": true,\n  \"blocked\": {}\n}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Only merged/closed are terminal (safe to cache); open/draft can still change and
