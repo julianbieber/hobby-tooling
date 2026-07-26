@@ -1,0 +1,177 @@
+/**
+ * @file Tree-sitter grammar for HMML (the hobby Mental Model Language dialect) —
+ *   syntax highlighting only. Semantics (diagnostics, references, …) live in the
+ *   `hobby-mml-lsp` server; this grammar exists purely so an editor can colour a
+ *   `.hmml` spec. It is deliberately loose: it recognises the shape of each line
+ *   well enough to assign highlight groups, not to fully validate the language.
+ *
+ *   Forked from the work `tree-sitter-mml`, which HMML used to borrow via
+ *   `grammar = "mml"`. That borrow meant highlighting only worked on a machine
+ *   with the work checkout. This copy lives in hobby-tooling, so every machine
+ *   has it — and, being ours, it can grow the v2 sections (`## components`,
+ *   `## systems`, access blocks) that the v1 grammar renders plainly.
+ *   Known limit: `prose`/`path` stop at `@` (so `@ spec` annotations lex as
+ *   their own nodes); a literal mid-prose `@` not starting an annotation
+ *   produces a local ERROR node, which is acceptable for colouring.
+ * @license MIT
+ */
+
+/// <reference types="tree-sitter-cli/dsl" />
+// @ts-check
+
+function sepBy1(sep, rule) {
+  return seq(rule, repeat(seq(sep, rule)));
+}
+function sepBy(sep, rule) {
+  return optional(sepBy1(sep, rule));
+}
+
+module.exports = grammar({
+  name: "hmml",
+
+  word: ($) => $.identifier,
+
+  // Newlines are insignificant to the tree shape; per-line meaning comes from
+  // the leading token of each item, and free-text tokens stop at newlines.
+  extras: ($) => [/[ \t\r\n]/],
+
+  rules: {
+    source_file: ($) => repeat($._item),
+
+    _item: ($) =>
+      choice(
+        $.comment,
+        $.section_header,
+        $.io_declaration,
+        $.use_import,
+        $.type_definition,
+        $.module_entry,
+        $.where_clause,
+        $.binding,
+        $.field,
+        $.bullet,
+      ),
+
+    // A single `#` starts a comment; `##` is a section header (handled below).
+    comment: ($) => token(seq("#", /[^#\n]/, /[^\n]*/)),
+
+    section_header: ($) =>
+      seq(alias(token(/##+/), $.marker), field("name", $.section_name)),
+    section_name: ($) =>
+      choice("modules", "data", "behavior", "invariants"),
+
+    // `in:` / `out:` name the unit's input/output type.
+    io_declaration: ($) =>
+      seq(field("direction", choice("in", "out")), ":", field("type", $.type)),
+
+    // Type import: `use system/unit: Type, Type` (grammar §4.5). The ref reuses
+    // the `spec_ref` node (same shape/highlight as an `@ spec` target); the
+    // imported type names are plain identifiers after the `:`.
+    use_import: ($) =>
+      seq(
+        "use",
+        field(
+          "ref",
+          alias(
+            token(
+              prec(2, /[A-Za-z][A-Za-z0-9._-]*(\/[A-Za-z][A-Za-z0-9._-]*)?/),
+            ),
+            $.spec_ref,
+          ),
+        ),
+        ":",
+        sepBy1(",", field("type", $.identifier)),
+      ),
+
+    // Header key/value: `system: …`, `unit: …`, `kind: …`, `repo: …`.
+    field: ($) =>
+      seq(field("key", $.identifier), ":", optional(field("value", $.value))),
+    value: ($) => token(prec(1, /[^\n]+/)),
+
+    // `struct`/`enum` block. Members are treated uniformly (struct fields carry
+    // a `: Type`, enum variants do not) — good enough for colouring.
+    type_definition: ($) =>
+      seq(
+        field("keyword", choice("struct", "enum")),
+        field("name", $.identifier),
+        "{",
+        repeat(choice($.member, ",")),
+        "}",
+      ),
+    member: ($) =>
+      seq(
+        field("name", $.identifier),
+        optional(seq(":", field("type", $.type))),
+        // Optional endpoint parameter source: `field: Type @query` (grammar §4.1).
+        optional(seq("@", field("source", $.identifier))),
+      ),
+
+    type: ($) =>
+      seq(
+        field("name", $.identifier),
+        optional(seq("<", sepBy(",", $.type), ">")),
+      ),
+
+    // The `where:` marker opening the binding block (grammar §5.3). Its own rule
+    // (not a generic `field`) so its absent value can't swallow the first binding
+    // line across the newline.
+    where_clause: ($) => prec(2, seq("where", ":")),
+
+    // A `where:` binding: `Symbol = value [@ config-source]` (grammar §5.3).
+    binding: ($) =>
+      seq(
+        field("symbol", $.identifier),
+        "=",
+        optional(field("value", $.binding_value)),
+        optional(seq("@", field("config", $.path))),
+      ),
+    binding_value: ($) => token(prec(2, /[^@\n]+/)),
+
+    // `Name — responsibility [@ path] [@ spec ref]` (em dash or `--`).
+    module_entry: ($) =>
+      seq(
+        field("name", $.identifier),
+        $.separator,
+        optional(field("responsibility", $.responsibility)),
+        optional(seq("@", field("path", $.path))),
+        optional($.spec_annotation),
+      ),
+    separator: ($) => token(choice("—", "--")),
+    responsibility: ($) => token(prec(1, /[^@\n]+/)),
+    path: ($) => token(prec(1, /[^@\n]+/)),
+
+    // Cross-spec reference: `@ spec system/unit` or `@ spec unit` (grammar
+    // §5.4). The keyword token requires trailing whitespace and outranks the
+    // free-text tokens, so `@ spec_utils/x.py` still lexes as a `path`.
+    spec_annotation: ($) =>
+      seq(
+        "@",
+        alias(token(prec(2, /spec[ \t]+/)), $.spec_keyword),
+        field(
+          "target",
+          alias(
+            token.immediate(
+              prec(2, /[A-Za-z][A-Za-z0-9._-]*(\/[A-Za-z][A-Za-z0-9._-]*)?/),
+            ),
+            $.spec_ref,
+          ),
+        ),
+      ),
+
+    // Behavior / invariant bullet. Leading control-flow keyword is highlighted;
+    // the rest of the line is prose. The keyword token outranks `prose` so it
+    // wins at the start of a step.
+    bullet: ($) =>
+      seq(
+        "-",
+        optional(choice($.control_flow, $.prose)),
+        optional($.spec_annotation),
+      ),
+    control_flow: ($) => seq(field("keyword", $.keyword), optional($.prose)),
+    keyword: ($) =>
+      token(prec(3, choice("if", "while", "else", "try", "for each", "on error"))),
+    prose: ($) => token(prec(1, /[^@\n]+/)),
+
+    identifier: ($) => /[A-Za-z_][A-Za-z0-9_]*/,
+  },
+});

@@ -60,30 +60,34 @@ docs and parser cannot drift:
 
 ## Helix routing
 
-Two binaries on `PATH` would normally fight, since Helix maps a language to one
-server. A second language entry routed by path glob solves it — in
-`~/.config/helix/languages.toml`:
+Two binaries on `PATH` would fight, since Helix maps a language to one server.
+The file extension keeps them apart: `.hmml` is its own language, `.mml` stays
+the work one. No path globs, no block ordering. `just wire-helix` writes this
+into the Helix checkout:
 
 ```toml
 [language-server]
 hobby-mml-lsp = { command = "hobby-mml-lsp" }
 
-# BEFORE the plain `mml` entry — a glob file-type is more specific than the bare
-# "mml" extension.
 [[language]]
-name = "mml-hobby"
+name = "hmml"
 scope = "source.hmml"
-file-types = [{ glob = "**/hobby-mimisbrunnr/notes/**/*.hmml" }]
-grammar = "mml"                       # reuse the existing tree-sitter grammar
+file-types = ["hmml"]
 language-servers = ["hobby-mml-lsp"]
 ```
 
-Helix resolves highlight queries by **language name**, not grammar, so
-`~/.config/helix/runtime/queries/mml-hobby/highlights.scm` exists and contains
-just `; inherits: mml`. Without it hobby specs parse but render unhighlighted.
+There is no `grammar =` line: HMML has its own grammar, `lsps/tree-sitter-hmml`,
+declared in the generated `~/.config/helix/languages.local.toml`. It used to
+borrow `grammar = "mml"`, which quietly made highlighting depend on the work
+checkout being present.
 
-Verify with `hx --health mml-hobby` and `hx --health mml` — each should bind its
-own server, and both should show a tree-sitter parser and highlight queries.
+Helix resolves highlight queries by **language name**, not grammar, so
+`runtime/queries/hmml/highlights.scm` must exist; `wire-helix` installs it from
+the grammar fork. (It used to contain only `; inherits: mml` — a second hidden
+dependency on the work grammar.)
+
+Verify with `hx --health hmml` and `hx --health mml` — each should bind its own
+server, and both should show a tree-sitter parser and highlight queries.
 
 ## Installation
 
@@ -93,12 +97,13 @@ just install-mml     # installs hobby-mml-lsp, hobby-mml-parser, hobby-mml-index
 
 ## Known Limitations
 
-- **Depends on the work repo for the tree-sitter grammar.** `grammar = "mml"`
-  points at `team-constellation-tooling/lsps/tree-sitter-mml`. Moving or
-  deleting that checkout breaks HMML highlighting. The v2 sections
-  (`## components`, `## systems`, …) parse and lint fine but are highlighted by
-  a v1 tree-sitter grammar, so a section header may render plainly. Cosmetic
-  only — every diagnostic comes from `hobby-mml-parser`, not the grammar.
+- **The grammar is still v1 in shape.** `lsps/tree-sitter-hmml` is a fork of the
+  work `tree-sitter-mml`, so v2 sections (`## components`, `## systems`, …) parse
+  as generic lines and may render plainly. Cosmetic only — every diagnostic comes
+  from `hobby-mml-parser`, not the grammar. Now that the fork is ours, adding
+  those rules no longer means editing a grammar shared with work `.mml` files.
+  (Highlighting itself is no longer a portability problem: the grammar ships in
+  this repo with its C parser committed, so every machine has it.)
 - Upstream `mml-parser` fixes must be cherry-picked by hand, and v2 has moved
   the two apart far enough that this is real work rather than a patch apply.
 - The built-in Bevy name lists (`BUILTIN_COMPONENTS`, `BUILTIN_RESOURCES`,

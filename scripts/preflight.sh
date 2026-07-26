@@ -7,6 +7,10 @@
 
 set -uo pipefail
 
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./helix-paths.sh
+source "$HERE/helix-paths.sh"
+
 miss_required=0
 
 req() {
@@ -42,6 +46,21 @@ opt cargo     "builds the Rust extras"      "no hwt-overview, no MML tooling"
 opt zk        "note search"                 "/zk-notes fails"
 
 echo ""
+echo "Discovered paths (override in ~/.config/hobby-tooling/paths.env — \`just local-paths\`):"
+if resolve_repo; then
+    printf '  \033[32m✓\033[0m %-26s %s \033[2m(via %s)\033[0m\n' \
+        "helix checkout" "$HELIX_REPO_RESOLVED" "$HELIX_REPO_WHY"
+else
+    printf '  \033[33m-\033[0m %-26s \033[33mnot found — Helix wiring skipped\033[0m\n' "helix checkout"
+fi
+if resolve_grammar_mml; then
+    printf '  \033[32m✓\033[0m %-26s %s\n' "tree-sitter-mml" "$MML_GRAMMAR_RESOLVED"
+else
+    printf '  \033[33m-\033[0m %-26s \033[33mnot found — .hmml keeps the LSP, loses highlighting\033[0m\n' \
+        "tree-sitter-mml"
+fi
+
+echo ""
 echo "Work-repo dependencies (hobby-only machines can skip these):"
 for b in lsp-mcp julian-tree-extract-mcp just_mcp; do
     if command -v "$b" >/dev/null 2>&1; then
@@ -50,11 +69,6 @@ for b in lsp-mcp julian-tree-extract-mcp just_mcp; do
         printf '  \033[33m-\033[0m %-26s \033[33mnot on PATH — that MCP is skipped\033[0m\n' "$b"
     fi
 done
-if [ -f "${HELIX_REPO:-$HOME/fun_repos/helix}/languages.toml" ]; then
-    printf '  \033[32m✓\033[0m %-26s Helix config repo\n' "helix checkout"
-else
-    printf '  \033[33m-\033[0m %-26s \033[33mnot found — Helix wiring skipped\033[0m\n' "helix checkout"
-fi
 
 echo ""
 if [ "$miss_required" -ne 0 ]; then
