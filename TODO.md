@@ -29,6 +29,13 @@ tooling regardless — `just local-paths` reports what this machine resolved, an
       tries `$HELIX_REPO`, then the `~/.config/helix/runtime` symlink (which already
       points at the checkout before anything is installed), then the well-known
       locations.
+- [x] **`helix-paths.sh repo` no longer exits 1 on success.** Its `repo` branch ended
+      with `[ "${2:-}" = "--why" ] && printf ...`, so without `--why` that false test
+      *was* the script's exit status: the correct path on stdout, and a failure code
+      behind it. Every other caller sources the file and calls `resolve_repo`
+      directly, so only `just helix-build` ever saw it — and it saw it as
+      "No Helix checkout found", on a machine where the checkout was resolving fine.
+      Now an `if`, so the branch always ends 0.
 - [x] **`wire-helix` no longer bails out on hobby-only machines.** It used to skip
       everything when the `mml` language was absent, which left those machines with
       no HMML server at all. `.hmml` now always gets the language server.
@@ -91,52 +98,52 @@ Done, other than the two optional items at the end.
 
 ## On the desktop
 
-In order — the first item has to happen *before* the pull, or the pull fails.
+Done — `just doctor` reports **no gaps** as of 2026-07-26.
 
-- [ ] **Drop the local edit to `~/fun_repos/helix/languages.toml` before pulling.**
-      That machine has the `[[grammar]] name = "mml"` block commented out as an
-      uncommitted change; the incoming commit deletes those same lines, so the pull
-      will conflict. The edit is obsolete — the block is generated per machine now —
-      so discard it: `git -C ~/fun_repos/helix checkout -- languages.toml`.
-- [ ] **Pull both repos.** `hobby-tooling` on `main`, `helix` on `custom`.
-- [ ] **`just bootstrap`.** Idempotent, and it now links the new scripts, writes
-      `~/.config/hobby-tooling/paths.env`, and regenerates the Helix config. No
-      `HELIX_REPO` needs setting: the checkout is already at a well-known location
-      there, and discovery finds it.
-- [ ] **`just install-lsps`** — the four vendored servers plus a cloned
-      `bevy_asset_lsp`, which matters most there since hobby projects are Bevy.
-      This is the step that was impossible before: none of them needed the work
-      checkout any more.
-- [ ] **`hx --grammar build`** (or `just helix-build`) once, to compile the
-      vendored `hmml` grammar. Needs only a C compiler. Individual failures for
-      other grammars are expected and harmless — `gotmpl`'s remote is gone.
-- [ ] **`just doctor`** should come back with only the login gap. Expected
-      non-gaps: `tree-sitter-mml` reports missing (correct — no work checkout, so
-      only the *work* `.mml` dialect loses highlighting; `.hmml` has its own
-      grammar), and `helix-servers` lists `static_completions_lsp` and `mml-lsp` as
-      missing (also correct — Helix ignores a server whose binary is absent).
-- [ ] **`chobby`, then `/login`** with the private account. Still the one step
-      that cannot be scripted, and the last real gap in `just doctor`.
-
-Independent of the above:
-
-- [ ] **Install `zellij`** — without it `hcdev` cannot open dev sessions. The
-      config (`~/.config/zellij/config.kdl`) is already there and this repo
-      symlinks `layouts/hobby-dev.kdl` in, so the binary is the whole job.
+- [x] **Dropped the local edit, pulled both repos.** `hobby-tooling` on `main` at
+      `3e9507c`, `helix` on `custom` at `582a2dfa`, both clean.
+- [x] **`just bootstrap`** — config dir, skills, hooks, shell modules, `paths.env`
+      and the generated Helix config are all in place. Discovery found the checkout
+      through the `~/.config/helix/runtime` symlink; no `HELIX_REPO` was needed.
+- [x] **`just install-lsps`** — all five built and on `PATH`: `claude-lsp`,
+      `claude-skills-lsp`, `treesitter-class-lsp`, `path_lsp`, `bevy_asset_lsp`.
+      The step that was impossible before the vendoring.
+- [x] **Grammars built.** 114 built on the first pass, `hmml` among them. The six
+      failures (`gotmpl`, `php`, `ocaml`, `ocaml-interface`, `svelte`, `fsharp`)
+      are the expected missing-source ones and are harmless.
+- [x] **Rebuilt `hx` — and it turned out to be mandatory here, not optional.**
+      The installed binary was built at `20c1dbde`, whose compiled-in
+      `languages.toml` still had `grammar = "mml"` on the `hmml` language. Helix
+      *merges* the user file over that one, and a merge can add or override a key
+      but **cannot delete one** — so `hmml` kept resolving to the work `mml`
+      grammar, which does not exist here, and `hx --health hmml` reported
+      `Tree-sitter parser: None` even with `hmml.so` built and in place. Only
+      rebuilding from `582a2dfa` (where the line is gone) fixed it. Generalise:
+      when a change to the checkout's `languages.toml` **removes** a key, every
+      machine needs `just helix-build`; the merged user config only carries
+      additions.
+- [x] **`chobby` + `/login`** — logged in to the private account.
+- [x] **Install `zellij`** — 0.44.3, already present via cargo, and the
+      `hobby-dev.kdl` layout is linked. `hcdev` can open sessions.
 - [x] **Install `gh`** — done, 2.96.0, authenticated as `julianbieber`. `/pr-create`
       and the `/gh-issue-*` skills work now.
-- [ ] **Review `git -C ~ diff .config/helix/languages.toml`** and commit what you
-      want. Heads up: the previously installed copy (143,694 B, mtime 2025-12-04) was
-      overwritten by `wire-helix` before being backed up, and it held ~26 KB of edits
-      never committed on top of the 2025-03-05 commit. No stash, no dangling blob, no
-      snapshot — those edits are gone. What is installed now is the newer
-      checkout version, so most of it is probably present again, but the diff is
-      worth a skim for anything unique to the old file. Note that this file is now
-      **generated** — anything you want to keep belongs in the checkout, or in
-      `~/.config/helix/languages.local.toml` if it is specific to that machine.
-- [ ] **Clone the hobby projects you actually want to work on.** `~/fun_repos`
-      there holds only `helix`, `hobby-mimisbrunnr` and `hobby-tooling`, so `hwt`
-      has nothing to make a worktree from yet.
+- [x] **Reviewed `git -C ~ diff .config/helix/languages.toml`** — nothing usable was
+      lost. The diff is almost entirely upstream churn plus this repo's generated
+      blocks. The only entries unique to the old committed copy were `helix-gpt`
+      attached to rust/python/zig/scala, and `metals` pointing at `run_metals.sh`
+      with two extra inlay-hint options; the checkout's copy renamed that to
+      `run-metals.sh` and dropped the `gpt` attachments deliberately. **None of
+      those three binaries is installed on this machine**, so every one of the
+      differences is inert here. Nothing to restore. Remember the file is now
+      **generated** — anything worth keeping belongs in the checkout, or in
+      `~/.config/helix/languages.local.toml` if it is machine-specific.
+- [ ] **Clone the hobby projects you actually want to work on.** `~/fun_repos` holds
+      only `helix`, `hobby-mimisbrunnr`, `hobby-tooling` and the freshly cloned
+      `bevy_asset_lsp`, so `hwt` still has nothing to make a worktree from.
+- [ ] *Optional:* **MCP servers stay unconnected.** `lsp-mcp`,
+      `julian-tree-extract-mcp` and `just_mcp` are all built from the work checkout,
+      so `just install-mcps` would skip all three here. Doctor flags this as an
+      optional `-`, not a gap.
 
 Not worth tracking: the ~226 *upstream* Helix language servers (`gopls`,
 `typescript-language-server`, `lua-language-server`, …) that stock Helix declares

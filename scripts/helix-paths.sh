@@ -119,7 +119,12 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         repo)
             resolve_repo || exit 1
             printf '%s\n' "$HELIX_REPO_RESOLVED"
-            [ "${2:-}" = "--why" ] && printf 'via %s\n' "$HELIX_REPO_WHY" >&2
+            # An `if`, not `[ ... ] && printf`: the latter is the branch's last
+            # command, so a caller without --why got its false test as the exit
+            # status — the path on stdout and a failure code with it.
+            if [ "${2:-}" = "--why" ]; then
+                printf 'via %s\n' "$HELIX_REPO_WHY" >&2
+            fi
             ;;
         grammar-mml)
             resolve_grammar_mml || exit 1
