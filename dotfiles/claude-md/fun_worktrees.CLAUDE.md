@@ -29,7 +29,7 @@ task, and the main checkout it derives from is `~/fun_repos/<project>`.
 | Main checkout | `~/fun_repos/<project>` |
 | Notes for this task | `~/fun_repos/hobby-mimisbrunnr/notes/<project>/<topic>/<task>/` |
 | Journal entries | same dir, `YYYY-MM-DD.md` |
-| Done/blocked state | same dir, `task.json` (gitignored — local state) |
+| Done/blocked state | same dir, `task.json` (tracked — `{ done, blocked }`, nothing else) |
 | PRs opened | same dir, `prs.json` (written by the track-pr hook) |
 | HMML specs | same dir, `<unit>.hmml` |
 

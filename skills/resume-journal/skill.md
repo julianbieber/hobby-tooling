@@ -68,7 +68,7 @@ Spawn ONE subagent to do the reading — keep the big files out of this session.
     focus on `## Open`, `## Action Items`, and `## Done`.
   - Read only the `### ` heading **index** of `insights.md` (the titles), NOT
     its body.
-  - Read `task.json` (done / blocked / repos) and `prs.json` (outstanding PRs).
+  - Read `task.json` (done / blocked) and `prs.json` (outstanding PRs).
   - Legacy: if only a single `{task_id}.md` exists (old format), read that.
   - **Return only** (keep it short — this lands in THIS session's context):
     1. A 2–3 sentence state briefing (where things stand right now).

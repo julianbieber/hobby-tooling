@@ -81,10 +81,12 @@ def ensure-notes-dir [project: string, topic: string, task: string] {
 # A task's metadata lives at notes/<project>/<topic>/<task>/task.json:
 #   { done: bool, blocked: {until?, reason?}|null }
 # It outlives the worktree, so done/blocked state survives `hwt rm` and lets
-# `hwt restore` re-create the checkout. Gitignored: this is local machine state.
+# `hwt restore` re-create the checkout. Tracked in the notes repo, not gitignored.
 #
 # Unlike the work module there is no `repos` field — the project is in the path,
-# and a task is exactly one repo.
+# and a task is exactly one repo. Because the file is tracked and hwt-overview
+# writes it too, both writers must emit the same keys: `blocked` is always
+# present (null when unblocked), and nothing else is ever added.
 
 # Path to a task's task.json.
 def task-meta-path [project: string, topic: string, task: string] {
