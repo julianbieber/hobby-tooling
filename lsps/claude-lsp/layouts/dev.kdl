@@ -1,0 +1,11 @@
+// Zellij layout for Helix + Claude Code development
+// Usage: zellij --layout dev.kdl
+// The cwd is inherited from the shell that launches zellij.
+layout {
+    pane split_direction="vertical" {
+        pane command="hx" size="65%" {
+            args "."
+        }
+        pane command="claude" name="claude" size="35%"
+    }
+}

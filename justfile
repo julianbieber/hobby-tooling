@@ -30,7 +30,10 @@ ZJ_LAYOUTS := env('HOME') / '.config/zellij/layouts'
 BIN_DIR    := env('HOME') / '.local/bin'
 FUN_REPOS  := env('HOME') / 'fun_repos'
 NOTES_DIR  := env('HOME') / 'fun_repos/hobby-mimisbrunnr'
-HELIX_REPO := env('HELIX_REPO', env('HOME') / 'fun_repos/helix')
+# No HELIX_REPO default: the checkout is at a different path on each machine, so
+# scripts/helix-paths.sh discovers it (env, then the ~/.config/helix/runtime
+# symlink, then well-known locations). Set HELIX_REPO to override.
+LSP_REMOTE := env('BEVY_ASSET_LSP_REMOTE', 'ssh://git@codeberg.org/julianbieber/bevy_asset_lsp.git')
 # Overridable so a fork, a rename, or a local clone can be used instead.
 NOTES_REMOTE := env('HOBBY_NOTES_REMOTE', 'git@github.com:julianbieber/hobby-mimisbrunnr.git')
 GIT_NAME   := 'julianbieber'
@@ -45,7 +48,7 @@ default:
 # ---------------------------------------------------------------------------
 
 # Everything a new machine needs, in dependency order. Safe to re-run.
-bootstrap: preflight clone-notes git-identity bootstrap-config install-chobby install-shell wire-nushell install-hooks install-skills install-claude-md wire-helix
+bootstrap: preflight clone-notes git-identity bootstrap-config install-chobby install-shell wire-nushell install-hooks install-skills install-claude-md local-paths wire-helix
     @echo ""
     @echo "════════════════════════════════════════════════════════════════"
     @echo "Core install done. One manual step remains — the login is"
@@ -57,12 +60,14 @@ bootstrap: preflight clone-notes git-identity bootstrap-config install-chobby in
     @echo "    just install-mcps      MCP servers (needs the work repo's binaries)"
     @echo "    just install-overview  the hwt-overview dashboard (Rust build)"
     @echo "    just install-mml       forked HMML language server (Rust build)"
+    @echo "    just install-lsps      the hobby language servers Helix references"
+    @echo "    just helix-build       rebuild hx itself from the discovered checkout"
     @echo ""
     @echo "Check the result any time with:  just doctor"
     @echo "════════════════════════════════════════════════════════════════"
 
 # Bootstrap plus every optional Rust build and the MCP servers.
-bootstrap-full: bootstrap install-mcps install-overview install-mml
+bootstrap-full: bootstrap install-mcps install-overview install-mml install-lsps
     @echo "Full install done. Still need: chobby, then /login."
 
 # Say so when invoked from a worktree — the install still targets the main checkout,
@@ -184,13 +189,46 @@ install-shell: _root-notice
 wire-nushell:
     @"{{REPO_ROOT}}"/scripts/wire-nushell.sh
 
-# languages.toml lives in a local Helix checkout and is COPIED into ~/.config/helix,
-# so the edit goes to the repo and is installed from there — editing the installed
-# copy would be lost on the next refresh. Skips cleanly when no checkout is found.
+# ONE way to change Helix config, the same on every machine:
+#
+#   machine-neutral -> <checkout>/languages.toml     committed, shared, builds the binary
+#   machine-specific -> ~/.config/helix/languages.local.toml   generated, never committed
+#   then `just wire-helix` regenerates ~/.config/helix/languages.toml from both.
+#
+# Editing the installed file directly is the one thing that does not work — it is an
+# output. Skips cleanly when no checkout is found.
 
-# Register hobby-mml-lsp with Helix, via the local Helix checkout
+# Regenerate the Helix language config from the checkout + this machine's overlay
 wire-helix:
-    @HELIX_REPO="{{HELIX_REPO}}" "{{REPO_ROOT}}"/scripts/wire-helix.sh
+    @"{{REPO_ROOT}}"/scripts/wire-helix.sh
+
+# Show (and create) ~/.config/hobby-tooling/paths.env, plus what resolved from it
+local-paths *ARGS:
+    @"{{REPO_ROOT}}"/scripts/local-paths.sh {{ARGS}}
+
+# Which language servers Helix declares, and which are missing here (--all for upstream too)
+helix-servers *ARGS:
+    @"{{REPO_ROOT}}"/scripts/helix-servers.sh {{ARGS}}
+
+# Rebuilding the hx binary needs two things that are easy to get wrong from memory, so
+# they live here rather than in a note: skip the automatic grammar step (it runs
+# `--grammar fetch` first, which dies on any grammar whose remote has gone away and
+# takes the whole build with it), then build grammars separately where a failure is
+# survivable.
+
+# Rebuild and install hx from the discovered checkout, then build its grammars
+helix-build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    repo=$("{{REPO_ROOT}}"/scripts/helix-paths.sh repo) || {
+        echo "No Helix checkout found — \`just local-paths\` to point at one." >&2
+        exit 1
+    }
+    echo "Building hx from $repo"
+    HELIX_DISABLE_AUTO_GRAMMAR_BUILD=1 cargo install --path "$repo/helix-term" --locked
+    echo ""
+    echo "Building grammars (individual failures are expected and non-fatal):"
+    hx --grammar build || echo "  some grammars failed — hx itself is installed and usable"
 
 # ---------------------------------------------------------------------------
 # Optional extras
@@ -224,6 +262,33 @@ install-mcps:
 install-overview:
     cd tools/hwt-overview && cargo install --path crates/hwt_app
 
+# `lsps/` vendors four servers that used to be buildable only from the work checkout,
+# which left a hobby-only machine unable to install them at all. They keep their
+# original binary names on purpose: there is one Helix and one languages.toml across
+# both accounts, so a second name would mean a second server running on every buffer.
+# One binary, and `claude-skills-lsp` picks its account from CLAUDE_CONFIG_DIR at
+# runtime. Building from here therefore REPLACES any build from the work checkout.
+#
+# `bevy_asset_lsp` is a separate hobby repo, so it is cloned rather than vendored.
+
+# Build every language server this repo can: the vendored four, plus bevy_asset_lsp
+install-lsps:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for d in claude-lsp claude-skills-lsp treesitter-class-lsp path-lsp; do
+        echo "  building $d"
+        cargo install --path "{{REPO_ROOT}}/lsps/$d" --locked
+    done
+    src="{{FUN_REPOS}}/bevy_asset_lsp"
+    if [ ! -d "$src/.git" ]; then
+        mkdir -p "{{FUN_REPOS}}"
+        echo "  cloning {{LSP_REMOTE}}"
+        git clone "{{LSP_REMOTE}}" "$src"
+    fi
+    cargo install --path "$src"
+    echo ""
+    "{{REPO_ROOT}}"/scripts/helix-servers.sh
+
 # The parser CLI matters: the hmml-* skills shell out to `hobby-mml-parser --lint`.
 
 # Build + install the forked HMML language server, parser CLI, and index
@@ -240,9 +305,13 @@ install-mml:
 doctor:
     @cd "{{REPO_ROOT}}" && ./scripts/doctor.sh
 
-# Run every test in the repo (HMML parser/LSP + the dashboard)
+# Run every test in the repo (all language servers + the dashboard)
 test:
     cd lsps/hobby-mml-lsp && cargo test --workspace
+    cd lsps/claude-lsp && cargo test
+    cd lsps/claude-skills-lsp && cargo test
+    cd lsps/treesitter-class-lsp && cargo test
+    cd lsps/path-lsp && cargo test
     cd tools/hwt-overview && cargo test --workspace
 
 # ---------------------------------------------------------------------------
@@ -263,4 +332,6 @@ uninstall:
     echo "Unlinked. Still present on purpose:"
     echo "  {{CONFIG_DIR}}          (holds your login — delete by hand to log out)"
     echo "  the `use` lines in config.nu   (remove by hand)"
-    echo "  the hmml entry in the Helix repo's languages.toml"
+    echo "  the hmml entry in the Helix checkout's languages.toml"
+    echo "  ~/.config/helix/languages.local.toml and ~/.config/hobby-tooling/paths.env"
+    echo "  (both machine-local; harmless to keep, and a reinstall reuses them)"

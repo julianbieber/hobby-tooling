@@ -37,6 +37,7 @@ skills/<name>/{skill.md, README.md}   # symlinked into ~/.claude-hobby/commands/
 settings/hobby.settings.json          # symlinked to ~/.claude-hobby/settings.json
 scripts/                              # install logic too involved for a justfile recipe
 lsps/hobby-mml-lsp/                   # forked HMML language server + grammar.md
+lsps/{claude,claude-skills,treesitter-class,path}-lsp/   # vendored from the work checkout
 tools/{hobby-mml-index, hwt-overview}/
 ```
 
@@ -75,6 +76,36 @@ map.
 non-Bevy hobby repos (`mosaik_map`, `securitd`, `glsllsp`) still have a usable
 dialect. The two cannot be mixed in one file.
 
+## The vendored language servers
+
+`lsps/` holds five servers. `hobby-mml-lsp` is a fork with its own dialect (above);
+the other four — `claude-lsp`, `claude-skills-lsp`, `treesitter-class-lsp`,
+`path-lsp` — are **copies** of crates that also exist in the work tooling checkout,
+vendored so a hobby-only machine can build them at all.
+
+Three consequences worth knowing before touching them:
+
+- **The binary names are unchanged** (`claude-lsp`, `claude-skills-lsp`,
+  `treesitter-class-lsp`, `path_lsp`), unlike the deliberately-renamed `hobby-mml-*`.
+  There is one Helix and one `languages.toml` shared by both accounts, so a
+  `hobby-`-prefixed second name would not isolate anything — it would just register a
+  second server that runs on every buffer alongside the first. One binary is correct.
+- **Building from here replaces the work build** in `~/.cargo/bin`, and vice versa.
+  The two copies will drift; this one is the copy that has the hobby fix.
+- **The hobby fix is `CLAUDE_CONFIG_DIR`.** `claude-skills-lsp` used to anchor its
+  user tier on `$HOME/.claude`, which in a hobby session offered the work skills and
+  none of the 18 hobby ones. It now resolves `$CLAUDE_CONFIG_DIR` first, falling back
+  to `$HOME/.claude`, so one binary serves both accounts — `hcdev` exports the
+  variable before launching zellij, so the Helix pane inherits it. Keep that property
+  if you re-sync from the work copy.
+
+`treesitter-class-lsp` needs no hobby change: its `~/worktrees/TOPIC/TASK` widening
+does not match `fun_worktrees`, and falling back to the client root is already the
+right scope when the task directory *is* the repo.
+
+Nothing in `lsps/` may name a work repo, worktree, or ticket — the copies were
+scrubbed, and a re-sync has to be scrubbed again.
+
 ## Installing
 
 `just bootstrap` is the fresh-machine entry point; `just doctor` diagnoses an
@@ -83,13 +114,49 @@ idempotent.
 
 Anything more involved than a symlink lives in `scripts/` rather than inline in the
 justfile: `preflight.sh` (dependency check), `wire-nushell.sh` (append the `use`
-lines once), `wire-helix.sh` (register the forked HMML server), `doctor.sh`.
+lines once), `helix-paths.sh` (find this machine's Helix bits), `wire-helix.sh`
+(generate the Helix language config), `helix-servers.sh` (declared-vs-installed
+language servers), `local-paths.sh` (the machine-local overrides file), `doctor.sh`.
 
-**Helix config is edited in the Helix checkout, not in `~/.config/helix`.**
-The checkout is `~/fun_repos/helix` on branch **`custom`** (override with
-`HELIX_REPO`). `languages.toml` is copied from the repo into place, so editing the
-installed copy loses the change on the next refresh. `wire-helix.sh` handles this;
-keep any future Helix change going through it.
+## No machine-specific paths in this repo
+
+This repo is checked out on more than one machine and they do not agree on where
+anything outside `~/fun_repos` lives — the Helix checkout is `~/fun_repos/helix` on
+one and `~/outside_repos/helix` on another. A hardcoded default is therefore a
+guaranteed breakage somewhere, so **paths are discovered, never assumed**, and
+`scripts/helix-paths.sh` is the single resolver every script and recipe uses.
+
+The escape hatch is `~/.config/hobby-tooling/paths.env` (`just local-paths`),
+outside the repo and never committed. It is also the *only* correct home for a path
+under the work tree: `TREE_SITTER_MML` belongs there, not in any file here.
+
+## Helix: one dev flow, three files
+
+Helix merges `~/.config/helix/languages.toml` over the `languages.toml` compiled
+into its binary, so:
+
+```
+<checkout>/languages.toml               machine-NEUTRAL, committed, builds the binary
+~/.config/helix/languages.local.toml    machine-SPECIFIC, generated, never committed
+~/.config/helix/languages.toml          = the two concatenated, an OUTPUT
+```
+
+Edit the first for anything shared; let `just wire-helix` regenerate the third.
+Editing the installed file directly is the one thing that does not work.
+
+What forced the split is `[[grammar]] name = "mml"`. Its `source.path` must be
+absolute, differs per machine, and does not exist at all on a hobby-only one — and
+`helix-term/build.rs` builds grammars with `STRICT = true`, so a single unresolvable
+path fails the whole `hx` build on every other machine. Committing that line was
+what previously required commenting it out per machine. Now it is generated.
+
+A machine with no `tree-sitter-mml` still gets the HMML language server,
+diagnostics and goto-definition; it loses syntax highlighting only.
+
+`just helix-build` rebuilds `hx` with `HELIX_DISABLE_AUTO_GRAMMAR_BUILD=1` (the
+automatic path runs `--grammar fetch` first, which dies on any grammar whose remote
+has gone away and takes the binary build with it), then builds grammars separately
+where a failure is survivable.
 
 ## Paths
 
@@ -98,9 +165,12 @@ keep any future Helix change going through it.
 ~/fun_worktrees/<project>/<topic>/<task>       the worktree itself
 ~/fun_repos/hobby-mimisbrunnr/notes/
     <project>/<topic>/<task>                   task notes
-~/fun_repos/helix                              Helix checkout, branch `custom`
 ~/.claude-hobby                                CLAUDE_CONFIG_DIR
+~/.config/hobby-tooling/paths.env              machine-local overrides, uncommitted
 ```
+
+The Helix checkout is deliberately absent from that list — it is discovered, and it
+is on branch **`custom`** wherever it is.
 
 ## Account Isolation
 

@@ -93,12 +93,15 @@ just install-mml     # installs hobby-mml-lsp, hobby-mml-parser, hobby-mml-index
 
 ## Known Limitations
 
-- **Depends on the work repo for the tree-sitter grammar.** `grammar = "mml"`
-  points at `team-constellation-tooling/lsps/tree-sitter-mml`. Moving or
-  deleting that checkout breaks HMML highlighting. The v2 sections
-  (`## components`, `## systems`, …) parse and lint fine but are highlighted by
-  a v1 tree-sitter grammar, so a section header may render plainly. Cosmetic
-  only — every diagnostic comes from `hobby-mml-parser`, not the grammar.
+- **Highlighting depends on a grammar this repo does not own.** `grammar = "mml"`
+  borrows the `tree-sitter-mml` build, whose checkout lives outside the hobby tree.
+  Its path is no longer recorded here — `wire-helix` reads `TREE_SITTER_MML` from
+  `~/.config/hobby-tooling/paths.env` and generates the `[[grammar]]` block into
+  `~/.config/helix/languages.local.toml`. A machine without that checkout keeps the
+  language server, diagnostics and goto-definition, and loses highlighting alone.
+  Where the grammar *is* present it is a v1 one, so v2 sections (`## components`,
+  `## systems`, …) parse and lint fine but may render plainly. Cosmetic either way —
+  every diagnostic comes from `hobby-mml-parser`, not the grammar.
 - Upstream `mml-parser` fixes must be cherry-picked by hand, and v2 has moved
   the two apart far enough that this is real work rather than a patch apply.
 - The built-in Bevy name lists (`BUILTIN_COMPONENTS`, `BUILTIN_RESOURCES`,
