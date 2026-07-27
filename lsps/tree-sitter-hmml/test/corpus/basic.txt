@@ -26,7 +26,7 @@ QueueWorker — pulls URLs off the queue @ src/queue.py
 
 (source_file
   (section_header
-    (marker)
+    (section_marker)
     (section_name))
   (module_entry
     (identifier)
@@ -48,7 +48,7 @@ struct Offer {
 
 (source_file
   (section_header
-    (marker)
+    (section_marker)
     (section_name))
   (type_definition
     (identifier)
@@ -97,7 +97,7 @@ behavior control flow
 
 (source_file
   (section_header
-    (marker)
+    (section_marker)
     (section_name))
   (bullet
     (control_flow
@@ -170,7 +170,7 @@ Writer — persists results @ spec write-results
 
 (source_file
   (section_header
-    (marker)
+    (section_marker)
     (section_name))
   (module_entry
     (identifier)
@@ -203,7 +203,7 @@ behavior and invariant spec refs
 
 (source_file
   (section_header
-    (marker)
+    (section_marker)
     (section_name))
   (bullet
     (prose)
@@ -218,7 +218,7 @@ behavior and invariant spec refs
       (spec_keyword)
       (spec_ref)))
   (section_header
-    (marker)
+    (section_marker)
     (section_name))
   (bullet
     (prose)
@@ -237,7 +237,7 @@ Foo — reads config @ spec_utils/x.py
 
 (source_file
   (section_header
-    (marker)
+    (section_marker)
     (section_name))
   (module_entry
     (identifier)
@@ -259,7 +259,7 @@ where:
 
 (source_file
   (section_header
-    (marker)
+    (section_marker)
     (section_name))
   (bullet
     (prose))
@@ -287,7 +287,7 @@ struct Batch {
 
 (source_file
   (section_header
-    (marker)
+    (section_marker)
     (section_name))
   (use_import
     (spec_ref)
@@ -302,3 +302,69 @@ struct Batch {
       (identifier)
       (type
         (identifier)))))
+
+==================
+bare hash comment
+==================
+
+# a comment
+#
+# another comment
+system: x
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (comment)
+  (field
+    (identifier)
+    (value)))
+
+==================
+wrapped bullet continuation
+==================
+
+## behavior
+- a step whose prose runs past the end of the
+  line and keeps going onto a second one
+  and a third
+- the next step
+  - a nested bullet is not a continuation
+
+---
+
+(source_file
+  (section_header
+    (section_marker)
+    (section_name))
+  (bullet
+    (prose)
+    (continuation)
+    (continuation))
+  (bullet
+    (prose))
+  (bullet
+    (prose)))
+
+==================
+continuation carrying a spec ref
+==================
+
+## invariants
+- a property stated at length, so the reason it holds
+  spills onto the following line @ spec canvas-view
+
+---
+
+(source_file
+  (section_header
+    (section_marker)
+    (section_name))
+  (bullet
+    (prose)
+    (continuation)
+    (spec_annotation
+      (spec_keyword)
+      (spec_ref))))

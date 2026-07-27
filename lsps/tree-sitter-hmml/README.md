@@ -5,7 +5,7 @@
 | Type         | tree-sitter grammar (generated C parser, checked in) |
 | Owner        | @julianbieber                                     |
 | Dependencies | a C compiler — Helix builds it, no tree-sitter CLI |
-| Status       | v1 shape, forked so v2 can be added               |
+| Status       | v2 — parses every `.hmml` spec in use with no ERROR nodes |
 
 Syntax highlighting for **HMML** (`.hmml`), the hobby Bevy dialect of the Mental
 Model Language. Semantics — diagnostics, completion, goto, references — come from
@@ -26,10 +26,49 @@ which `wire-helix` derives from the repo root it already resolves — the same o
 every machine, and never recorded in `paths.env`. `src/parser.c` is committed and
 there is no external scanner, so Helix builds it with a C compiler alone.
 
-It also unblocks the real fix: this is still the **v1** grammar, so v2 sections
-(`## components`, `## resources`, `## events`, `## systems`, `## access`) parse as
-generic lines and render plainly. Being ours, it can now grow those rules —
-before the fork that meant editing a grammar shared with work `.mml` files.
+It also unblocked the real fix. The forked-from grammar modelled **v1**, and a v2
+spec did not merely under-highlight — `## components` and friends were not in the
+`section_name` set at all, so one unmatched header errored through the rest of the
+file. Being ours, the grammar could grow the v2 rules; before the fork that meant
+editing a grammar shared with work `.mml` files.
+
+## One line, one item
+
+HMML is line-oriented, so `\n` is deliberately **not** an extra. That is the
+single decision the rest of the grammar hangs off.
+
+The v1 grammar put `\n` in `extras`, which made the tree shape blind to line
+breaks: a token that failed mid-line had no boundary to resynchronise at, so one
+bad line became one `ERROR` node spanning forty. Keeping the newline significant
+bounds the damage to the line that caused it — which matters more than it sounds,
+because a spec is half-written most of the time it is being looked at.
+
+The one token allowed to cross a newline is `continuation`, a wrapped bullet's
+second line. It swallows its own leading newline, which is what makes it
+unambiguous against the `_newline` that would otherwise end the bullet: it has to
+be indented and must not start a new construct, so a nested `- bullet`, a
+`## section`, a `# comment` and a blank line all fail to match and the shorter
+`_newline` wins instead.
+
+## What v2 adds
+
+- the five Bevy sections in `section_name` — `components`, `resources`, `events`,
+  `systems`, `access`
+- `marker Name`, the zero-sized component (grammar.md §8.1)
+- `access_entry` — one line of an access block (§8.3), keyed by a closed set
+  (`schedule`, `set`, `after`, `before`, `run_if`, `query`, `reads`, `writes`,
+  `spawns`, `despawns`, `emits`, `consumes`), so it highlights as metadata rather
+  than as a generic `field`. The keys are ordinary identifiers everywhere else —
+  a struct member may still be called `set` — because tree-sitter only prefers
+  the keyword where the rule is valid.
+- a bare `#` line is a comment (the `/hmml-new` templates use it as a spacer)
+- wrapped bullet continuation lines
+
+Roles, schedules and access-list membership are **not** checked here; that is
+`hobby-mml-parser`'s job. The grammar only assigns shapes.
+
+The `##` punctuation node is called `section_marker`, not `marker` — `marker` is
+now the `marker Name` keyword, and one name for both would be a trap in a query.
 
 ## Regenerating
 

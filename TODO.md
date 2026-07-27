@@ -46,7 +46,15 @@ tooling regardless — `just local-paths` reports what this machine resolved, an
       repo root, so it is declared unconditionally. `src/parser.c` is committed, so
       building needs a C compiler and nothing else. `TREE_SITTER_MML` is now only
       about the work `.mml` dialect.
-      Still v1 in shape, so v2 sections render plainly — but that is now ours to fix.
+- [x] **The grammar speaks v2, and stops erroring through whole files.** The fork
+      still modelled v1, which was worse than plain rendering: `## components` and
+      friends were not in `section_name`, so an unmatched header errored out to the
+      end of the file — 13 of the 19 real `.hmml` specs, the three `/hmml-new`
+      templates among them. The cause behind the cause was `\n` sitting in `extras`,
+      which left the parser no line boundary to resynchronise at. Newlines are now
+      significant, so a bad line costs one line; on top of that the five Bevy
+      sections, `marker Name`, the access block (a closed key set, highlighted as
+      metadata) and wrapped bullet continuations all parse. Sweep is 0 of 19.
 - [x] **Every personal language server but one is now buildable anywhere.**
       `claude-lsp`, `claude-skills-lsp`, `treesitter-class-lsp` and `path-lsp` were
       copied into `lsps/`; `just install-lsps` builds those four plus a cloned

@@ -10,12 +10,17 @@
 (comment) @comment
 
 ; Section headers: `## modules` etc.
-(section_header (marker) @punctuation.special)
+(section_header (section_marker) @punctuation.special)
 (section_name) @keyword.directive
 
 ; Header fields: `system: value`, `kind: workflow`, `repo: …`.
 (field key: (identifier) @keyword)
 (value) @string
+
+; Access-block keys: `schedule:`, `query:`, `reads:` … (grammar §8.3). A closed
+; set in the grammar, so they read as metadata rather than as a generic field
+; key — a `## systems` entry's indented block is the system's whole interface.
+(access_entry key: (access_key) @attribute)
 
 ; `in:` / `out:` declarations.
 "in" @keyword
@@ -26,6 +31,10 @@
 "enum" @keyword
 (type_definition name: (identifier) @type)
 (member name: (identifier) @variable.other.member)
+
+; `marker Name` — a zero-sized component (grammar §8.1).
+"marker" @keyword
+(marker_declaration name: (identifier) @type)
 ; Endpoint parameter source: `field: Type @query` (grammar §4.1).
 (member source: (identifier) @attribute)
 
