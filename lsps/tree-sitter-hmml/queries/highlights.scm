@@ -4,8 +4,15 @@
 ;
 ; Installed to <helix-checkout>/runtime/queries/hmml/ by `just wire-helix` — Helix
 ; resolves queries by language name. This file is the source; do not edit the
-; installed copy. It deliberately does NOT `; inherits: mml`: that made hobby
-; highlighting depend on the work grammar's queries being present.
+; installed copy. It deliberately does not pull in the work mml queries: that
+; made hobby highlighting depend on the work grammar's queries being present.
+;
+; NEVER write Helix's inherit-directive syntax in this file, not even inside a
+; comment or backticks. Helix matches that directive with an UNANCHORED regex
+; (`;+\s*inherits\s*:?\s*([a-z_,()-]+)`), so prose describing it is spliced in
+; for real — the mml queries get inlined here, and mml's `(marker)` node does
+; not exist in the hmml grammar. That fails the whole query with `invalid node
+; type "marker"`, which disables ALL hmml highlighting with no on-screen error.
 
 (comment) @comment
 
