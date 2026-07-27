@@ -140,10 +140,13 @@ Done — `just doctor` reports **no gaps** as of 2026-07-26.
 - [ ] **Clone the hobby projects you actually want to work on.** `~/fun_repos` holds
       only `helix`, `hobby-mimisbrunnr`, `hobby-tooling` and the freshly cloned
       `bevy_asset_lsp`, so `hwt` still has nothing to make a worktree from.
-- [ ] *Optional:* **MCP servers stay unconnected.** `lsp-mcp`,
-      `julian-tree-extract-mcp` and `just_mcp` are all built from the work checkout,
-      so `just install-mcps` would skip all three here. Doctor flags this as an
-      optional `-`, not a gap.
+- [x] **MCP servers no longer need the work checkout.** `just-mcp`, `lsp-mcp` and
+      `tree-extract` are vendored into `mcps/` under `hobby-`-prefixed package and
+      binary names, so `chobby` runs `hobby-*-mcp` while a bare `claude` keeps the
+      work builds — both in `~/.cargo/bin`, neither overwriting the other.
+      `just install-mcps` builds all three and registers them at `-s user` scope.
+      Still has to be run once per machine — doctor reports it as an optional `-`
+      until then.
 
 Not worth tracking: the ~226 *upstream* Helix language servers (`gopls`,
 `typescript-language-server`, `lua-language-server`, …) that stock Helix declares
