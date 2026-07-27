@@ -80,6 +80,20 @@ The two vendored sets differ in one respect, on purpose:
   other. The registered *server* names stay unprefixed, so `mcp__tree-extract__*`
   resolves on either account.
 
+### Reading the conversation with ctrl-g
+
+**ctrl-g** in Claude Code opens `$EDITOR` on the prompt buffer. With
+`EDITOR=hx-claude` it opens the conversation so far beside it, so you can read
+what just happened while writing the next prompt.
+
+The `claude-conversation` hook rewrites
+`/tmp/claude-conversation-$ZELLIJ_SESSION_NAME.md` after every tool call and at
+the end of every turn; `hx-claude` vsplits it next to the prompt buffer, at its
+last line. Both halves ship here (`hooks/claude-conversation/`, `bin/hx-claude`),
+so this works on a machine that has only this repo. `just doctor` names either
+half if it's missing, and warns if `$EDITOR` doesn't point at the wrapper — the
+one part that lives in your shell profile rather than in this repo.
+
 ### Helix config convention
 
 Helix merges `~/.config/helix/languages.toml` over the `languages.toml` compiled
@@ -109,6 +123,7 @@ which are actually installed here. Query files land in the checkout's
 | `hwt` | Worktree + task management (nushell). `hwt new`, `go`, `tree`, `done`, `block`, `rm`, `restore` |
 | `hcdev` | Zellij dev sessions with Helix + Claude side by side, on the hobby account |
 | `chobby` | Bare `claude` on the hobby account |
+| `hx-claude` | `$EDITOR` for ctrl-g — Helix on the prompt buffer, conversation in a vsplit |
 | `hwt-overview` | Bevy dashboard over all projects/topics/tasks |
 | `hobby-mml-lsp` | HMML language server, routed to `.hmml` specs by file type |
 | 4 vendored LSPs | `claude-lsp`, `claude-skills-lsp`, `treesitter-class-lsp`, `path-lsp` — buildable without the work checkout |

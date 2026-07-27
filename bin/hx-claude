@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# $EDITOR wrapper for Claude Code's ctrl-g.
+#
+# ctrl-g opens $EDITOR on a temp file holding the prompt buffer. This opens that
+# buffer in Helix with the current session's conversation beside it in a vsplit,
+# so the conversation is readable while writing the next prompt.
+#
+# The conversation is written by hooks/claude-conversation/hook.sh on every Stop
+# and PostToolUse. The key derivation below MUST stay identical to that script's:
+# the file path is the only thing connecting the two.
+#
+# Keeps the upstream name on purpose. $EDITOR is one variable shared by both
+# accounts, so a hobby-prefixed second name could not isolate anything — it would
+# just be a name nothing points at. One wrapper serves both; see CLAUDE.md.
+
+set -uo pipefail
+
+if [ -n "${ZELLIJ_SESSION_NAME:-}" ]; then
+    key=$(printf '%s' "$ZELLIJ_SESSION_NAME" | tr -c 'A-Za-z0-9._-' '_')
+else
+    key=$(printf '%s' "$PWD" | md5sum | cut -c1-8)
+fi
+conv="/tmp/claude-conversation-${key}.md"
+
+# Nothing dumped yet (no tool call has completed in this session): plain hx on the
+# prompt buffer. An empty placeholder split would only be in the way.
+if [ ! -f "$conv" ]; then
+    exec hx "$@"
+fi
+
+# Open the conversation on its last line so the newest content is what's on
+# screen. It comes FIRST so that ctrl-g's prompt buffer, passed in "$@", is the
+# split left focused — you land in the buffer you came here to type in.
+lines=$(wc -l < "$conv")
+[ "$lines" -gt 0 ] 2>/dev/null || lines=1
+
+exec hx --vsplit "${conv}:${lines}" "$@"
