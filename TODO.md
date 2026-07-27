@@ -133,6 +133,11 @@ Done — `just doctor` reports **no gaps** as of 2026-07-26.
 - [x] **`chobby` + `/login`** — logged in to the private account.
 - [x] **Install `zellij`** — 0.44.3, already present via cargo, and the
       `hobby-dev.kdl` layout is linked. `hcdev` can open sessions.
+      Corrected (#9): this repo shipped only the *layout*. `config.kdl` was
+      present on both machines but installed by the old home dotfiles repo, so
+      `default_shell "nu"` — what makes `hwt`/`hcdev` reachable in a pane — was
+      never something `just bootstrap` provided. It is now vendored and linked
+      by `install-shell`; the rest of that home repo is still to migrate.
 - [x] **Install `gh`** — done, 2.96.0, authenticated as `julianbieber`. `/pr-create`
       and the `/gh-issue-*` skills work now.
 - [x] **Reviewed `git -C ~ diff .config/helix/languages.toml`** — nothing usable was
