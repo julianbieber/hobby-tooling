@@ -26,7 +26,8 @@ REPO_ROOT := ```
 
 CONFIG_DIR := env('HOME') / '.claude-hobby'
 NU_DIR     := env('HOME') / '.config/nushell'
-ZJ_LAYOUTS := env('HOME') / '.config/zellij/layouts'
+ZJ_DIR     := env('HOME') / '.config/zellij'
+ZJ_LAYOUTS := ZJ_DIR / 'layouts'
 BIN_DIR    := env('HOME') / '.local/bin'
 FUN_REPOS  := env('HOME') / 'fun_repos'
 NOTES_DIR  := env('HOME') / 'fun_repos/hobby-mimisbrunnr'
@@ -202,13 +203,16 @@ install-claude-md: _root-notice
 # Shell + editor wiring
 # ---------------------------------------------------------------------------
 
-# Symlink the nushell modules + zellij layout
+# Every link goes through link-dotfile.sh rather than `ln -sf`, because zellij's
+# config.kdl is a real file on any machine the old home dotfiles repo set up, and
+# `ln -sf` will not replace one. The helper moves it aside and says so.
+
+# Symlink the nushell modules + zellij config and layout
 install-shell: _root-notice
-    @mkdir -p "{{NU_DIR}}" "{{ZJ_LAYOUTS}}"
-    @ln -sf "{{REPO_ROOT}}/dotfiles/nushell/hwt.nu"   "{{NU_DIR}}/hwt.nu"
-    @ln -sf "{{REPO_ROOT}}/dotfiles/nushell/hcdev.nu" "{{NU_DIR}}/hcdev.nu"
-    @ln -sf "{{REPO_ROOT}}/dotfiles/zellij/layouts/hobby-dev.kdl" "{{ZJ_LAYOUTS}}/hobby-dev.kdl"
-    @echo "  linked hwt.nu, hcdev.nu, hobby-dev.kdl"
+    @"{{REPO_ROOT}}"/scripts/link-dotfile.sh "{{REPO_ROOT}}/dotfiles/nushell/hwt.nu"   "{{NU_DIR}}/hwt.nu"
+    @"{{REPO_ROOT}}"/scripts/link-dotfile.sh "{{REPO_ROOT}}/dotfiles/nushell/hcdev.nu" "{{NU_DIR}}/hcdev.nu"
+    @"{{REPO_ROOT}}"/scripts/link-dotfile.sh "{{REPO_ROOT}}/dotfiles/zellij/config.kdl" "{{ZJ_DIR}}/config.kdl"
+    @"{{REPO_ROOT}}"/scripts/link-dotfile.sh "{{REPO_ROOT}}/dotfiles/zellij/layouts/hobby-dev.kdl" "{{ZJ_LAYOUTS}}/hobby-dev.kdl"
 
 # Add `use hwt.nu *` / `use hcdev.nu *` to config.nu (idempotent)
 wire-nushell:

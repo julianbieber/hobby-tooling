@@ -67,15 +67,27 @@ fi
 
 echo ""
 echo "Shell"
-[ -e "$NU/hwt.nu" ]   && ok "hwt.nu linked"   || bad "hwt.nu not linked"   "just install-shell"
-[ -e "$NU/hcdev.nu" ] && ok "hcdev.nu linked" || bad "hcdev.nu not linked" "just install-shell"
+[ -h "$NU/hwt.nu" ]   && ok "hwt.nu linked"   || bad "hwt.nu not linked"   "just install-shell"
+[ -h "$NU/hcdev.nu" ] && ok "hcdev.nu linked" || bad "hcdev.nu not linked" "just install-shell"
 if grep -qE '^[[:space:]]*use[[:space:]]+hwt\.nu' "$NU/config.nu" 2>/dev/null; then
     ok "config.nu loads the hobby modules"
 else
     bad "config.nu does not load them" "just wire-nushell"
 fi
-[ -e "${XDG_CONFIG_HOME:-$HOME/.config}/zellij/layouts/hobby-dev.kdl" ] \
-    && ok "hobby-dev.kdl layout linked" || bad "layout not linked" "just install-shell"
+# -h before -e, deliberately. `-e` alone is true for a regular file some *other*
+# repo installed, which is how ~/.config/zellij/config.kdl went unnoticed: present,
+# working, and owned by the home dotfiles repo. A real file here is a gap, not a pass.
+ZJ="${XDG_CONFIG_HOME:-$HOME/.config}/zellij"
+for f in "config.kdl" "layouts/hobby-dev.kdl"; do
+    name=$(basename "$f")
+    if [ -h "$ZJ/$f" ]; then
+        ok "$name linked"
+    elif [ -e "$ZJ/$f" ]; then
+        bad "$name is a real file, not a link" "just install-shell"
+    else
+        bad "$name not linked" "just install-shell"
+    fi
+done
 
 echo ""
 echo "Repos"

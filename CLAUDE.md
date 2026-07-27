@@ -30,7 +30,7 @@ Consequences, all of which make this tooling smaller than its work counterpart:
 ```
 dotfiles/
   nushell/{hwt.nu, hcdev.nu}          # symlinked into ~/.config/nushell/
-  zellij/layouts/hobby-dev.kdl        # symlinked into ~/.config/zellij/layouts/
+  zellij/{config.kdl, layouts/hobby-dev.kdl}   # symlinked into ~/.config/zellij/
   claude-md/                          # symlinked into ~/.claude-hobby/ and ~/fun_worktrees/
 bin/{chobby, hx-claude}               # symlinked into ~/.local/bin/
 hooks/<name>/hook.sh                  # symlinked into ~/.claude-hobby/hooks/
@@ -186,6 +186,33 @@ guaranteed breakage somewhere, so **paths are discovered, never assumed**, and
 The escape hatch is `~/.config/hobby-tooling/paths.env` (`just local-paths`),
 outside the repo and never committed. It is also the *only* correct home for a path
 under the work tree: `TREE_SITTER_MML` belongs there, not in any file here.
+
+The rule bites hardest in formats with no variable expansion. `dotfiles/zellij/config.kdl`
+binds `Alt a` to the tool-audit log, and KDL cannot expand anything — so the binding
+runs `sh -c` and lets the shell do it:
+`tail -f ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/tool-audit.log`. Since `hcdev` exports
+`CLAUDE_CONFIG_DIR` before launching zellij, a hobby pane follows the hobby log and
+every other session follows the work one — one committed line, correct on both
+accounts. Reach for a shell before reaching for a hardcoded path.
+
+## Dotfiles are installed, never merely present
+
+Every symlink in `install-*` goes through `scripts/link-dotfile.sh`, not `ln -sf`.
+The difference is the one case `ln -sf` cannot handle: it replaces a stale symlink
+but **refuses a regular file**, and a regular file is what the retired home dotfiles
+repo (`github.com:julianbieber/config.git`, see #9) left at these paths. The helper
+moves it to `<target>.pre-hobby-tooling.<timestamp>` and prints where it went —
+nothing is overwritten in place, and no backup is silent.
+
+`doctor` tests these with `-h` before `-e` for the same reason. `-e` is true for a
+file some *other* repo installed, which is exactly how `~/.config/zellij/config.kdl`
+passed as this repo's for as long as it did: the layout was linked, the config was
+merely there, and `default_shell "nu"` — what makes `hwt`/`hcdev` reachable in a pane
+— came from somewhere `just bootstrap` had never heard of. A real file at a path this
+repo owns is a gap, not a pass.
+
+`link-dotfile.sh` is also where per-machine variants will land (#9): prefer
+`<source>.$HOBBY_MACHINE` over `<source>` there, and every recipe inherits it.
 
 ## The conversation under ctrl-g
 
