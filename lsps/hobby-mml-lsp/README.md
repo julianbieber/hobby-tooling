@@ -97,13 +97,12 @@ just install-mml     # installs hobby-mml-lsp, hobby-mml-parser, hobby-mml-index
 
 ## Known Limitations
 
-- **The grammar is still v1 in shape.** `lsps/tree-sitter-hmml` is a fork of the
-  work `tree-sitter-mml`, so v2 sections (`## components`, `## systems`, …) parse
-  as generic lines and may render plainly. Cosmetic only — every diagnostic comes
-  from `hobby-mml-parser`, not the grammar. Now that the fork is ours, adding
-  those rules no longer means editing a grammar shared with work `.mml` files.
-  (Highlighting itself is no longer a portability problem: the grammar ships in
-  this repo with its C parser committed, so every machine has it.)
+- **The grammar knows v2's shapes, not v2's rules.** `lsps/tree-sitter-hmml` now
+  parses the Bevy sections, `marker Name` and the access block, so they highlight
+  distinctly rather than as generic lines. It still validates nothing: which
+  sections a `kind:` may use, whether a name in `reads:` is a component or a
+  resource, whether a schedule label exists — all of that comes from
+  `hobby-mml-parser`. A spec that parses cleanly can still be full of diagnostics.
 - Upstream `mml-parser` fixes must be cherry-picked by hand, and v2 has moved
   the two apart far enough that this is real work rather than a patch apply.
 - The built-in Bevy name lists (`BUILTIN_COMPONENTS`, `BUILTIN_RESOURCES`,

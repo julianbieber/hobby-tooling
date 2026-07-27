@@ -1,5 +1,36 @@
 [
   {
+    "type": "access_entry",
+    "named": true,
+    "fields": {
+      "key": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "access_key",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "value",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "access_key",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "binding",
     "named": true,
     "fields": {
@@ -43,6 +74,10 @@
       "multiple": true,
       "required": false,
       "types": [
+        {
+          "type": "continuation",
+          "named": true
+        },
         {
           "type": "control_flow",
           "named": true
@@ -134,6 +169,22 @@
         "types": [
           {
             "type": "type",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "marker_declaration",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
             "named": true
           }
         ]
@@ -261,7 +312,7 @@
       "required": true,
       "types": [
         {
-          "type": "marker",
+          "type": "section_marker",
           "named": true
         }
       ]
@@ -282,6 +333,10 @@
       "required": false,
       "types": [
         {
+          "type": "access_entry",
+          "named": true
+        },
+        {
           "type": "binding",
           "named": true
         },
@@ -299,6 +354,10 @@
         },
         {
           "type": "io_declaration",
+          "named": true
+        },
+        {
+          "type": "marker_declaration",
           "named": true
         },
         {
@@ -476,6 +535,18 @@
     "named": false
   },
   {
+    "type": "access",
+    "named": false
+  },
+  {
+    "type": "after",
+    "named": false
+  },
+  {
+    "type": "before",
+    "named": false
+  },
+  {
     "type": "behavior",
     "named": false
   },
@@ -488,11 +559,35 @@
     "named": true
   },
   {
+    "type": "components",
+    "named": false
+  },
+  {
+    "type": "consumes",
+    "named": false
+  },
+  {
+    "type": "continuation",
+    "named": true
+  },
+  {
     "type": "data",
     "named": false
   },
   {
+    "type": "despawns",
+    "named": false
+  },
+  {
+    "type": "emits",
+    "named": false
+  },
+  {
     "type": "enum",
+    "named": false
+  },
+  {
+    "type": "events",
     "named": false
   },
   {
@@ -513,7 +608,7 @@
   },
   {
     "type": "marker",
-    "named": true
+    "named": false
   },
   {
     "type": "modules",
@@ -524,8 +619,40 @@
     "named": false
   },
   {
+    "type": "query",
+    "named": false
+  },
+  {
+    "type": "reads",
+    "named": false
+  },
+  {
+    "type": "resources",
+    "named": false
+  },
+  {
+    "type": "run_if",
+    "named": false
+  },
+  {
+    "type": "schedule",
+    "named": false
+  },
+  {
+    "type": "section_marker",
+    "named": true
+  },
+  {
     "type": "separator",
     "named": true
+  },
+  {
+    "type": "set",
+    "named": false
+  },
+  {
+    "type": "spawns",
+    "named": false
   },
   {
     "type": "spec_keyword",
@@ -540,6 +667,10 @@
     "named": false
   },
   {
+    "type": "systems",
+    "named": false
+  },
+  {
     "type": "use",
     "named": false
   },
@@ -549,6 +680,10 @@
   },
   {
     "type": "where",
+    "named": false
+  },
+  {
+    "type": "writes",
     "named": false
   },
   {

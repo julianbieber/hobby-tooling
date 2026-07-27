@@ -8,11 +8,17 @@
  *   Forked from the work `tree-sitter-mml`, which HMML used to borrow via
  *   `grammar = "mml"`. That borrow meant highlighting only worked on a machine
  *   with the work checkout. This copy lives in hobby-tooling, so every machine
- *   has it — and, being ours, it can grow the v2 sections (`## components`,
- *   `## systems`, access blocks) that the v1 grammar renders plainly.
- *   Known limit: `prose`/`path` stop at `@` (so `@ spec` annotations lex as
- *   their own nodes); a literal mid-prose `@` not starting an annotation
- *   produces a local ERROR node, which is acceptable for colouring.
+ *   has it — and, being ours, it covers the v2 sections (`## components`,
+ *   `## systems`, `## access`) that the v1 grammar rejects outright.
+ *
+ *   HMML is line-oriented, so `\n` is deliberately NOT an extra: one line is one
+ *   item. Keeping the newline significant is what stops a malformed line from
+ *   swallowing the rest of the file into a single ERROR node — the parser
+ *   resynchronises at the next line break.
+ *
+ *   Known limit: `prose`/`path`/`continuation` stop at `@` (so `@ spec`
+ *   annotations lex as their own nodes); a literal mid-prose `@` not starting an
+ *   annotation produces a local ERROR node, which is acceptable for colouring.
  * @license MIT
  */
 
@@ -31,12 +37,18 @@ module.exports = grammar({
 
   word: ($) => $.identifier,
 
-  // Newlines are insignificant to the tree shape; per-line meaning comes from
-  // the leading token of each item, and free-text tokens stop at newlines.
-  extras: ($) => [/[ \t\r\n]/],
+  // Horizontal whitespace only. Newlines carry meaning (see the file comment),
+  // and indentation is skipped — an item's meaning comes from its first token,
+  // never from how deeply it is nested.
+  extras: ($) => [/[ \t]/],
 
   rules: {
-    source_file: ($) => repeat($._item),
+    // Blank lines and the newline ending each item are the only place `_newline`
+    // is consumed at top level; `continuation` (below) is the one token allowed
+    // to reach across one.
+    source_file: ($) => repeat(choice($._newline, $._item)),
+
+    _newline: ($) => token(/\r?\n/),
 
     _item: ($) =>
       choice(
@@ -45,22 +57,43 @@ module.exports = grammar({
         $.io_declaration,
         $.use_import,
         $.type_definition,
+        $.marker_declaration,
         $.module_entry,
         $.where_clause,
+        $.access_entry,
         $.binding,
         $.field,
         $.bullet,
       ),
 
     // A single `#` starts a comment; `##` is a section header (handled below).
-    comment: ($) => token(seq("#", /[^#\n]/, /[^\n]*/)),
+    // The rest of the line is optional so a bare `#` — used as a spacer in the
+    // `/hmml-new` templates — is a comment too. `##` still wins by being the
+    // longer match.
+    comment: ($) => token(seq("#", optional(seq(/[^#\r\n]/, /[^\r\n]*/)))),
 
     section_header: ($) =>
-      seq(alias(token(/##+/), $.marker), field("name", $.section_name)),
+      seq(
+        alias(token(/##+/), $.section_marker),
+        field("name", $.section_name),
+      ),
+    // The classic four (v1) plus the Bevy sections (v2, grammar.md §8). Which
+    // of these a given `kind:` may use is the LSP's business, not the grammar's.
     section_name: ($) =>
-      choice("modules", "data", "behavior", "invariants"),
+      choice(
+        "modules",
+        "data",
+        "behavior",
+        "invariants",
+        "components",
+        "resources",
+        "events",
+        "systems",
+        "access",
+      ),
 
-    // `in:` / `out:` name the unit's input/output type.
+    // `in:` / `out:` name the unit's input/output type. Classic kinds only —
+    // a plugin or system passes data through the World instead.
     io_declaration: ($) =>
       seq(field("direction", choice("in", "out")), ":", field("type", $.type)),
 
@@ -86,7 +119,29 @@ module.exports = grammar({
     // Header key/value: `system: …`, `unit: …`, `kind: …`, `repo: …`.
     field: ($) =>
       seq(field("key", $.identifier), ":", optional(field("value", $.value))),
-    value: ($) => token(prec(1, /[^\n]+/)),
+    value: ($) => token(prec(1, /[^\r\n]+/)),
+
+    // One line of a system's access block (grammar §8.3), whether indented under
+    // a `## systems` entry or unindented under `## access`. The key set is
+    // closed, which is what lets it highlight distinctly from a generic `field`;
+    // role-checking the value is the LSP's job.
+    access_entry: ($) =>
+      seq(field("key", $.access_key), ":", optional(field("value", $.value))),
+    access_key: ($) =>
+      choice(
+        "schedule",
+        "set",
+        "after",
+        "before",
+        "run_if",
+        "query",
+        "reads",
+        "writes",
+        "spawns",
+        "despawns",
+        "emits",
+        "consumes",
+      ),
 
     // `struct`/`enum` block. Members are treated uniformly (struct fields carry
     // a `: Type`, enum variants do not) — good enough for colouring.
@@ -95,7 +150,7 @@ module.exports = grammar({
         field("keyword", choice("struct", "enum")),
         field("name", $.identifier),
         "{",
-        repeat(choice($.member, ",")),
+        repeat(choice($.member, ",", $._newline)),
         "}",
       ),
     member: ($) =>
@@ -105,6 +160,10 @@ module.exports = grammar({
         // Optional endpoint parameter source: `field: Type @query` (grammar §4.1).
         optional(seq("@", field("source", $.identifier))),
       ),
+
+    // `marker Name` — a zero-sized component (grammar §8.1). Legal only in
+    // `## components`, which the LSP checks; here it is just a line shape.
+    marker_declaration: ($) => seq("marker", field("name", $.identifier)),
 
     type: ($) =>
       seq(
@@ -125,9 +184,11 @@ module.exports = grammar({
         optional(field("value", $.binding_value)),
         optional(seq("@", field("config", $.path))),
       ),
-    binding_value: ($) => token(prec(2, /[^@\n]+/)),
+    binding_value: ($) => token(prec(2, /[^@\r\n]+/)),
 
-    // `Name — responsibility [@ path] [@ spec ref]` (em dash or `--`).
+    // `Name — responsibility [@ path] [@ spec ref]` (em dash or `--`). Also the
+    // shape of a `## systems` entry (grammar §8.2), which is a module line
+    // followed by an indented access block.
     module_entry: ($) =>
       seq(
         field("name", $.identifier),
@@ -137,8 +198,8 @@ module.exports = grammar({
         optional($.spec_annotation),
       ),
     separator: ($) => token(choice("—", "--")),
-    responsibility: ($) => token(prec(1, /[^@\n]+/)),
-    path: ($) => token(prec(1, /[^@\n]+/)),
+    responsibility: ($) => token(prec(1, /[^@\r\n]+/)),
+    path: ($) => token(prec(1, /[^@\r\n]+/)),
 
     // Cross-spec reference: `@ spec system/unit` or `@ spec unit` (grammar
     // §5.4). The keyword token requires trailing whitespace and outranks the
@@ -166,11 +227,21 @@ module.exports = grammar({
         "-",
         optional(choice($.control_flow, $.prose)),
         optional($.spec_annotation),
+        repeat(seq($.continuation, optional($.spec_annotation))),
       ),
     control_flow: ($) => seq(field("keyword", $.keyword), optional($.prose)),
     keyword: ($) =>
-      token(prec(3, choice("if", "while", "else", "try", "for each", "on error"))),
-    prose: ($) => token(prec(1, /[^@\n]+/)),
+      token(
+        prec(3, choice("if", "while", "else", "try", "for each", "on error")),
+      ),
+    prose: ($) => token(prec(1, /[^@\r\n]+/)),
+
+    // A bullet whose prose wraps onto the following line. The token swallows its
+    // own leading newline — that is what makes it unambiguous against the
+    // `_newline` that ends the bullet. It must be indented and must not start a
+    // new construct, so `- nested`, `## section`, `# comment` and a blank line
+    // all fail to match here and the shorter `_newline` wins instead.
+    continuation: ($) => token(/\r?\n[ \t]+[^-#@ \t\r\n][^@\r\n]*/),
 
     identifier: ($) => /[A-Za-z_][A-Za-z0-9_]*/,
   },
