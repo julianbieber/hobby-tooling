@@ -48,24 +48,37 @@ never committed — for a path that discovery gets wrong.
 
 ### What needs the work machine
 
-Three MCP binaries (`lsp-mcp`, `julian-tree-extract-mcp`, `just_mcp`) are built out
-of my work tooling repo, and `install-mcps` skips the missing ones by name. `hwt`,
-`hcdev`, and all 18 skills work regardless.
+Nothing. A machine with only this repo can build the whole setup.
 
-Nothing about HMML needs that checkout any more. `.hmml` gets its language server,
-diagnostics **and** syntax highlighting anywhere, because the grammar
-(`lsps/tree-sitter-hmml`) ships here with its C parser committed — a C compiler is
-the only requirement. `TREE_SITTER_MML` is now purely about the work `.mml`
-dialect.
+**HMML** doesn't. `.hmml` gets its language server, diagnostics **and** syntax
+highlighting anywhere, because the grammar (`lsps/tree-sitter-hmml`) ships here with
+its C parser committed — a C compiler is the only requirement. `TREE_SITTER_MML` is
+now purely about the work `.mml` dialect.
 
-The language servers no longer do. `claude-lsp`, `claude-skills-lsp`,
+**The language servers** don't. `claude-lsp`, `claude-skills-lsp`,
 `treesitter-class-lsp` and `path-lsp` are vendored into `lsps/`, so
-`just install-lsps` builds them anywhere. They keep their original binary names —
-one Helix and one `languages.toml` serve both accounts, so a second name would run
-a second server on every buffer rather than isolate anything — which means building
-from here replaces any build from the work checkout, and the two copies will drift.
-`claude-skills-lsp` resolves `$CLAUDE_CONFIG_DIR` before `~/.claude`, so the one
-binary indexes the hobby skills in a hobby session and the work ones otherwise.
+`just install-lsps` builds them anywhere. `claude-skills-lsp` resolves
+`$CLAUDE_CONFIG_DIR` before `~/.claude`, so the one binary indexes the hobby skills
+in a hobby session and the work ones otherwise.
+
+**The MCP servers** don't. `just-mcp`, `lsp-mcp` and `tree-extract` are vendored into
+`mcps/`, so `just install-mcps` builds and registers them rather than skipping the
+missing binaries by name. The work-only servers (db, jira, experts) are deliberately
+absent — see `CLAUDE.md` for why each one doesn't apply here.
+
+The two vendored sets differ in one respect, on purpose:
+
+- **Language servers keep their upstream names.** One Helix and one `languages.toml`
+  serve both accounts, so a second name would run a second server on every buffer
+  rather than isolate anything. Building from here therefore replaces any build from
+  the work checkout, and the two copies drift.
+- **MCP servers are `hobby-`-prefixed** — package, lib and binary. Each account has
+  its own MCP registry, so there is nothing to collide over and a prefix buys real
+  separation: `chobby` runs `hobby-just-mcp` / `hobby-lsp-mcp` /
+  `hobby-tree-extract-mcp` while a bare `claude` keeps `just_mcp` / `lsp-mcp` /
+  `julian-tree-extract-mcp`. Both live in `~/.cargo/bin` and neither overwrites the
+  other. The registered *server* names stay unprefixed, so `mcp__tree-extract__*`
+  resolves on either account.
 
 ### Helix config convention
 

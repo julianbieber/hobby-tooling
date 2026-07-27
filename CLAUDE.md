@@ -38,6 +38,7 @@ settings/hobby.settings.json          # symlinked to ~/.claude-hobby/settings.js
 scripts/                              # install logic too involved for a justfile recipe
 lsps/hobby-mml-lsp/                   # forked HMML language server + grammar.md
 lsps/{claude,claude-skills,treesitter-class,path}-lsp/   # vendored from the work checkout
+mcps/{just-mcp, lsp-mcp, tree-extract}/   # vendored from the work checkout
 tools/{hobby-mml-index, hwt-overview}/
 ```
 
@@ -105,6 +106,61 @@ right scope when the task directory *is* the repo.
 
 Nothing in `lsps/` may name a work repo, worktree, or ticket — the copies were
 scrubbed, and a re-sync has to be scrubbed again.
+
+## The vendored MCP servers
+
+`mcps/` holds copies of the work tooling repo's general-purpose MCP servers —
+`just-mcp`, `lsp-mcp`, `tree-extract` — vendored so `just install-mcps` builds on a
+hobby-only machine instead of skipping all three.
+
+**They are `hobby-`-prefixed, and this is where they diverge from `lsps/`.** The two
+accounts run separate builds that coexist in `~/.cargo/bin`:
+
+| | chobby (`~/.claude-hobby`) | claude (`~/.claude`) |
+|---|---|---|
+| just | `hobby-just-mcp` | `just_mcp` |
+| lsp | `hobby-lsp-mcp` | `lsp-mcp` |
+| tree-extract | `hobby-tree-extract-mcp` | `julian-tree-extract-mcp` |
+
+The argument for keeping upstream names in `lsps/` does not carry over: there is one
+Helix and one `languages.toml`, so a second LSP name would run a second server on
+every buffer — but each account has its **own MCP registry**, so a second name
+isolates instead of duplicating. Nothing is shared to collide over.
+
+The prefix goes all the way down — package, lib and binary — and the **package** name
+is the load-bearing part. Cargo tracks installs by package name in
+`~/.cargo/.crates2.json`, so a hobby build sharing the work package name would evict
+the work binaries on every `cargo install`, which is exactly what this is meant to
+prevent. Renaming only the binary would not be enough.
+
+Consequences: the two copies drift independently (neither overwrites the other), a
+re-sync has to be re-scrubbed *and* re-prefixed, and `hobby-tree-extract` writes its
+own name into the `generator:` field of `.project-description.md` and the
+`.git/info/exclude` comment. That last one is safe because the exclude dedup keys on
+the path, not the comment.
+
+Only the *general-purpose* three are here, and the omissions are deliberate rather
+than pending work:
+
+- `db-mcp` and `jira-mcp` speak to work systems. Hobby projects have no databases,
+  and issue tracking is GitHub via `gh`.
+- `experts-mcp` assumes a repo level *below* the task, which this layout does not
+  have — the same reason `CLAUDE.md` gives for there being no experts at all.
+- `constellation-mcp` is not mine and is work-specific besides.
+
+`tree-extract` is the one crate with a path dependency: it reuses the Helix language
+registry and grammar cache from `treesitter-class-lsp`, repointed at `lsps/` here.
+Vendoring one without the other does not build.
+
+The *server* names stay unprefixed (`just-mcp`, `lsp-mcp`, `tree-extract`) even
+though the binaries do not, so a skill or prompt calling `mcp__tree-extract__*` works
+on either account. Only the command behind the name differs.
+
+Registration is `-s user` scope, not the default `local` — `local` binds a server to
+the single directory it was added from, so every hobby project outside that one
+directory would see no MCPs. `install-mcps` removes before adding, so re-running it
+repoints an entry that still names a work binary instead of skipping it as already
+registered.
 
 ## Installing
 

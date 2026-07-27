@@ -1,0 +1,33 @@
+# just_mcp — MCP server for discovering and running just recipes
+
+# List all recipes
+default:
+    @just --list
+
+# Build the binary
+build:
+    cargo build
+
+# Install the MCP server to ~/.cargo/bin
+install:
+    cargo install --path .
+
+# Run all tests
+test:
+    cargo test
+
+# Run the MCP server (stdio transport)
+run:
+    cargo run --bin just_mcp
+
+# Check code compiles without building
+check:
+    cargo check
+
+# Format code
+fmt:
+    cargo fmt
+
+# Lint with clippy
+lint:
+    cargo clippy

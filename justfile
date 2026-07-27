@@ -57,7 +57,7 @@ bootstrap: preflight clone-notes git-identity bootstrap-config install-chobby in
     @echo "    chobby          then  /login   with your private account"
     @echo ""
     @echo "Then, optionally:"
-    @echo "    just install-mcps      MCP servers (needs the work repo's binaries)"
+    @echo "    just install-mcps      the general-purpose MCP servers (Rust build)"
     @echo "    just install-overview  the hwt-overview dashboard (Rust build)"
     @echo "    just install-mml       forked HMML language server (Rust build)"
     @echo "    just install-lsps      the hobby language servers Helix references"
@@ -234,27 +234,52 @@ helix-build:
 # Optional extras
 # ---------------------------------------------------------------------------
 
-# The binaries are built out of the work tooling repo, so a hobby-only machine won't
-# have them; each is registered only if present, and the rest are reported.
+# `mcps/` vendors the three general-purpose servers, for the same reason `lsps/` does:
+# they used to be buildable only from the work checkout, which left a hobby-only
+# machine with no MCPs at all.
+#
+# Unlike the vendored LANGUAGE servers, these are `hobby-`-prefixed all the way down —
+# package, lib and binary — so the two accounts run genuinely separate builds:
+#
+#     chobby (~/.claude-hobby)  ->  hobby-just-mcp, hobby-lsp-mcp, hobby-tree-extract-mcp
+#     claude (~/.claude)        ->  just_mcp,       lsp-mcp,       julian-tree-extract-mcp
+#
+# The lsps/ argument for keeping upstream names does not apply: there is one Helix
+# and one languages.toml, but each account has its OWN MCP registry, so a second name
+# isolates rather than duplicates. The PACKAGE rename is the load-bearing part —
+# cargo tracks installs by package name, so a hobby build sharing the work package
+# name would evict the work binaries from ~/.cargo/bin on every `cargo install`.
+#
+# The work-only servers are deliberately not here: db and jira are work systems, and
+# experts needs a repo level under the task that this layout does not have.
 #
 # -s user is essential: the default `local` scope binds a server to the single
-# directory it was added from, so hobby projects would see no MCPs at all.
+# directory it was added from, so hobby projects would see no MCPs at all. The
+# remove-before-add is what lets this recipe REPOINT an entry that still names the
+# work binary, rather than reporting "already registered" and leaving it stale.
 
-# Register the generic MCP servers (skips any whose binary is absent)
+# Build + register the hobby MCP servers from mcps/ (chobby only; work claude untouched)
 install-mcps:
     #!/usr/bin/env bash
-    set -uo pipefail
+    set -euo pipefail
+    for d in just-mcp lsp-mcp tree-extract; do
+        echo "  building $d"
+        cargo install --path "{{REPO_ROOT}}/mcps/$d" --locked
+    done
+    echo ""
+    set +e
     add() {
         if command -v "$2" >/dev/null 2>&1; then
+            CLAUDE_CONFIG_DIR="{{CONFIG_DIR}}" claude mcp remove -s user "$1" >/dev/null 2>&1
             CLAUDE_CONFIG_DIR="{{CONFIG_DIR}}" claude mcp add -s user "$1" -- "$2" >/dev/null 2>&1 \
-                && echo "  added $1" || echo "  $1 already registered"
+                && echo "  $1 -> $2" || echo "  FAILED to register $1"
         else
-            echo "  SKIP $1 — \`$2\` not on PATH (build it from the work tooling repo)"
+            echo "  SKIP $1 — \`$2\` not on PATH (is ~/.cargo/bin on PATH?)"
         fi
     }
-    add lsp-mcp      lsp-mcp
-    add tree-extract julian-tree-extract-mcp
-    add just-mcp     just_mcp
+    add lsp-mcp      hobby-lsp-mcp
+    add tree-extract hobby-tree-extract-mcp
+    add just-mcp     hobby-just-mcp
     echo ""
     CLAUDE_CONFIG_DIR="{{CONFIG_DIR}}" claude mcp list
 
@@ -305,13 +330,16 @@ install-mml:
 doctor:
     @cd "{{REPO_ROOT}}" && ./scripts/doctor.sh
 
-# Run every test in the repo (all language servers + the dashboard)
+# Run every test in the repo (all language servers + MCP servers + the dashboard)
 test:
     cd lsps/hobby-mml-lsp && cargo test --workspace
     cd lsps/claude-lsp && cargo test
     cd lsps/claude-skills-lsp && cargo test
     cd lsps/treesitter-class-lsp && cargo test
     cd lsps/path-lsp && cargo test
+    cd mcps/just-mcp && cargo test
+    cd mcps/lsp-mcp && cargo test
+    cd mcps/tree-extract && cargo test
     cd tools/hwt-overview && cargo test --workspace
 
 # ---------------------------------------------------------------------------
