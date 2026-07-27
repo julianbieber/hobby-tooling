@@ -48,7 +48,7 @@ default:
 # ---------------------------------------------------------------------------
 
 # Everything a new machine needs, in dependency order. Safe to re-run.
-bootstrap: preflight clone-notes git-identity bootstrap-config install-chobby install-shell wire-nushell install-hooks install-skills install-claude-md local-paths wire-helix
+bootstrap: preflight clone-notes git-identity bootstrap-config install-chobby install-conversation install-shell wire-nushell install-hooks install-skills install-claude-md local-paths wire-helix
     @echo ""
     @echo "════════════════════════════════════════════════════════════════"
     @echo "Core install done. One manual step remains — the login is"
@@ -138,6 +138,31 @@ install-chobby: _root-notice
         *":{{BIN_DIR}}:"*) ;;
         *) echo "  WARNING: {{BIN_DIR}} is not on PATH — add it or chobby won't resolve." ;;
     esac
+
+# The conversation dumper is an ordinary hooks/*/hook.sh, so `install-hooks` links it
+# like the other five and settings.json calls it by absolute path — there is no
+# `claude-conversation-dump` on PATH to go missing, which is what broke this before.
+# Only the ctrl-g WRAPPER has to reach ~/.local/bin, because $EDITOR names it.
+#
+# It keeps the upstream `hx-claude` name for the reason lsps/ keeps theirs: $EDITOR
+# is one variable shared by both accounts, so a second name would isolate nothing.
+# Installing from here therefore replaces any link from the work checkout — fine,
+# since the script is account-agnostic (it keys off the zellij session, and hcdev-*
+# can never collide with the work cdev-*).
+
+# The `hx-claude` ctrl-g wrapper — opens the conversation beside the prompt buffer
+install-conversation: _root-notice
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p "{{BIN_DIR}}"
+    chmod +x "{{REPO_ROOT}}/bin/hx-claude"
+    ln -sf "{{REPO_ROOT}}/bin/hx-claude" "{{BIN_DIR}}/hx-claude"
+    echo "  linked hx-claude -> {{BIN_DIR}}/hx-claude"
+    echo "  (the dump hook itself comes from \`just install-hooks\`)"
+    if [ "${EDITOR:-}" != "hx-claude" ]; then
+        echo "  NOTE: \$EDITOR is '${EDITOR:-<unset>}' — ctrl-g uses it, so set it to hx-claude:"
+        echo "        nushell:  \$env.EDITOR = \"hx-claude\"   in ~/.config/nushell/env.nu"
+    fi
 
 # Hooks into the hobby config dir
 install-hooks: _root-notice
@@ -353,7 +378,8 @@ test:
 uninstall:
     #!/usr/bin/env bash
     set -euo pipefail
-    rm -f "{{NU_DIR}}/hwt.nu" "{{NU_DIR}}/hcdev.nu" "{{ZJ_LAYOUTS}}/hobby-dev.kdl" "{{BIN_DIR}}/chobby"
+    rm -f "{{NU_DIR}}/hwt.nu" "{{NU_DIR}}/hcdev.nu" "{{ZJ_LAYOUTS}}/hobby-dev.kdl"
+    rm -f "{{BIN_DIR}}/chobby" "{{BIN_DIR}}/hx-claude"
     rm -f "$HOME/fun_worktrees/CLAUDE.md"
     rm -f "{{CONFIG_DIR}}/settings.json" "{{CONFIG_DIR}}/CLAUDE.md"
     rm -f "{{CONFIG_DIR}}"/commands/*.md "{{CONFIG_DIR}}"/hooks/*.sh

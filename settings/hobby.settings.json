@@ -47,7 +47,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "claude-conversation-dump"
+            "command": "$HOME/.claude-hobby/hooks/claude-conversation.sh",
+            "timeout": 15
           }
         ]
       }
@@ -78,7 +79,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "claude-conversation-dump"
+            "command": "$HOME/.claude-hobby/hooks/claude-conversation.sh",
+            "timeout": 15
           }
         ]
       }

@@ -37,7 +37,33 @@ echo "Skills and hooks"
 n_sk=$(ls "$CFG"/commands/*.md 2>/dev/null | wc -l)
 [ "$n_sk" -gt 0 ] && ok "$n_sk skills installed" || bad "no skills installed" "just install-skills"
 n_hk=$(ls "$CFG"/hooks/*.sh 2>/dev/null | wc -l)
-[ "$n_hk" -eq 5 ] && ok "5 hooks installed" || bad "$n_hk/5 hooks installed" "just install-hooks"
+[ "$n_hk" -eq 6 ] && ok "6 hooks installed" || bad "$n_hk/6 hooks installed" "just install-hooks"
+# Named separately from the count because settings.json registers this one on
+# PostToolUse with an empty matcher: unlinked, it fails after EVERY tool call, and
+# a bare count would report the gap as "5/6" without saying which hook is loud.
+if [ -e "$CFG/hooks/claude-conversation.sh" ]; then
+    ok "conversation dump hook linked"
+else
+    bad "conversation dump hook missing" "just install-hooks"
+fi
+if command -v hx-claude >/dev/null 2>&1; then
+    # Resolving to a copy outside this checkout is how this broke in the first
+    # place: ~/.local/bin pointed into a work *worktree*, one `wt rm` from gone.
+    if [ "$(readlink -f "$(command -v hx-claude)")" = "$(readlink -f "$HERE/../bin/hx-claude")" ]; then
+        ok "hx-claude on PATH, from this checkout"
+    else
+        warn "hx-claude resolves outside this checkout" "just install-conversation"
+    fi
+else
+    bad "hx-claude not on PATH" "just install-conversation"
+fi
+# ctrl-g opens $EDITOR, so a dump nothing points at is still an invisible failure.
+# A warn, not a gap: the shell profile is outside this repo's control.
+if [ "${EDITOR:-}" = "hx-claude" ]; then
+    ok "EDITOR=hx-claude (ctrl-g shows the conversation)"
+else
+    warn "EDITOR is ${EDITOR:-<unset>}, not hx-claude" "set it in ~/.config/nushell/env.nu"
+fi
 
 echo ""
 echo "Shell"

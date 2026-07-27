@@ -32,6 +32,7 @@ dotfiles/
   nushell/{hwt.nu, hcdev.nu}          # symlinked into ~/.config/nushell/
   zellij/layouts/hobby-dev.kdl        # symlinked into ~/.config/zellij/layouts/
   claude-md/                          # symlinked into ~/.claude-hobby/ and ~/fun_worktrees/
+bin/{chobby, hx-claude}               # symlinked into ~/.local/bin/
 hooks/<name>/hook.sh                  # symlinked into ~/.claude-hobby/hooks/
 skills/<name>/{skill.md, README.md}   # symlinked into ~/.claude-hobby/commands/
 settings/hobby.settings.json          # symlinked to ~/.claude-hobby/settings.json
@@ -185,6 +186,44 @@ guaranteed breakage somewhere, so **paths are discovered, never assumed**, and
 The escape hatch is `~/.config/hobby-tooling/paths.env` (`just local-paths`),
 outside the repo and never committed. It is also the *only* correct home for a path
 under the work tree: `TREE_SITTER_MML` belongs there, not in any file here.
+
+## The conversation under ctrl-g
+
+**ctrl-g** in Claude Code opens `$EDITOR` on the prompt buffer. Here that shows
+the conversation so far beside it, so the context is readable while writing the
+next prompt. Two pieces, and they only work as a pair:
+
+- `hooks/claude-conversation/hook.sh` renders the transcript to
+  `/tmp/claude-conversation-<key>.md` on every `PostToolUse` and `Stop`
+- `bin/hx-claude` is `$EDITOR`, and vsplits that file next to the prompt buffer
+  ctrl-g hands it
+
+`<key>` is the sanitized `$ZELLIJ_SESSION_NAME`, so ctrl-g in one pane opens that
+pane's conversation and not a neighbour's. **The key derivation is duplicated in
+both scripts and must stay identical** — diverge and each silently uses a
+different file.
+
+This is not about the zellij layout. The `editor` pane stays a plain shell; the
+conversation view is a ctrl-g thing, transient, and gone when you close it.
+
+`settings.json` calls the hook **by absolute path**
+(`$HOME/.claude-hobby/hooks/claude-conversation.sh`), like every other hook, not
+by a bare `claude-conversation-dump` on `PATH`. That bare name was the bug: it
+resolved only on a machine that also had the work checkout, and there only
+through a symlink into a work *worktree* that any `wt rm` deletes. On a
+hobby-only machine it failed after every single tool call, silently, because
+`PostToolUse` registers it with an empty matcher. Only `hx-claude` needs
+`~/.local/bin`, because `$EDITOR` names it.
+
+`hx-claude` **keeps its upstream name**, for the reason `lsps/` keeps theirs and
+`mcps/` does not: `$EDITOR` is one variable shared by both accounts, so a
+`hobby-`-prefixed second name would isolate nothing — it would just be a name
+nothing points at. Installing from here replaces any link from the work checkout,
+which is harmless because the script is account-agnostic. The dump path is safe
+to share for the same reason: `hcdev` names sessions
+`hcdev-<project>-<topic>-<task>` and the work `cdev` names its own `cdev-…`, so
+the two accounts already have disjoint keys inside
+`/tmp/claude-conversation-*.md`.
 
 ## Helix: one dev flow, three files
 
