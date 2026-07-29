@@ -3,8 +3,8 @@
 #
 # A plugin has no in:/out: — data flows through the World, so the interface is
 # each system's access block. `## systems`, `## behavior` and `## invariants`
-# are required; the three world sections are optional, so delete any you have
-# nothing to say in.
+# are required; `## data` and the three world sections are optional, so delete
+# any you have nothing to say in.
 #
 # Bevy's own types (Transform, Time, AssetServer, AppExit, …) need no
 # declaration — use them directly in an access list.
@@ -20,6 +20,16 @@ kind: plugin
 ## modules
 # Optional — the non-system collaborators (the `impl Plugin` type, an asset
 # loader, a helper). The systems live in `## systems`, not here.
+
+## data
+# The shapes with no ECS role — a field type, an enum a component is built from,
+# a nested config record. No in:/out: and no `marker` here; a type a system
+# accesses directly belongs in one of the three sections below instead.
+# enum SpawnPattern { ring, scatter, line }
+# struct SpawnPoint {
+#   offset: Vec2,
+#   pattern: SpawnPattern,
+# }
 
 ## components
 # Entity data. `marker Name` declares a zero-sized component.

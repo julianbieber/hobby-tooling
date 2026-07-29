@@ -120,7 +120,7 @@ end of this file are the reference.
    type-mapping tables (HMML `i64` → the source language's 64-bit int, `Vec<T>` →
    its list type, an `enum` → its closed value set, etc.). Per section:
 
-   - **`## data` `use` import added/removed** → *not* a data-model change to
+   - **`use` import added/removed** (any section that takes one) → *not* a data-model change to
      implement here. An imported type is the owning unit's contract: code
      against the shared code type it already maps to (the `use`'d unit's
      struct/DTO), and **never redeclare that type** in this unit's source.
@@ -158,6 +158,12 @@ end of this file are the reference.
      entities and starts being a singleton; that is a real refactor, not a
      rename. Never emit a Rust type for a Bevy built-in (`Transform`, `Time`, …)
      — those names in a spec mean the engine's type.
+   - **`## data`** (Bevy) → a plain Rust `struct`/`enum` with **no** ECS derive
+     and no registration in `build`. A type moving between `## data` and a world
+     section is the same **role change** as above, in the other direction:
+     adding the derive makes it something systems can access, removing it means
+     the type is now reached only through its owner. Do the move, and check the
+     access lists that named it.
    - **`## systems`** (Bevy) — route each entry to its Rust fn via its
      `@ path`, and map the access block key by key:
      - `schedule:` → which `app.add_systems(<Schedule>, …)` call it sits in.
@@ -263,10 +269,10 @@ end of this file are the reference.
   `invariants`. **Which are legal depends on `kind`:**
   - `endpoint`/`workflow`/`job` — exactly `modules`, `data`, `behavior`,
     `invariants`, all required (a body may be empty except `behavior`).
-  - `plugin` — `systems`, `behavior`, `invariants` required; `modules`,
-    `components`, `resources`, `events` optional; no `data`, no `access`.
-  - `system` — `access`, `behavior`, `invariants` required; `modules`,
-    `components`, `resources`, `events` optional; no `data`, no `systems`.
+  - `plugin` — `systems`, `behavior`, `invariants` required; `modules`, `data`,
+    `components`, `resources`, `events` optional; no `access`.
+  - `system` — `access`, `behavior`, `invariants` required; `modules`, `data`,
+    `components`, `resources`, `events` optional; no `systems`.
 - Header keys: `system` (req), `unit` (req), `kind` (req: `endpoint`|`workflow`|
   `job`|`plugin`|`system`), `method` (opt, endpoints: `GET`|`POST`|…), `base`
   (opt), `source` (opt: `repo` + `paths` list). `system`/`unit` are identifiers.
@@ -300,7 +306,13 @@ end of this file are the reference.
 - `## components` / `## resources` / `## events`: the `## data` type grammar
   minus `in:`/`out:`, plus `marker Name` (a zero-sized component, `## components`
   only) → a Rust unit struct. **The section assigns the ECS role**, for `use`
-  imports too.
+  imports too — a world-section type gets the matching derive.
+- `## data` in a Bevy spec (grammar §4.6): the **role-less** shapes — a field
+  type, an enum a component is built from, a nested config record. Same body
+  grammar, but no `in:`/`out:` and no `marker`, and a `## data` name may not
+  appear in an access list (`access-role-mismatch`). One type namespace across
+  data + world sections, so a name declared in two of them is `duplicate-type`.
+  A `## data` type is a plain Rust `struct`/`enum` with **no** ECS derive.
 - Bevy's own types are built in and never generated: `Transform`, `Time`,
   `AssetServer`, `AppExit`, ….
 - `## systems`: `snake_name — responsibility [@ path] [@ spec unit]` at column 0,

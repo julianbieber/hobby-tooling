@@ -119,7 +119,7 @@ pub fn parse(src: &str) -> Document {
                 seen[oi] = true;
                 match name {
                     "modules" => modules.extend(p.parse_modules(body)),
-                    "data" => p.parse_data(body, &mut data),
+                    "data" => p.parse_data(body, &mut data, kind.is_some_and(Kind::is_bevy)),
                     "components" => p.parse_world(body, &mut components),
                     "resources" => p.parse_world(body, &mut resources),
                     "events" => p.parse_world(body, &mut events),
@@ -447,7 +447,10 @@ impl Parser {
 
     // ---- data --------------------------------------------------------------
 
-    fn parse_data(&mut self, body: &[Line], data: &mut DataSection) {
+    /// Parse a `## data` body. `bevy` is whether the file's `kind` is a Bevy one
+    /// (grammar §4.6): there the section declares role-less shapes only, so
+    /// `in:`/`out:` are rejected — a Bevy unit's interface is its access block.
+    fn parse_data(&mut self, body: &[Line], data: &mut DataSection, bevy: bool) {
         let mut j = 0;
         while j < body.len() {
             let line = &body[j];
@@ -465,25 +468,59 @@ impl Parser {
                 data.types.push(def);
                 j = next;
             } else if let Some(rest) = c.strip_prefix("in:") {
-                data.input = self.parse_io_type(line, "in:", rest);
+                if bevy {
+                    self.reject_io_in_data(line);
+                } else {
+                    data.input = self.parse_io_type(line, "in:", rest);
+                }
                 j += 1;
             } else if let Some(rest) = c.strip_prefix("out:") {
-                data.output = self.parse_io_type(line, "out:", rest);
+                if bevy {
+                    self.reject_io_in_data(line);
+                } else {
+                    data.output = self.parse_io_type(line, "out:", rest);
+                }
                 j += 1;
             } else if keyword_at(c, "use") {
                 let imp = self.parse_use_import(line);
                 data.imports.push(imp);
+                j += 1;
+            } else if keyword_at(c, "marker") {
+                // `marker` declares a *component*; a `## data` type has no role.
+                let (s, e) = line.content_span();
+                self.push(Diagnostic::error(
+                    Span::new(s, e),
+                    code::MALFORMED_MARKER,
+                    "`marker` declares a zero-sized component; it belongs in `## components`, \
+                     not `## data`",
+                ));
                 j += 1;
             } else {
                 let (s, e) = line.content_span();
                 self.push(Diagnostic::error(
                     Span::new(s, e),
                     code::MALFORMED_STRUCT,
-                    "expected a `struct`/`enum` definition, a `use` import, or an `in:`/`out:` line",
+                    if bevy {
+                        "expected a `struct`/`enum` definition or a `use` import"
+                    } else {
+                        "expected a `struct`/`enum` definition, a `use` import, or an `in:`/`out:` line"
+                    },
                 ));
                 j += 1;
             }
         }
+    }
+
+    /// The `in:`/`out:` rejection for a Bevy `## data` section, worded like the
+    /// world sections' (grammar §4.6, §8.1).
+    fn reject_io_in_data(&mut self, line: &Line) {
+        let (s, e) = line.content_span();
+        self.push(Diagnostic::error(
+            Span::new(s, e),
+            code::MALFORMED_STRUCT,
+            "`in:`/`out:` have no meaning in the Bevy dialect; a plugin or system's interface is \
+             its access block, not an input and output type",
+        ));
     }
 
     // ---- Bevy world sections (grammar §8.1) ---------------------------------

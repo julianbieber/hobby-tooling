@@ -1042,6 +1042,8 @@ mod tests {
             vec![
                 SectionKind::Header,
                 SectionKind::Modules,
+                // A Bevy kind may declare role-less shapes in `## data` too.
+                SectionKind::Data,
                 SectionKind::World(Role::Component),
                 SectionKind::World(Role::Resource),
                 SectionKind::World(Role::Event),

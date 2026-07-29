@@ -26,8 +26,9 @@ The always-parsing examples live in
 **Bevy is the common case here.** Most hobby repos are Bevy games, and a Bevy
 unit does not have an input and an output — data flows through the World. If the
 code you are extracting is a `Plugin` or a system, use `kind: plugin` /
-`kind: system` and the Bevy sections ([step 4b](#4b-extracting-bevy-code)), not
-`## data` with `in:`/`out:`.
+`kind: system` and the Bevy sections ([step 4b](#4b-extracting-bevy-code)),
+never `in:`/`out:`. A Bevy spec may still carry `## data` — that is where a type
+with no `Component`/`Resource`/`Event` derive goes.
 
 ## Instructions
 
@@ -92,8 +93,10 @@ code you are extracting is a `Plugin` or a system, use `kind: plugin` /
    - Align the `—` separators with padding spaces as in the examples.
 
 4. **`## data`** — the in/out data model as a Rust-like subset. Definitions
-   first, then `in:` / `out:`. **Classic kinds only** — for `plugin` / `system`
-   skip to [step 4b](#4b-extracting-bevy-code).
+   first, then `in:` / `out:`. This is the **classic-kind** shape — for
+   `plugin` / `system` skip to [step 4b](#4b-extracting-bevy-code), where the
+   same section exists but holds only the role-less types and takes no
+   `in:`/`out:`.
 
    - Derive `struct`s from the request/response and the types that flow through
      the entry point. Field names `snake_case`; translate source types into the
@@ -135,8 +138,9 @@ code you are extracting is a `Plugin` or a system, use `kind: plugin` /
 
 ### 4b. Extracting Bevy code
 
-For `kind: plugin` / `kind: system` there is no `## data` and no `in:`/`out:`.
-Read the access set off the code instead — it is the interface.
+For `kind: plugin` / `kind: system` there is no `in:`/`out:` — read the access
+set off the code instead, because that is the interface. The types split across
+four sections, and **the derive decides which**.
 
 - **`## components` / `## resources` / `## events`** — one section per role.
   Source them from the derives:
@@ -151,6 +155,19 @@ Read the access set off the code instead — it is the interface.
     shadows the built-in and is almost always a mistake.
   - Reuse before redeclaring, exactly as in step 4: `use enemy-waves: Wave` at
     the top of the world section that gives it its role.
+
+- **`## data`** — the types the unit needs that carry **none** of those three
+  derives: a plain `struct`/`enum` that appears as a *field* of a component or
+  resource, or that a system's prose names. Same body grammar as step 4 minus
+  `in:`/`out:`, and no `marker` (a marker is a component).
+  - The test is the derive, not the vibe: `#[derive(Clone, Copy)] enum
+    SpawnPattern` reached only through `WaveConfig.pattern` is `## data`.
+  - Putting it in a world section instead is a real error, not a style choice —
+    it claims a system can `query:` / `reads:` it. Leaving it out entirely is
+    the other failure: every field that names it becomes `undefined-type`.
+  - `use` imports work here too, and stay role-less.
+  - Omit the section when every type the unit touches has a role.
+  - It sits **before** `## components` in the file (canonical order).
 
 - **`## systems`** — one entry per system the plugin registers. Read them off
   `app.add_systems(<Schedule>, (a, b).chain())` and friends:
@@ -235,9 +252,11 @@ Read the access set off the code instead — it is the interface.
    unique index, a max-requeue constant), not off intuition.
 
 7. **Assemble and write the file.** Header first (`system`, `unit`, `kind`,
-   `method` for endpoints, then the `source` block), then the four `##` sections
-   **in this exact order**: `## modules`, `## data`, `## behavior`,
-   `## invariants`. Then write to the current task's notes dir:
+   `method` for endpoints, then the `source` block), then the `##` sections
+   **in canonical order**: `## modules`, `## data`, `## components`,
+   `## resources`, `## events`, `## systems`, `## access`, `## behavior`,
+   `## invariants` — a classic kind uses the four it takes, a Bevy kind the ones
+   it has anything to say in. Then write to the current task's notes dir:
 
    ```
    ~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/<unit>.hmml
@@ -286,10 +305,10 @@ Read the access set off the code instead — it is the interface.
   `invariants`. **Which are legal depends on `kind`:**
   - `endpoint`/`workflow`/`job` — exactly `modules`, `data`, `behavior`,
     `invariants`, all required (a body may be empty except `behavior`).
-  - `plugin` — `systems`, `behavior`, `invariants` required; `modules`,
-    `components`, `resources`, `events` optional; no `data`, no `access`.
-  - `system` — `access`, `behavior`, `invariants` required; `modules`,
-    `components`, `resources`, `events` optional; no `data`, no `systems`.
+  - `plugin` — `systems`, `behavior`, `invariants` required; `modules`, `data`,
+    `components`, `resources`, `events` optional; no `access`.
+  - `system` — `access`, `behavior`, `invariants` required; `modules`, `data`,
+    `components`, `resources`, `events` optional; no `systems`.
 - Header keys: `system` (req), `unit` (req), `kind` (req: `endpoint`|`workflow`|
   `job`|`plugin`|`system`), `method` (opt, endpoints: `GET`|`POST`|…), `base`
   (opt), `source` (opt: `repo` + `paths` list). `system`/`unit` are identifiers.
@@ -322,8 +341,13 @@ Read the access set off the code instead — it is the interface.
 
 - `## components` / `## resources` / `## events`: the `## data` type grammar
   minus `in:`/`out:`, plus `marker Name` (a zero-sized component, `## components`
-  only). **The section assigns the ECS role**, for `use` imports too. The same
-  name may not be declared in two of them.
+  only). **The section assigns the ECS role**, for `use` imports too. Put a type
+  here only if a system accesses it as a component/resource/event.
+- `## data` in a Bevy spec (grammar §4.6): the **role-less** shapes — a field
+  type, an enum a component is built from, a nested config record. Same body
+  grammar, but no `in:`/`out:` and no `marker`, and a `## data` name may not
+  appear in an access list (`access-role-mismatch`). One type namespace across
+  data + world sections, so a name declared in two of them is `duplicate-type`.
 - Bevy's own types need no declaration — `Transform`, `Time`, `AssetServer`,
   `AppExit` and friends are built in with their roles.
 - `## systems`: `snake_name — responsibility [@ path] [@ spec unit]` at column 0,
@@ -548,10 +572,11 @@ out: Stream<ReloadResult>
 
 ### Bevy plugin — `enemy-waves.hmml`
 
-Note what is *not* here: no `## data`, no `in:`/`out:`. The interface is the
-access blocks. `Transform` and `Time` are Bevy built-ins, so they are used
-without being declared; `Spawner` is a unit struct in the code and so becomes a
-`marker`.
+Note what is *not* here: no `in:`/`out:`. The interface is the access blocks.
+`Transform` and `Time` are Bevy built-ins, so they are used without being
+declared; `Spawner` is a unit struct in the code and so becomes a `marker`.
+`SpawnPattern` and `SpawnPoint` carry no ECS derive — they are only reached
+through `WaveConfig` — so they go in `## data`, where no system can name them.
 
 ```hmml
 system: bevy-survivor
@@ -565,6 +590,13 @@ source:
 
 ## modules
 WavePlugin — builds the plugin: registers the types below and adds the systems @ src/waves/mod.rs
+
+## data
+enum SpawnPattern { ring, scatter, line }
+struct SpawnPoint {
+  offset: Vec2,
+  pattern: SpawnPattern,
+}
 
 ## components
 struct Wave {
@@ -580,6 +612,7 @@ marker Spawner
 struct WaveConfig {
   interval_secs: f32,
   base_count: u32,
+  points: Vec<SpawnPoint>,
 }
 struct WaveState {
   current: u32,
@@ -619,6 +652,7 @@ detect_cleared — emits WaveCleared once no enemies of the current wave remain
 - spawn_enemies:
   - for each Spawner:
     - spawn N enemies at the spawner's Transform, where N grows with WaveState.current
+    - offset each one by the SpawnPoint list in WaveConfig, laid out by its SpawnPattern
     - give each one EnemyHealth and a Wave tagged with the current index
   - clear the due flag and advance WaveState.current
 - detect_cleared:

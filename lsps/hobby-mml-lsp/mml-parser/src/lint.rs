@@ -54,14 +54,16 @@ pub fn unresolved_spec_refs(
 
 /// Warnings for `use` type imports (grammar §4.5) whose target spec is missing,
 /// or which name a type the target does not define. Malformed refs already carry
-/// a `malformed-import` error and are skipped.
+/// a `malformed-import` error and are skipped. Every section that may import is
+/// checked — `## data` and the three world sections alike, since the section
+/// decides the imported name's role and not whether it has to resolve.
 pub fn unresolved_imports(
     doc: &Document,
     current_file: &Path,
     workspace_root: Option<&Path>,
 ) -> Vec<Diagnostic> {
     let mut out = Vec::new();
-    for import in &doc.data.imports {
+    for import in doc.all_imports() {
         if !crate::ast::is_valid_spec_ref(&import.spec.value) {
             continue;
         }
@@ -246,6 +248,30 @@ mod tests {
         let current = spec_dir.path().join("one.hmml");
         let diags = unresolved_source_paths(&doc(&spec_src("")), &current, Some(ws.path()));
         assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    /// An import is checked wherever it sits: `## data` and the world sections
+    /// differ in the role they assign, not in whether the name must resolve.
+    #[test]
+    fn imports_are_checked_in_every_section() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("model.hmml"),
+            "system: s\nunit: model\nkind: plugin\n\n## data\nstruct Pattern {\n  n: u32,\n}\n\n## components\nmarker Foe\n\n## systems\n\n## behavior\n- x\n\n## invariants\n",
+        )
+        .unwrap();
+        let src = "system: s\nunit: one\nkind: system\n\n\
+## data\nuse model: Pattern, Ghost\n\n\
+## components\nuse model: Foe, Wraith\n\n\
+## access\nschedule: Update\n\n\
+## behavior\n- run\n\n## invariants\n";
+        let current = dir.path().join("one.hmml");
+        let diags = unresolved_imports(&doc(src), &current, None);
+        let missing: Vec<&str> = diags
+            .iter()
+            .map(|d| &src[d.span.start..d.span.end])
+            .collect();
+        assert_eq!(missing, ["Ghost", "Wraith"], "{diags:?}");
     }
 
     #[test]

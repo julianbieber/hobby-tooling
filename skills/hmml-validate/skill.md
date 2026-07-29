@@ -103,7 +103,7 @@ Every finding is one of four verdicts. Use them exactly:
      spec lacks (**CODE-AHEAD**). A `struct` marked with a `# synthesized:`
      comment has **no real code type by design** (extract emits it for
      loose-param inputs) — never flag it SPEC-AHEAD for not existing.
-   - **`## data` `use` imports** — each `use unit: Type` must resolve, against
+   - **`use` imports** (any section that takes them) — each `use unit: Type` must resolve, against
      the sibling `<unit>.hmml` in the same task directory, to a type that owning
      unit's spec actually defines (an `unresolved-import` warning means it does
      not — the owning spec was renamed, the type removed, or the import points
@@ -128,6 +128,13 @@ Every finding is one of four verdicts. Use them exactly:
      marker that has grown fields in code is **CODE-AHEAD**. Fields compare as in
      `## data`. Never flag a Bevy built-in (`Transform`, `Time`, …) for having no
      local declaration — it is not supposed to have one.
+   - **`## data`** (Bevy) — the same field/variant comparison, plus one role
+     claim of its own: a `## data` type asserts the code type carries **none** of
+     `Component` / `Resource` / `Event`. A code type that has grown one is
+     **CODE-AHEAD** (it became part of the world; the spec should move it to that
+     section). The converse — a world-section type whose code derive is gone —
+     is the SPEC-AHEAD case above. Do not flag a `## data` type for being absent
+     from every access list; that is exactly what having no role means.
    - **`## systems`** (Bevy) — for each entry, find the Rust fn (via `@ path`
      where present) **and its registration**, then compare the access block
      against the fn's real signature:
@@ -205,10 +212,10 @@ Every finding is one of four verdicts. Use them exactly:
   `invariants`. **Which are legal depends on `kind`:**
   - `endpoint`/`workflow`/`job` — exactly `modules`, `data`, `behavior`,
     `invariants`, all required (a body may be empty except `behavior`).
-  - `plugin` — `systems`, `behavior`, `invariants` required; `modules`,
-    `components`, `resources`, `events` optional; no `data`, no `access`.
-  - `system` — `access`, `behavior`, `invariants` required; `modules`,
-    `components`, `resources`, `events` optional; no `data`, no `systems`.
+  - `plugin` — `systems`, `behavior`, `invariants` required; `modules`, `data`,
+    `components`, `resources`, `events` optional; no `access`.
+  - `system` — `access`, `behavior`, `invariants` required; `modules`, `data`,
+    `components`, `resources`, `events` optional; no `systems`.
 - Header keys: `system` (req), `unit` (req), `kind` (req: `endpoint`|`workflow`|
   `job`|`plugin`|`system`), `method` (opt, endpoints: `GET`|`POST`|…), `base`
   (opt: subdir the `source.paths` resolve against), `source` (opt: `repo` +
@@ -244,6 +251,13 @@ Every finding is one of four verdicts. Use them exactly:
   minus `in:`/`out:`, plus `marker Name` (a zero-sized component, `## components`
   only). **The section assigns the ECS role**, for `use` imports too — so the
   role is a checkable claim about the code's derive.
+- `## data` in a Bevy spec (grammar §4.6): the **role-less** shapes — a field
+  type, an enum a component is built from, a nested config record. Same body
+  grammar, but no `in:`/`out:` and no `marker`, and a `## data` name may not
+  appear in an access list (`access-role-mismatch`). One type namespace across
+  data + world sections, so a name declared in two of them is `duplicate-type`.
+  A `## data` type claims the *absence* of a `Component`/`Resource`/`Event`
+  derive; a code type that has one is drifted out of `## data`.
 - Bevy's own types (`Transform`, `Time`, `AssetServer`, `AppExit`, …) are built
   in and are never declared locally.
 - `## systems`: `snake_name — responsibility [@ path] [@ spec unit]` at column 0,

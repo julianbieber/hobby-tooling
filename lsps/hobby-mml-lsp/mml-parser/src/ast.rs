@@ -14,10 +14,12 @@ use serde::Serialize;
 ///
 /// Which of the section fields are populated depends on the header `kind`
 /// (grammar §7.2): the classic kinds (`endpoint`/`workflow`/`job`) use
-/// [`Document::data`], while the Bevy kinds (`plugin`/`system`) use
-/// [`components`](Document::components) / [`resources`](Document::resources) /
-/// [`events`](Document::events) plus [`systems`](Document::systems) or
-/// [`access`](Document::access). A section used by the wrong kind still parses
+/// [`Document::data`] for their whole data model, while the Bevy kinds
+/// (`plugin`/`system`) use [`components`](Document::components) /
+/// [`resources`](Document::resources) / [`events`](Document::events) plus
+/// [`systems`](Document::systems) or [`access`](Document::access) — and may use
+/// [`data`](Document::data) for the shapes that carry no ECS role at all
+/// (grammar §4.6). A section used by the wrong kind still parses
 /// (so the LSP keeps working mid-edit) but carries a
 /// [`SECTION_NOT_ALLOWED`](crate::diagnostic::code::SECTION_NOT_ALLOWED)
 /// diagnostic.
@@ -70,8 +72,21 @@ impl Document {
         )
     }
 
+    /// Every name `## data` brings into scope — declared and imported alike.
+    /// In the Bevy dialect these are the role-less shapes (grammar §4.6): legal
+    /// as a field type, illegal in an access list.
+    pub fn data_names(&self) -> impl Iterator<Item = &Spanned<String>> {
+        self.data
+            .types
+            .iter()
+            .map(TypeDef::name)
+            .chain(self.data.imports.iter().flat_map(|i| i.types.iter()))
+    }
+
     /// The ECS role of every declared and imported world name. Used to check
-    /// that an access-list entry fits the key it appears under.
+    /// that an access-list entry fits the key it appears under. `## data` names
+    /// are deliberately absent — the section assigns no role, which is what
+    /// makes them unusable in an access list.
     pub fn roles(&self) -> std::collections::HashMap<&str, Role> {
         let mut out = std::collections::HashMap::new();
         for section in self.world_sections() {
@@ -151,8 +166,10 @@ impl Kind {
         }
     }
 
-    /// Whether this kind models a Bevy ECS unit, and therefore uses the
-    /// component/resource/event/system sections instead of `## data`.
+    /// Whether this kind models a Bevy ECS unit, and therefore carries its
+    /// interface in the component/resource/event/system sections rather than in
+    /// `## data`'s `in:`/`out:`. A Bevy kind may still declare role-less shapes
+    /// in `## data` (grammar §4.6).
     pub fn is_bevy(self) -> bool {
         matches!(self, Kind::Plugin | Kind::System)
     }
@@ -175,6 +192,7 @@ impl Kind {
         match self {
             Kind::Plugin => &[
                 "modules",
+                "data",
                 "components",
                 "resources",
                 "events",
@@ -184,6 +202,7 @@ impl Kind {
             ],
             Kind::System => &[
                 "modules",
+                "data",
                 "components",
                 "resources",
                 "events",
@@ -258,13 +277,19 @@ pub fn is_valid_spec_ref(raw: &str) -> bool {
 
 // ---- data ------------------------------------------------------------------
 
+/// `## data`. In the classic dialect it is the whole data model, `in:`/`out:`
+/// included. In the Bevy dialect it holds the shapes that are *not* components,
+/// resources, or events (grammar §4.6) — a field type, a config struct, an enum
+/// a component is built from — and `in:`/`out:` are rejected there.
 #[derive(Debug, Clone, PartialEq, Serialize, Default)]
 pub struct DataSection {
     /// `use <system>/<unit>: Type, …` type imports (grammar §4.5), which pull
-    /// type definitions from another unit's `## data` into this file's scope.
+    /// type definitions from another unit into this file's scope, role-less.
     pub imports: Vec<Import>,
     pub types: Vec<TypeDef>,
+    /// `in:` — the unit's input type. Classic kinds only.
     pub input: Option<TypeExpr>,
+    /// `out:` — the unit's output type. Classic kinds only.
     pub output: Option<TypeExpr>,
 }
 

@@ -172,3 +172,37 @@ struct Budget {
       (identifier)
       (type
         (identifier)))))
+
+==================
+role-less data section in a Bevy spec
+==================
+
+## data
+enum SpawnPattern { ring, scatter }
+struct SpawnPoint {
+  offset: Vec2,
+  pattern: SpawnPattern,
+}
+
+---
+
+(source_file
+  (section_header
+    (section_marker)
+    (section_name))
+  (type_definition
+    (identifier)
+    (member
+      (identifier))
+    (member
+      (identifier)))
+  (type_definition
+    (identifier)
+    (member
+      (identifier)
+      (type
+        (identifier)))
+    (member
+      (identifier)
+      (type
+        (identifier)))))

@@ -74,6 +74,16 @@ events. That check is what replaces the `in:`/`out:` type check and what gives
 the LSP goto-definition, "who writes this component?", and the index's schedule
 map.
 
+`## data` is the one section **both** dialects take, and v2.1 is what made that
+true. A Bevy feature is full of types that are not components, resources, or
+events — a field type, an enum a component is built from — and there was nowhere
+to put them: a world section would have claimed a role the type does not have,
+and omitting them made every field naming one an `undefined-type` error. So a
+Bevy kind may declare `## data`, with `in:`/`out:` and `marker` still illegal
+there, and a `## data` name in an access list an `access-role-mismatch`. The
+section is a type namespace in this dialect, not an interface — role is what
+makes an access list checkable, and that is exactly what `## data` withholds.
+
 `endpoint` / `workflow` / `job` keep the v1 grammar unchanged, so the handful of
 non-Bevy hobby repos (`mosaik_map`, `securitd`, `glsllsp`) still have a usable
 dialect. The two cannot be mixed in one file.
