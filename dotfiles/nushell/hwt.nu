@@ -210,98 +210,163 @@ def flag-from-context [context: string, names: list<string>] {
     try { $hit | first | get 1 } catch { null }
 }
 
+# --- notes-tree inventory ---------------------------------------------------
+# The notes repo — not ~/fun_worktrees — is the durable record of which projects,
+# topics and tasks exist. `hwt rm` deletes the worktree and keeps the notes (and
+# prunes the now-empty topic and project dirs on the worktree side), so the
+# worktree tree is only ever a subset: completing from it hides every task
+# between `hwt rm` and `hwt forget`, and hides a topic entirely once its last
+# task is removed. Completions therefore read the notes tree, with the worktrees
+# as an additive source for the window where a checkout exists before its notes
+# dir does.
+
+# Every task directory under the notes tree, as [{project, topic, task}].
+# Directory-based rather than task.json-based on purpose: `hwt forget` (without
+# -a) drops task.json but keeps the journals, and older notes dirs predate the
+# file. The directory is what makes it a task.
+def notes-task-dirs [] {
+    if not ($NOTES_BASE | path exists) { return [] }
+    try {
+        glob $"($NOTES_BASE)/*/*/*" --no-file --no-symlink
+        | each {|d|
+            let rel = ($d | path relative-to $NOTES_BASE | path split)
+            { project: ($rel | get 0), topic: ($rel | get 1), task: ($rel | get 2) }
+        }
+    } catch { [] }
+}
+
+# Every topic directory under the notes tree, as [{project, topic}]. Includes
+# topics holding no task yet — `misc`, where a plan lives before a worktree does.
+def notes-topic-dirs [] {
+    if not ($NOTES_BASE | path exists) { return [] }
+    try {
+        glob $"($NOTES_BASE)/*/*" --no-file --no-symlink
+        | each {|d|
+            let rel = ($d | path relative-to $NOTES_BASE | path split)
+            { project: ($rel | get 0), topic: ($rel | get 1) }
+        }
+    } catch { [] }
+}
+
+# Every task either tree knows about, as
+# [{project, topic, task, path, present, done}], where `path` is the worktree
+# directory the task would occupy and `present` says whether it is checked out.
+def known-tasks [] {
+    let live = (all-tasks | each {|t| { project: $t.project, topic: $t.topic, task: $t.task } })
+    notes-task-dirs
+    | append $live
+    | uniq-by project topic task
+    | each {|t|
+        let path = ($WORKTREE_BASE | path join $t.project $t.topic $t.task)
+        {
+            project: $t.project
+            topic: $t.topic
+            task: $t.task
+            path: $path
+            present: ($path | path exists)
+            done: (read-task-meta $t.project $t.topic $t.task).done
+        }
+    }
+}
+
+# "2/5 open" / "all done" / "no tasks" for a group of known-tasks rows. Shown in
+# completion descriptions so it is visible up front whether filtering a command
+# by that project or topic will select anything.
+def task-count-summary [tasks: list] {
+    let total = ($tasks | length)
+    let open = ($tasks | where {|t| not $t.done } | length)
+    if $total == 0 { "no tasks" } else if $open == 0 { "all done" } else { $"($open)/($total) open" }
+}
+
 # --- completions ------------------------------------------------------------
 
-# Projects: git repos under ~/fun_repos (done projects sort last and are labelled)
+# Projects: git repos under ~/fun_repos, since a project without a checkout is
+# not something any command can act on. Task counts come from the notes tree, so
+# a project whose worktrees are all removed no longer reads as "no tasks".
 def project-completions [] {
     if not ($PROJECTS_BASE | path exists) { return [] }
     try {
+        let tasks = (known-tasks)
         ls $PROJECTS_BASE
         | where type == dir
         | get name
         | where { is-git-repo $in }
         | each {|p|
             let name = ($p | path basename)
-            let wt = ($WORKTREE_BASE | path join $name)
-            let has_tasks = ($wt | path exists)
-            let done = (if $has_tasks { is-project-done $wt } else { false })
-            let desc = if $done { "project [done]" } else if $has_tasks { "project" } else { "project (no tasks)" }
-            { value: $name, description: $desc, done: $done }
+            let mine = ($tasks | where project == $name)
+            let open = ($mine | where {|t| not $t.done } | length)
+            {
+                value: $name
+                description: $"project — (task-count-summary $mine)"
+                rank: (if $open > 0 { 0 } else { 1 })
+            }
         }
-        | sort-by done value
+        | sort-by rank value
         | each {|r| { value: $r.value, description: $r.description } }
     } catch { [] }
 }
 
-# Topics, filtered to --project/-p when that flag is already present
+# Topics from the notes tree (plus any live worktree topic), narrowed to
+# --project/-p when that flag is already present. Topics with open tasks sort
+# first; the description names the project(s) the topic appears under.
 def topic-completions [context?: string] {
-    if not ($WORKTREE_BASE | path exists) { return [] }
     let proj_filter = if $context != null { flag-from-context $context ["--project" "-p"] } else { null }
-    try {
-        let projects = if $proj_filter != null {
-            let pp = ($WORKTREE_BASE | path join $proj_filter)
-            if ($pp | path exists) { [$pp] } else { [] }
-        } else {
-            ls $WORKTREE_BASE | where type == dir | get name
+    let tasks = (known-tasks | where {|t| ($proj_filter == null) or ($t.project == $proj_filter) })
+
+    notes-topic-dirs
+    | append ($tasks | each {|t| { project: $t.project, topic: $t.topic } })
+    | where {|r| ($proj_filter == null) or ($r.project == $proj_filter) }
+    | uniq-by project topic
+    | group-by topic
+    | items {|topic, rows|
+        # One entry per topic name: the value inserted is the same either way, so
+        # a topic shared by two projects names both rather than appearing twice.
+        let projects = ($rows | get project | uniq | sort | str join ", ")
+        let mine = ($tasks | where topic == $topic)
+        {
+            value: $topic
+            description: $"($projects) — (task-count-summary $mine)"
+            rank: (if (($mine | where {|t| not $t.done } | length) > 0) { 0 } else { 1 })
         }
-        $projects | each {|project_path|
-            let project = ($project_path | path basename)
-            try {
-                ls $project_path | where type == dir | get name | each {|tp|
-                    let done = (is-topic-done $tp)
-                    let desc = if $done { $"($project) [done]" } else { $project }
-                    { value: ($tp | path basename), description: $desc, done: $done }
-                }
-            } catch { [] }
-        }
-        | flatten
-        | uniq-by value
-        | sort-by done value
-        | each {|r| { value: $r.value, description: $r.description } }
-    } catch { [] }
+    }
+    | sort-by rank value
+    | each {|r| { value: $r.value, description: $r.description } }
 }
 
-# Tasks across all projects/topics, narrowed by --project/-p and --topic/-t
-def task-completions [context?: string] {
-    if not ($WORKTREE_BASE | path exists) { return [] }
+# Shared body of the two task completers. Narrowed by --project/-p and
+# --topic/-t; open checked-out tasks sort first, then removed ones, then done.
+def task-completion-rows [live_only: bool, context?: string] {
     let proj_filter = if $context != null { flag-from-context $context ["--project" "-p"] } else { null }
     let topic_filter = if $context != null { flag-from-context $context ["--topic" "-t"] } else { null }
 
-    try {
-        let projects = if $proj_filter != null {
-            let pp = ($WORKTREE_BASE | path join $proj_filter)
-            if ($pp | path exists) { [$pp] } else { [] }
-        } else {
-            ls $WORKTREE_BASE | where type == dir | get name
+    known-tasks
+    | where {|t| ($proj_filter == null) or ($t.project == $proj_filter) }
+    | where {|t| ($topic_filter == null) or ($t.topic == $topic_filter) }
+    | where {|t| (not $live_only) or $t.present }
+    | each {|t|
+        let tag = $"($t.project)/($t.topic)"
+        let suffix = if $t.done { " [done]" } else if not $t.present { " [removed]" } else { "" }
+        {
+            value: $t.task
+            description: $"($tag)($suffix)"
+            rank: (if $t.done { 2 } else if not $t.present { 1 } else { 0 })
         }
+    }
+    | sort-by rank value
+    | each {|r| { value: $r.value, description: $r.description } }
+}
 
-        $projects | each {|project_path|
-            let project = ($project_path | path basename)
-            let topics = try {
-                if $topic_filter != null {
-                    let tp = ($project_path | path join $topic_filter)
-                    if ($tp | path exists) { [$tp] } else { [] }
-                } else {
-                    ls $project_path | where type == dir | get name
-                }
-            } catch { [] }
+# Every task the notes tree knows, checked out or not. Removed tasks are marked
+# [removed] and kept, because `hwt done`/`undone` read and write notes metadata
+# and work perfectly well without a checkout.
+def task-completions [context?: string] {
+    task-completion-rows false $context
+}
 
-            $topics | each {|topic_path|
-                let topic = ($topic_path | path basename)
-                try {
-                    ls $topic_path | where type == dir | get name | each {|t|
-                        let done = (is-task-done $t)
-                        let tag = $"($project)/($topic)"
-                        let desc = if $done { $"($tag) [done]" } else { $tag }
-                        { value: ($t | path basename), description: $desc, done: $done }
-                    }
-                } catch { [] }
-            } | flatten
-        }
-        | flatten
-        | sort-by done value
-        | each {|r| { value: $r.value, description: $r.description } }
-    } catch { [] }
+# Only tasks with a checkout on disk — for `go`, `rm` and `claude`, where
+# offering a removed task could only ever produce "not found".
+def live-task-completions [context?: string] {
+    task-completion-rows true $context
 }
 
 # Branch names from the project implied by --project/-p or the current directory
@@ -350,12 +415,11 @@ def all-tasks [] {
     } catch { [] }
 }
 
-# Find a task across all projects and topics. Exact match wins over fuzzy.
-# Returns {project, topic, task, path}, or null when nothing matches. Ambiguity
-# raises instead of returning null, so callers report "ambiguous" rather than
-# the misleading "not found".
-def find-task [task_name: string, project?: string] {
-    let pool = if $project != null { all-tasks | where project == $project } else { all-tasks }
+# Pick one task out of a pool by name: an exact match wins over a substring one.
+# Returns null when nothing matches, but *raises* on ambiguity (with `hint`
+# naming the way to narrow it), so callers report "ambiguous" rather than the
+# misleading "not found".
+def match-task [pool: list, task_name: string, hint: string] {
     if ($pool | is-empty) { return null }
 
     let exact = ($pool | where task == $task_name)
@@ -368,10 +432,26 @@ def find-task [task_name: string, project?: string] {
 
     print "Multiple matching tasks:"
     $matches | each {|m| print $"  ($m.project)/($m.topic)/($m.task)" }
-    error make { msg: $"Task '($task_name)' is ambiguous — narrow it with -p <project>, or give the full task name" }
+    error make { msg: $"Task '($task_name)' is ambiguous — ($hint)" }
 }
 
-# Every task that has task.json metadata in the notes repo, as
+# Find a checked-out task across all projects and topics, as
+# {project, topic, task, path}. For the commands that need the worktree itself.
+def find-task [task_name: string, project?: string] {
+    let pool = if $project != null { all-tasks | where project == $project } else { all-tasks }
+    match-task $pool $task_name "narrow it with -p <project>, or give the full task name"
+}
+
+# Find a task among everything the notes tree records, checked out or not. For
+# the commands that only read and write notes metadata (`done` / `undone`):
+# marking a task done is exactly as meaningful after `hwt rm` as before it, and
+# the completions offer removed tasks there, so the lookup has to see them too.
+def find-known-task [task_name: string, project?: string] {
+    let pool = if $project != null { known-tasks | where project == $project } else { known-tasks }
+    match-task $pool $task_name "narrow it with -p <project>, or give the full task name"
+}
+
+# Every task the notes repo records, as
 # [{project, topic, task, path (intended worktree dir), present}].
 # This sees removed tasks (worktree gone) that all-tasks cannot.
 #
@@ -379,45 +459,32 @@ def find-task [task_name: string, project?: string] {
 # shared with the team. Here there is exactly one author, so every notes task is
 # mine and no ownership check is needed.
 def notes-tasks [] {
-    if not ($NOTES_BASE | path exists) { return [] }
-    try {
-        glob $"($NOTES_BASE)/*/*/*/task.json"
-        | each {|f|
-            let task_dir = ($f | path dirname)
-            let rel = ($task_dir | path relative-to $NOTES_BASE | path split)
-            if ($rel | length) >= 3 {
-                let project = ($rel | get 0)
-                let topic = ($rel | get 1)
-                let task = ($rel | get 2)
-                let wt = ($WORKTREE_BASE | path join $project $topic $task)
-                { project: $project, topic: $topic, task: $task, path: $wt, present: ($wt | path exists) }
-            }
-        }
-        | compact
-    } catch { [] }
-}
-
-# Find a task by name among notes tasks (exact then fuzzy).
-def find-task-in-notes [task_name: string] {
-    let all = (notes-tasks)
-    let exact = ($all | where task == $task_name)
-    if ($exact | length) == 1 { return ($exact | first) }
-    let matches = if ($exact | is-not-empty) { $exact } else {
-        $all | where { $in.task | str contains $task_name }
+    notes-task-dirs | each {|t|
+        let wt = ($WORKTREE_BASE | path join $t.project $t.topic $t.task)
+        { project: $t.project, topic: $t.topic, task: $t.task, path: $wt, present: ($wt | path exists) }
     }
-    if ($matches | is-empty) { return null }
-    if ($matches | length) == 1 { return ($matches | first) }
-    print "Multiple matching tasks:"
-    $matches | each {|m| print $"  ($m.project)/($m.topic)/($m.task)" }
-    error make { msg: $"Task '($task_name)' is ambiguous — give the full task name" }
 }
 
-# Completion over notes tasks (includes removed ones). For restore / forget.
+# Find a task by name among notes tasks. `restore` and `forget` take no -p, so
+# the only way to narrow an ambiguous name there is to spell it out.
+def find-task-in-notes [task_name: string] {
+    match-task (notes-tasks) $task_name "give the full task name"
+}
+
+# Completion over notes tasks (includes removed ones). For restore / forget,
+# where a removed task is the normal argument, so those sort first.
 def notes-task-completions [] {
     notes-tasks | each {|t|
-        let tag = if $t.present { $"($t.project)/($t.topic)" } else { $"($t.project)/($t.topic) [removed]" }
-        { value: $t.task, description: $tag }
+        let done = (read-task-meta $t.project $t.topic $t.task).done
+        let suffix = if $t.present { (if $done { " [done]" } else { "" }) } else { " [removed]" }
+        {
+            value: $t.task
+            description: $"($t.project)/($t.topic)($suffix)"
+            rank: (if not $t.present { 0 } else if $done { 2 } else { 1 })
+        }
     }
+    | sort-by rank value
+    | each {|r| { value: $r.value, description: $r.description } }
 }
 
 # Resolve the project: explicit name, else inferred from the current directory
@@ -470,9 +537,10 @@ def task-from-cwd [] {
 }
 
 # Resolve a task either by name or, with no name, from the current directory.
+# Notes-inclusive: its callers only touch task.json, which outlives the worktree.
 def resolve-task-arg [task?: string, project?: string] {
     if $task != null {
-        find-task $task $project
+        find-known-task $task $project
     } else {
         let from_cwd = task-from-cwd
         if $from_cwd == null {
@@ -736,7 +804,7 @@ export def "hwt list" [
 
 # Go to a worktree directory
 export def --env "hwt go" [
-    task: string@task-completions                # Task name
+    task: string@live-task-completions           # Task name
     --project (-p): string@project-completions   # Disambiguate when the name repeats across projects
 ] {
     let found = find-task $task $project
@@ -750,7 +818,7 @@ export def --env "hwt go" [
 # state survives and `hwt restore` can re-create the checkout; `hwt forget`
 # purges the metadata when a task is truly finished.
 export def "hwt rm" [
-    task: string@task-completions                # Task to remove
+    task: string@live-task-completions           # Task to remove
     --project (-p): string@project-completions   # Disambiguate across projects
     --force (-f)                                 # Force removal even if dirty
 ] {
@@ -788,15 +856,16 @@ export def "hwt rm" [
     print $"Kept notes. 'hwt restore ($found.task)' re-creates it; 'hwt forget ($found.task)' purges the metadata."
 }
 
-# Re-create a removed task's worktree from its notes metadata. The branch is the
-# task name (re-created from HEAD if it no longer exists).
+# Re-create a removed task's worktree from its notes directory. The branch is the
+# task name (re-created from HEAD if it no longer exists). Only the notes path is
+# needed, so a task whose task.json was purged by `hwt forget` still restores.
 export def --env "hwt restore" [
-    task: string@notes-task-completions   # Task to restore (from notes metadata)
+    task: string@notes-task-completions   # Task to restore (from the notes tree)
     --no-cd                               # Don't cd into the restored worktree
 ] {
     let found = find-task-in-notes $task
     if $found == null {
-        error make { msg: $"No task.json metadata found for '($task)'" }
+        error make { msg: $"No notes directory found for '($task)' under ($NOTES_BASE)" }
     }
     if $found.present {
         print $"Already present: ($found.path)"
@@ -828,7 +897,7 @@ export def "hwt forget" [
 ] {
     let found = find-task-in-notes $task
     if $found == null {
-        error make { msg: $"No task.json metadata found for '($task)'" }
+        error make { msg: $"No notes directory found for '($task)' under ($NOTES_BASE)" }
     }
     if $found.present {
         print $"Warning: worktree still exists at ($found.path). Run 'hwt rm ($found.task)' first if you meant to remove it."
@@ -1194,7 +1263,7 @@ export def "hwt refresh" [
 
 # Start Claude Code (hobby account) in a worktree
 export def --env "hwt claude" [
-    task: string@task-completions                # Task name
+    task: string@live-task-completions           # Task name
     --project (-p): string@project-completions   # Disambiguate across projects
 ] {
     let found = find-task $task $project
