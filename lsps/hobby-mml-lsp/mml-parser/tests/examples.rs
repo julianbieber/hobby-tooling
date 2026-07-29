@@ -318,8 +318,17 @@ fn plugin_produces_expected_structure() {
     assert_eq!(doc.resources.types.len(), 2);
     assert_eq!(doc.events.types.len(), 1);
 
-    // A plugin uses no `## data`, so there is no input or output type at all.
-    assert!(doc.data.types.is_empty());
+    // `## data` carries the role-less shapes (grammar §4.6) — `SpawnPoint` is a
+    // field of the `WaveConfig` resource, not a component of its own. A plugin
+    // still has no input or output type: its interface is the access blocks.
+    let plain: Vec<&str> = doc
+        .data
+        .types
+        .iter()
+        .map(|t| t.name().value.as_str())
+        .collect();
+    assert_eq!(plain, ["SpawnPattern", "SpawnPoint"]);
+    assert!(!doc.roles().contains_key("SpawnPoint"));
     assert!(doc.data.input.is_none());
     assert!(doc.data.output.is_none());
 
@@ -382,6 +391,11 @@ fn system_kind_produces_a_single_access_block() {
     let roles = doc.roles();
     assert_eq!(roles["Spawner"], mml_parser::ast::Role::Component);
     assert_eq!(roles["WaveConfig"], mml_parser::ast::Role::Resource);
+    // An import into `## data` is role-less, exactly like a local declaration
+    // there — the section it lands in is what assigns the role.
+    let plain: Vec<&str> = doc.data_names().map(|n| n.value.as_str()).collect();
+    assert_eq!(plain, ["SpawnPoint", "SpawnPattern"]);
+    assert!(!roles.contains_key("SpawnPoint"));
 }
 
 #[test]

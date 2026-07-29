@@ -6,9 +6,9 @@
 #
 #   my_system — what it does @ spec <this-unit>
 #
-# `## access`, `## behavior` and `## invariants` are required; the world
-# sections are optional and usually hold `use` imports rather than declarations
-# — the plugin owns the shapes, this file borrows them.
+# `## access`, `## behavior` and `## invariants` are required; `## data` and the
+# world sections are optional and usually hold `use` imports rather than
+# declarations — the plugin owns the shapes, this file borrows them.
 
 system: my-system
 unit: my-unit
@@ -17,6 +17,10 @@ kind: system
 #   repo: my_bevy_game
 #   paths:
 #     - src/my_feature/my_system.rs
+
+## data
+# Role-less shapes this system's prose or fields need.
+# use <plugin-unit>: SpawnPattern
 
 ## components
 # use <plugin-unit>: Health, Enemy

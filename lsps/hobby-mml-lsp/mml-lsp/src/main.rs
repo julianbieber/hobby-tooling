@@ -1757,12 +1757,31 @@ mod tests {
             names,
             [
                 "modules",
+                "data",
                 "components",
                 "resources",
                 "events",
                 "systems",
                 "behavior",
                 "invariants"
+            ]
+        );
+
+        // `## data` lists the role-less shapes — an enum and a struct that are
+        // neither component nor resource nor event.
+        let data = syms.iter().find(|s| s.name == "data").unwrap();
+        let dtypes: Vec<(&str, SymbolKind)> = data
+            .children
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|s| (s.name.as_str(), s.kind))
+            .collect();
+        assert_eq!(
+            dtypes,
+            [
+                ("SpawnPattern", SymbolKind::ENUM),
+                ("SpawnPoint", SymbolKind::STRUCT)
             ]
         );
 

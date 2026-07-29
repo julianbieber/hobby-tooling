@@ -10,6 +10,13 @@ source:
 ## modules
 WavePlugin — builds the plugin: registers the types below and adds the systems @ src/waves/mod.rs
 
+## data
+enum SpawnPattern { ring, scatter, line }
+struct SpawnPoint {
+  offset: Vec2,
+  pattern: SpawnPattern,
+}
+
 ## components
 struct Wave {
   index: u32,
@@ -24,6 +31,7 @@ marker Spawner
 struct WaveConfig {
   interval_secs: f32,
   base_count: u32,
+  points: Vec<SpawnPoint>,
 }
 struct WaveState {
   current: u32,
@@ -63,6 +71,7 @@ detect_cleared — emits WaveCleared once no enemies of the current wave remain
 - spawn_enemies:
   - for each Spawner:
     - spawn N enemies at the spawner's Transform, where N grows with WaveState.current
+    - offset each one by the SpawnPoint list in WaveConfig, laid out by its SpawnPattern
     - give each one EnemyHealth and a Wave tagged with the current index
   - clear the due flag and advance WaveState.current
 - detect_cleared:

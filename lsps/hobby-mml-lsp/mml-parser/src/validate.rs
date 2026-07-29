@@ -218,7 +218,7 @@ pub fn validate(doc: &Document) -> Vec<Diagnostic> {
                 diags.push(Diagnostic::error(
                     ty.span,
                     code::DUPLICATE_IMPORT,
-                    format!("`{name}` is imported but also defined locally in `## data`"),
+                    format!("`{name}` is imported but also defined locally in this spec"),
                 ));
             } else if !imported.insert(name) {
                 diags.push(Diagnostic::error(
@@ -301,6 +301,11 @@ fn validate_bevy(doc: &Document, diags: &mut Vec<Diagnostic>) {
     }
 
     let roles = doc.roles();
+    // Names `## data` brought into scope. They resolve as types but carry no ECS
+    // role (grammar §4.6), so naming one in an access list is a role mismatch
+    // rather than an unknown name — worth saying differently, because the fix is
+    // to move the declaration, not to write it.
+    let plain: HashSet<&str> = doc.data_names().map(|n| n.value.as_str()).collect();
     // Ordering targets declared in this file: the systems plus any set named in
     // a `set:` line.
     let mut orderable: HashSet<&str> = doc.systems.iter().map(|s| s.name.value.as_str()).collect();
@@ -356,7 +361,7 @@ fn validate_bevy(doc: &Document, diags: &mut Vec<Diagnostic>) {
 
         for (key, accepted, items) in block.world_lists() {
             for item in items {
-                check_access_item(key, accepted, item, &roles, diags);
+                check_access_item(key, accepted, item, &roles, &plain, diags);
             }
         }
     }
@@ -364,28 +369,41 @@ fn validate_bevy(doc: &Document, diags: &mut Vec<Diagnostic>) {
 
 /// Resolve one access-list name and check its role against the key it sits
 /// under. Declarations win over Bevy built-ins, so a spec may redefine `Timer`.
+/// `plain` holds the `## data` names, which resolve but have no role.
 fn check_access_item(
     key: &str,
     accepted: &[Role],
     item: &Spanned<String>,
     roles: &HashMap<&str, Role>,
+    plain: &HashSet<&str>,
     diags: &mut Vec<Diagnostic>,
 ) {
     let name = item.value.as_str();
     let role = roles.get(name).copied().or_else(|| builtin_role(name));
     let Some(role) = role else {
+        // The sections that would give the name a role fitting this key.
         let want = accepted
             .iter()
-            .map(|r| r.section())
+            .map(|r| format!("`## {}`", r.section()))
             .collect::<Vec<_>>()
             .join(" or ");
-        diags.push(Diagnostic::error(
-            item.span,
-            code::UNDEFINED_ACCESS_ITEM,
-            format!(
-                "`{name}` is not declared, imported, or a Bevy built-in; declare it in `## {want}`"
-            ),
-        ));
+        let (code, message) = if plain.contains(name) {
+            (
+                code::ACCESS_ROLE_MISMATCH,
+                format!(
+                    "`{name}` is declared in `## data`, which gives it no ECS role; move it to \
+                     {want} if a system really accesses it"
+                ),
+            )
+        } else {
+            (
+                code::UNDEFINED_ACCESS_ITEM,
+                format!(
+                    "`{name}` is not declared, imported, or a Bevy built-in; declare it in {want}"
+                ),
+            )
+        };
+        diags.push(Diagnostic::error(item.span, code, message));
         return;
     };
     if !accepted.contains(&role) {
@@ -473,7 +491,7 @@ fn check_type(ty: &TypeExpr, known: &HashSet<&str>, diags: &mut Vec<Diagnostic>)
         diags.push(Diagnostic::error(
             ty.ident.span,
             code::UNDEFINED_TYPE,
-            format!("undefined type `{ident}`; not a primitive, opaque type, container, or a type defined in `## data`"),
+            format!("undefined type `{ident}`; not a primitive, opaque type, container, or a type declared or imported in this spec"),
         ));
     }
     for arg in &ty.args {

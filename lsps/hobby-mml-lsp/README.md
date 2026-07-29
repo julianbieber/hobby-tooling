@@ -36,6 +36,11 @@ through the World. v2 adds `kind: plugin` / `kind: system` and the sections
 makes the legal section set a function of `kind:`. The classic kinds are
 untouched, so every v1 spec still parses.
 
+v2.1 hands `## data` back to the Bevy kinds for the shapes that carry **no** ECS
+role — a field type, an enum a component is built from. `in:`/`out:` stay
+illegal there, and a `## data` name in an access list is a role mismatch: the
+section is a type namespace in this dialect, not an interface.
+
 That divergence ends any prospect of re-merging with the work binary, and makes
 upstream `mml-parser` cherry-picks a manual job — a cost accepted deliberately,
 since the Bevy dialect has no business in a work repo.
@@ -52,8 +57,8 @@ docs and parser cannot drift:
 
 | Fixture | Shows |
 |---|---|
-| `enemy-waves.hmml` | `kind: plugin` — world sections, systems, ordering, `marker`, `where:` |
-| `spawn-enemies.hmml` | `kind: system` — `## access`, cross-spec imports, query exclusion |
+| `enemy-waves.hmml` | `kind: plugin` — world sections, role-less `## data`, systems, ordering, `marker`, `where:` |
+| `spawn-enemies.hmml` | `kind: system` — `## access`, cross-spec imports into `## data` and a world section, query exclusion |
 | `get-map-tile.hmml` | `kind: endpoint` — `method`, param sources |
 | `mesh-terrain-chunks.hmml` | `kind: workflow` — `Queue`/`Stream` |
 | `shared-data-imports.hmml` / `cross-spec-refs.hmml` | `use` imports, `@ spec` refs |

@@ -32,7 +32,8 @@ of this file are the reference — match their **altitude** and formatting.
 **Bevy is the common case here.** Most hobby projects are Bevy games, and a Bevy
 unit has no input and output — data flows through the World. If the feature is a
 plugin or a system, scaffold `kind: plugin` / `kind: system` with the Bevy
-sections, not `## data` with `in:`/`out:`.
+sections, never `in:`/`out:`. A Bevy spec may still carry a `## data` section:
+that is where the shapes with **no** ECS role go (grammar §4.6).
 
 ## Instructions
 
@@ -94,8 +95,8 @@ sections, not `## data` with `in:`/`out:`.
      sprawling design. Omit `@ path` — there is no code yet. For a Bevy kind
      this is optional and usually just the plugin type; the systems go in
      `## systems`.
-   - **`## data`** *(classic kinds only)* — `struct`/`enum` defs for the shapes
-     the idea implies, then
+   - **`## data`** *(classic kinds — the whole data model)* — `struct`/`enum`
+     defs for the shapes the idea implies, then
      `in:` / `out:`. Every type must resolve to a primitive, an opaque atom
      (`Uuid`/`Money`/`DateTime`), a container (`Option`/`Vec`/`Map`/`Queue`/
      `Stream`), or a struct/enum you define here — an undefined type is a hard
@@ -104,6 +105,11 @@ sections, not `## data` with `in:`/`out:`.
      is already defined by another unit in the **same task dir** (check the
      sibling `.hmml` files), bring it in with a `use <unit>: Type` line at the
      top of `## data` rather than redeclaring it.
+   - **`## data`** *(Bevy kinds — the role-less shapes)* — a type a system never
+     touches directly, only reached *through* a component or resource: a field
+     type, an enum one is built from, a nested config record. Same body grammar,
+     but no `in:`/`out:` and no `marker`. It comes **before** the world sections
+     in the file. Skip it when every shape has a role.
    - **`## components` / `## resources` / `## events`** *(Bevy kinds)* — the
      shapes the idea implies, split by ECS role: entity data, global singletons,
      message payloads. A zero-sized tag is `marker Name`, not an empty struct.
@@ -111,6 +117,10 @@ sections, not `## data` with `in:`/`out:`.
      declare Bevy's own types (`Transform`, `Time`, …) — they are built in.
      Reuse across the task dir with `use <unit>: Type` at the top of the section
      that gives it its role.
+     **Ask of every shape: does a system access it?** If yes it belongs here; if
+     it only ever appears *inside* something a system accesses, it belongs in
+     `## data`. Declaring a field type as a component is the mistake this split
+     exists to prevent.
    - **`## systems`** *(kind: plugin)* — guess ~2–4 systems, each a snake_case
      name, a one-line responsibility, and an access block. `schedule:` is
      required; add `after:` where the ordering is part of the idea, and the
@@ -173,10 +183,10 @@ sections, not `## data` with `in:`/`out:`.
   `invariants`. **Which are legal depends on `kind`:**
   - `endpoint`/`workflow`/`job` — exactly `modules`, `data`, `behavior`,
     `invariants`, all required (a body may be empty except `behavior`).
-  - `plugin` — `systems`, `behavior`, `invariants` required; `modules`,
-    `components`, `resources`, `events` optional; no `data`, no `access`.
-  - `system` — `access`, `behavior`, `invariants` required; `modules`,
-    `components`, `resources`, `events` optional; no `data`, no `systems`.
+  - `plugin` — `systems`, `behavior`, `invariants` required; `modules`, `data`,
+    `components`, `resources`, `events` optional; no `access`.
+  - `system` — `access`, `behavior`, `invariants` required; `modules`, `data`,
+    `components`, `resources`, `events` optional; no `systems`.
 - Header keys: `unit` (req, identifier), `kind` (req: `endpoint`|`workflow`|
   `job`|`plugin`|`system`), `system` (opt: free-text label, not a path
   component), `source` (opt: `repo` + `paths` list).
@@ -206,8 +216,13 @@ sections, not `## data` with `in:`/`out:`.
 
 - `## components` / `## resources` / `## events`: the `## data` type grammar
   minus `in:`/`out:`, plus `marker Name` (a zero-sized component, `## components`
-  only). **The section assigns the ECS role**, for `use` imports too. The same
-  name may not be declared in two of them.
+  only). **The section assigns the ECS role**, for `use` imports too. Put a type
+  here only if a system accesses it as a component/resource/event.
+- `## data` in a Bevy spec (grammar §4.6): the **role-less** shapes — a field
+  type, an enum a component is built from, a nested config record. Same body
+  grammar, but no `in:`/`out:` and no `marker`, and a `## data` name may not
+  appear in an access list (`access-role-mismatch`). One type namespace across
+  data + world sections, so a name declared in two of them is `duplicate-type`.
 - Bevy's own types need no declaration — `Transform`, `Time`, `AssetServer`,
   `AppExit` and friends are built in with their roles.
 - `## systems`: `snake_name — responsibility [@ path] [@ spec unit]` at column 0,
@@ -312,9 +327,9 @@ the file is well-formed) — I fill them in, commit, then translate.
 ### Draft from a rough idea — a Bevy `plugin`
 
 I say: *"enemy waves — a timer spawns a wave of enemies at the spawn points,
-and something fires when the wave is cleared."* You draft (note: no `## data`,
-no `in:`/`out:`; `Transform` and `Time` are used without being declared; the
-behavior bullets are the system names):
+and something fires when the wave is cleared."* You draft (note: no `in:`/`out:`;
+every shape here has a role, so there is no `## data`; `Transform` and `Time` are
+used without being declared; the behavior bullets are the system names):
 
 ```hmml
 # DRAFT — best-guess scaffold from a rough idea; edit me down before translating.

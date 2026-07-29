@@ -362,15 +362,69 @@ fn plugin_with_systems(systems: &str) -> String {
 }
 
 #[test]
-fn data_section_is_not_allowed_in_a_plugin() {
+fn data_section_declares_role_less_types_in_a_plugin() {
+    // Grammar §4.6: a Bevy kind may declare the shapes that are neither
+    // component nor resource nor event, and use them as field types.
     let src = "system: s\nunit: u\nkind: plugin\n\n\
-## data\nin: String\nout: String\n\n\
+## data\nenum Pattern {\n  ring,\n  line,\n}\n\n\
+## components\nstruct Spawn {\n  pattern: Pattern,\n}\n\n\
+## systems\ngo — does it\n  schedule: Update\n  query: Spawn\n\n\
+## behavior\n- do it\n\n## invariants\n- always\n";
+    let (doc, diags) = analyze(src);
+    assert!(diags.is_empty(), "{diags:#?}");
+    assert_eq!(doc.data.types.len(), 1);
+}
+
+#[test]
+fn in_out_are_rejected_in_a_bevy_data_section() {
+    let src = "system: s\nunit: u\nkind: plugin\n\n\
+## data\nin: String\n\n\
 ## systems\ngo — does it\n  schedule: Update\n\n\
 ## behavior\n- do it\n\n## invariants\n- always\n";
-    let d = only(src, code::SECTION_NOT_ALLOWED);
+    let d = only(src, code::MALFORMED_STRUCT);
     assert_eq!(d.severity, Severity::Error);
-    assert_span(src, &d, "## data");
-    assert!(d.message.contains("kind: plugin"), "{}", d.message);
+    assert_span(src, &d, "in: String");
+    assert!(d.message.contains("access block"), "{}", d.message);
+    // Rejected, not recorded: a plugin has no input type.
+    let (doc, _) = analyze(src);
+    assert!(doc.data.input.is_none());
+}
+
+#[test]
+fn marker_in_data_points_at_components() {
+    let src = "system: s\nunit: u\nkind: plugin\n\n\
+## data\nmarker Foe\n\n\
+## systems\ngo — does it\n  schedule: Update\n\n\
+## behavior\n- do it\n\n## invariants\n- always\n";
+    let d = only(src, code::MALFORMED_MARKER);
+    assert_span(src, &d, "marker Foe");
+    assert!(d.message.contains("## components"), "{}", d.message);
+}
+
+#[test]
+fn a_data_type_named_in_an_access_list_is_a_role_mismatch() {
+    let src = "system: s\nunit: u\nkind: plugin\n\n\
+## data\nstruct Pattern {\n  n: u32,\n}\n\n\
+## systems\ngo — does it\n  schedule: Update\n  query: Pattern\n\n\
+## behavior\n- do it\n\n## invariants\n- always\n";
+    let d = only(src, code::ACCESS_ROLE_MISMATCH);
+    assert_eq!(d.severity, Severity::Error);
+    assert_span(src, &d, "Pattern");
+    assert!(d.message.contains("`## data`"), "{}", d.message);
+    assert!(d.message.contains("## components"), "{}", d.message);
+}
+
+#[test]
+fn a_name_in_both_data_and_a_world_section_is_a_duplicate() {
+    // One type namespace across the whole file, so a shape cannot be role-less
+    // and a component at once.
+    let src = "system: s\nunit: u\nkind: plugin\n\n\
+## data\nstruct Foe {\n  n: u32,\n}\n\n\
+## components\nmarker Foe\n\n\
+## systems\ngo — does it\n  schedule: Update\n\n\
+## behavior\n- do it\n\n## invariants\n- always\n";
+    let d = only(src, code::DUPLICATE_TYPE);
+    assert_span(src, &d, "Foe");
 }
 
 #[test]

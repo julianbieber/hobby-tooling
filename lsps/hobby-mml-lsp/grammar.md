@@ -1,5 +1,5 @@
 ---
-title: "Hobby HMML — language specification (v2.0, Bevy dialect)"
+title: "Hobby HMML — language specification (v2.1, Bevy dialect)"
 created: 2026-07-25
 tags:
   - spec
@@ -35,6 +35,19 @@ head, one review, one diff. You edit the `.hmml`; Claude translates spec → cod
 > grammar unchanged, `in:` / `out:` included; every v1 spec is still a valid v2
 > spec. The Bevy sections are illegal for the classic kinds and vice versa, so
 > the two dialects cannot be mixed in one file.
+
+> **v2.1 (2026-07-29) — `## data` in the Bevy dialect.** Not every shape in a
+> Bevy feature is a component, a resource, or an event. A spawn pattern, a
+> config record nested inside a resource, an enum a component is built from —
+> these are plain Rust types, and v2.0 had nowhere to put them: declaring one in
+> `## components` claimed it was a component, and leaving it out made every
+> field that used it an `undefined-type` error.
+>
+> A Bevy kind may therefore now declare `## data` too, for the **role-less**
+> shapes ([§4.6](#46--data--in-the-bevy-dialect)). `in:` / `out:` stay illegal
+> there — the section is a type namespace in this dialect, not an interface —
+> and a `## data` name may not appear in an access list, because the whole point
+> of a role is that an access list is checkable against it.
 
 ## 1. File shape
 
@@ -100,9 +113,13 @@ warning otherwise). Optional for the Bevy kinds, where `## systems` carries most
 of what `## modules` used to — keep it for the non-system collaborators
 (the plugin type itself, an asset loader, a helper).
 
-## 4. `## data` — the classic dialect
+## 4. `## data`
 
-**`endpoint` / `workflow` / `job` only.** Unchanged from v1.3.
+The type-declaration section. Both dialects have it, and its body grammar is the
+same in each; what differs is what it means and what else it may hold. For
+`endpoint` / `workflow` / `job` it is the whole data model, `in:` / `out:`
+included — unchanged from v1.3. For `plugin` / `system` it holds the shapes that
+carry no ECS role at all ([§4.6](#46--data--in-the-bevy-dialect)).
 
 ### 4.1 Structs
 
@@ -158,7 +175,50 @@ directory. Legal at the top of `## data` **and** of each world section
 Malformed ref / empty type list / non-PascalCase name → `malformed-import`
 (error). Importing a type twice, or one also defined locally →
 `duplicate-import` (error). A well-formed import whose target file or type does
-not exist → `unresolved-import` (warning, filesystem-aware tools only).
+not exist → `unresolved-import` (warning, filesystem-aware tools only). The
+section an import lands in decides the imported name's **role**, never whether
+it has to resolve — every `use` line is checked the same way.
+
+### 4.6 `## data` in the Bevy dialect
+
+**`plugin` / `system` only**, and optional. A Bevy feature is full of types that
+are not components, resources, or events: a field type, an enum a component is
+built from, a config record nested inside a resource. They belong here.
+
+```
+## data
+enum SpawnPattern { ring, scatter, line }
+struct SpawnPoint {
+  offset: Vec2,
+  pattern: SpawnPattern,
+}
+
+## resources
+struct WaveConfig {
+  interval_secs: f32,
+  points: Vec<SpawnPoint>,
+}
+```
+
+Three rules, all of them the consequence of one idea — **`## data` assigns no
+role**:
+
+- **`in:` / `out:` are illegal** (`malformed-struct`). Here the section is a type
+  namespace, not an interface; a Bevy unit's interface is its access block.
+- **`marker` is illegal** (`malformed-marker`) — a marker *is* a component, so
+  it belongs in `## components`.
+- **A `## data` name may not appear in an access list.** Naming one under
+  `query:` / `reads:` / `emits:` / … is an `access-role-mismatch`, worded to say
+  the type exists but has no role, so the fix is to move the declaration rather
+  than write it.
+
+The type namespace is shared with the world sections, so declaring the same name
+in `## data` and in `## components` is a `duplicate-type` error: a shape is
+role-less or it has a role, never both. `use` imports work here too, and an
+import into `## data` is role-less exactly like a local declaration.
+
+A field of a component may name a `## data` type freely — that is the whole
+point of the section.
 
 ## 5. `## behavior`
 
@@ -227,8 +287,8 @@ idempotency claim, a component-exclusivity rule.
 | kind | required | also allowed | rejected |
 |---|---|---|---|
 | `endpoint` / `workflow` / `job` | `modules`, `data`, `behavior`, `invariants` | — | every Bevy section |
-| `plugin` | `systems`, `behavior`, `invariants` | `modules`, `components`, `resources`, `events` | `data`, `access` |
-| `system` | `access`, `behavior`, `invariants` | `modules`, `components`, `resources`, `events` | `data`, `systems` |
+| `plugin` | `systems`, `behavior`, `invariants` | `modules`, `data`, `components`, `resources`, `events` | `access` |
+| `system` | `access`, `behavior`, `invariants` | `modules`, `data`, `components`, `resources`, `events` | `systems` |
 
 A required section that is absent is a `missing-section` error. A grammatical
 section that is wrong for the kind is a `section-not-allowed-for-kind` error —
@@ -236,7 +296,12 @@ it still parses, so the LSP keeps working mid-edit.
 
 Note the asymmetry: the classic kinds must declare all four sections (v1
 behaviour, preserved), while the Bevy sections are simply **omitted** when they
-have nothing to say. A plugin that registers no events has no `## events`.
+have nothing to say. A plugin that registers no events has no `## events`, and
+one whose every shape has a role has no `## data`.
+
+`## data` is the one section both dialects take, and it means something
+different in each ([§4](#4--data), [§4.6](#46--data--in-the-bevy-dialect)) — the
+`in:` / `out:` lines are what stay dialect-specific, not the section header.
 
 When `kind:` is missing or unparsable the classic four-section schema applies,
 so a file being typed top-down does not first look like a broken plugin.
@@ -258,8 +323,8 @@ The split file imports the shapes it touches rather than redeclaring them
 
 ### 8.1 `## components` / `## resources` / `## events`
 
-Body grammar is [§4](#4--data--the-classic-dialect)'s type grammar — `struct`,
-`enum`, `use` — minus `in:`/`out:`, plus one addition:
+Body grammar is [§4](#4--data)'s type grammar — `struct`, `enum`, `use` — minus
+`in:`/`out:`, plus one addition:
 
 ```
 marker Spawner
@@ -271,9 +336,14 @@ struct reads badly.
 
 **The section assigns the role.** A type declared *or imported* into
 `## components` is a component in this file, one in `## resources` is a resource,
-one in `## events` is an event. Role is what makes an access list checkable, and
-it is why the same name may not be declared in two world sections
-(`duplicate-type`).
+one in `## events` is an event, and one in `## data` has no role at all
+([§4.6](#46--data--in-the-bevy-dialect)). Role is what makes an access list
+checkable, and it is why the same name may not be declared in two of these
+sections (`duplicate-type`).
+
+Put a type here only if a system actually accesses it as a component, resource,
+or event. A shape that merely *appears inside* one of those — a field type, an
+enum it is built from — goes in `## data`.
 
 ```
 ## components
@@ -396,7 +466,8 @@ Stable codes, matched exactly by the skills and the LSP. Defined in
 **Modules:** `malformed-module`, `module-name-not-pascal`.
 
 **Data:** `malformed-struct`, `malformed-field`, `malformed-type`,
-`bad-param-source`, `unterminated-block`.
+`bad-param-source`, `unterminated-block`, plus `malformed-marker` for a `marker`
+line in `## data` (a marker is a component; see [§4.6](#46--data--in-the-bevy-dialect)).
 
 **Imports:** `malformed-import`, `duplicate-import`, `unresolved-import` (warn).
 
@@ -426,8 +497,8 @@ compiled into the test suite, so they cannot drift:
 
 | File | Shows |
 |---|---|
-| `mml-parser/tests/fixtures/examples/enemy-waves.hmml` | `kind: plugin` — all three world sections, three systems, ordering, a `marker`, a `where:` binding |
-| `mml-parser/tests/fixtures/examples/spawn-enemies.hmml` | `kind: system` — `## access`, imports across specs, a `-` query exclusion |
+| `mml-parser/tests/fixtures/examples/enemy-waves.hmml` | `kind: plugin` — all three world sections, a role-less `## data`, three systems, ordering, a `marker`, a `where:` binding |
+| `mml-parser/tests/fixtures/examples/spawn-enemies.hmml` | `kind: system` — `## access`, imports across specs into both `## data` and a world section, a `-` query exclusion |
 | `mml-parser/tests/fixtures/examples/get-map-tile.hmml` | `kind: endpoint` — `method`, param sources |
 | `mml-parser/tests/fixtures/examples/mesh-terrain-chunks.hmml` | `kind: workflow` — `Queue`/`Stream` in/out |
 | `mml-parser/tests/fixtures/examples/shared-data-imports.hmml` | `use` type imports |
@@ -441,6 +512,7 @@ compiled into the test suite, so they cannot drift:
 - **Classic kinds:** every type in a field / `in:` / `out:` resolves.
 - **Bevy kinds:** every access-list name resolves to a declared, imported, or
   built-in item, in a role that fits its key; every system has a `schedule:`.
+  Shapes no system accesses directly live in `## data`, not in a world section.
 - Behavior control flow uses only the closed keyword set.
 - Declared names are written verbatim in prose so they cross-link.
 - Invariants are checkable claims, not restatements of the behavior.
