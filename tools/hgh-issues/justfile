@@ -1,0 +1,54 @@
+# hgh-issues — Bevy dashboard of open GitHub issues, with one-click hcdev launch
+
+# List all recipes
+default:
+    @just --list
+
+# Build (dev profile; dependencies are optimized so the app is usable)
+build:
+    cargo build -p issues_app
+
+# Build the optimized release binary
+release:
+    cargo build -p issues_app --release
+
+# Run the issue dashboard (dev build)
+run:
+    cargo run -p issues_app
+
+# Run the optimized release build
+run-release:
+    cargo run -p issues_app --release
+
+# Install the `hgh-issues` binary to ~/.cargo/bin
+install:
+    cargo install --path crates/issues_app
+
+# Uninstall the binary
+uninstall:
+    cargo uninstall issues_app
+
+# Type-check the whole workspace
+check:
+    cargo check --workspace
+
+# Lint with clippy
+lint:
+    cargo clippy --workspace --all-targets
+
+# Format the code
+fmt:
+    cargo fmt
+
+# Run the tests
+test:
+    cargo test --workspace
+
+# Remove build artifacts
+clean:
+    cargo clean
+
+# Launch the app and screenshot its window (dev helper; needs xdotool + imagemagick).
+# Reuses hwt-overview's script, pointed at this tool's binary.
+shot out="/tmp/hgh-issues-shot.png": release
+    ../hwt-overview/shot.sh {{out}} hgh-issues "$(pwd)/target/release/hgh-issues"

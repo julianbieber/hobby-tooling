@@ -60,6 +60,7 @@ bootstrap: preflight clone-notes git-identity bootstrap-config install-chobby in
     @echo "Then, optionally:"
     @echo "    just install-mcps      the general-purpose MCP servers (Rust build)"
     @echo "    just install-overview  the hwt-overview dashboard (Rust build)"
+    @echo "    just install-issues    the hgh-issues dashboard (Rust build)"
     @echo "    just install-mml       forked HMML language server (Rust build)"
     @echo "    just install-lsps      the hobby language servers Helix references"
     @echo "    just helix-build       rebuild hx itself from the discovered checkout"
@@ -68,7 +69,7 @@ bootstrap: preflight clone-notes git-identity bootstrap-config install-chobby in
     @echo "════════════════════════════════════════════════════════════════"
 
 # Bootstrap plus every optional Rust build and the MCP servers.
-bootstrap-full: bootstrap install-mcps install-overview install-mml install-lsps
+bootstrap-full: bootstrap install-mcps install-overview install-issues install-mml install-lsps
     @echo "Full install done. Still need: chobby, then /login."
 
 # Say so when invoked from a worktree — the install still targets the main checkout,
@@ -316,6 +317,14 @@ install-mcps:
 install-overview:
     cd tools/hwt-overview && cargo install --path crates/hwt_app
 
+# `hgh-issues` is its own workspace but shares hwt-overview's `feathers_kit` and
+# `hwt_core` through path dependencies, so the two dashboards cannot drift apart
+# visually and there is no third copy of the UI kit in this repo.
+
+# Build + install the hgh-issues GitHub-issue dashboard
+install-issues:
+    cd tools/hgh-issues && cargo install --path crates/issues_app
+
 # `lsps/` vendors four servers that used to be buildable only from the work checkout,
 # which left a hobby-only machine unable to install them at all. They keep their
 # original binary names on purpose: there is one Helix and one languages.toml across
@@ -370,6 +379,7 @@ test:
     cd mcps/lsp-mcp && cargo test
     cd mcps/tree-extract && cargo test
     cd tools/hwt-overview && cargo test --workspace
+    cd tools/hgh-issues && cargo test --workspace
 
 # ---------------------------------------------------------------------------
 # Uninstall

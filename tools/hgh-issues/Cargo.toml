@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = ["crates/issues_app"]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+bevy = "0.19"
+bevy_feathers = "0.19"
+bevy_ui_widgets = "0.19"
+
+# Compile dependencies with optimizations even in dev — Bevy is painfully slow otherwise.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev]
+opt-level = 1

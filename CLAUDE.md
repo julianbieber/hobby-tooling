@@ -40,8 +40,54 @@ scripts/                              # install logic too involved for a justfil
 lsps/hobby-mml-lsp/                   # forked HMML language server + grammar.md
 lsps/{claude,claude-skills,treesitter-class,path}-lsp/   # vendored from the work checkout
 mcps/{just-mcp, lsp-mcp, tree-extract}/   # vendored from the work checkout
-tools/{hobby-mml-index, hwt-overview}/
+tools/{hobby-mml-index, hwt-overview, hgh-issues}/
 ```
+
+## `topic:<name>` is how an issue names its worktree
+
+`hgh-issues` lists open GitHub issues and turns one into a dev session with a
+click. The whole thing rests on a label. A worktree lives at
+`~/fun_worktrees/PROJECT/TOPIC/TASK`, and an issue already implies two of those
+three — the **project** is the repo it was filed in, the **task** is
+`gh-<number>-<slug>` from its number and title. **Topic is the one component
+nothing else supplies**, so the issue carries it as `topic:features`.
+
+Prefixed, with no fallback to bare labels. Every hobby repo already has `bug`,
+`enhancement`, `good first issue` from GitHub's defaults, and `wusel` labels its
+issues `world_gen` / `world_sim` / `persistence` — all of which read like topics
+and none of which are. Requiring the prefix keeps the tag an explicit statement
+rather than a guess, and lets an issue name a topic whose directory does not exist
+yet, which is the normal case: a topic dir only appears with the first worktree
+under it. The value must be directory-shaped (`[A-Za-z0-9._-]+`, no leading dot);
+anything else is treated as untagged rather than escaped, because it becomes both
+a path component and a shell argument.
+
+An untagged issue is still listed — it is the one that most needs attention — but
+it has no launch button, only a line naming the missing label. `/gh-issue-create`
+writes the label (creating it in the repo when absent), so issues opened through
+the skill arrive launchable.
+
+Existing worktrees are matched to issues **by number, not by task name**:
+`gh-42-*`, `gh42-*`, `issue-42_*` and bare `gh-42` all belong to issue 42. Task
+names predating the convention are spelled differently (`issue-9_dotfile_repo_retire`)
+and a slug changes whenever the title is edited, so the derived name is what a
+*new* task gets, never what a lookup relies on. When such a worktree exists, its
+path — not the label — supplies the topic for `hcdev wt`, since the path is what
+`hcdev` has to find.
+
+## The two dashboards share their crates
+
+`tools/hwt-overview` starts from the worktrees that exist; `tools/hgh-issues`
+starts from the issues that have none yet. Separate workspaces, separate windows,
+but `hgh-issues` **path-depends** on `../hwt-overview/crates/{feathers_kit,hwt_core}`
+instead of copying them — the same move `mcps/tree-extract` makes into `lsps/`.
+
+The one `feathers_kit` copy in this repo exists so the *work* dashboard cannot
+regress. A second hobby copy would protect nothing and drift, and sharing the kit
+is also what keeps the two windows looking like one tool. Two consequences worth
+knowing: `cargo fmt`/`clippy` run from `tools/hgh-issues` reach into
+`tools/hwt-overview`, and a change to `hwt_core` needs both workspaces' tests
+(`just test` runs them).
 
 ## HMML is a Bevy dialect here
 
