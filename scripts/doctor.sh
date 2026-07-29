@@ -114,6 +114,7 @@ done
 echo ""
 echo "Optional extras"
 if command -v hwt-overview >/dev/null 2>&1; then ok "hwt-overview built"; else warn "hwt-overview not built" "just install-overview"; fi
+if command -v hgh-issues >/dev/null 2>&1; then ok "hgh-issues built"; else warn "hgh-issues not built" "just install-issues"; fi
 for b in hobby-mml-lsp hobby-mml-parser hobby-mml-index; do
     if command -v "$b" >/dev/null 2>&1; then ok "$b built"; else warn "$b not built" "just install-mml"; fi
 done

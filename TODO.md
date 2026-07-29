@@ -93,6 +93,9 @@ Done, other than the two optional items at the end.
       `~/.config/helix/runtime` symlink was repointed and discovery found the rest.
 - [x] **Vendored the four language servers** into `lsps/` and installed them, which
       replaced the work-checkout builds in `~/.cargo/bin`.
+- [ ] **`just install-issues`** — the new `hgh-issues` dashboard is a Rust build, so
+      it has to be run once per machine like `install-mcps`. `just doctor` reports it
+      as an optional `-` until then. Nothing else depends on it.
 - [ ] *Optional:* **rebuild `hx`** with `just helix-build`. Not required — the
       binary is from 2026-07-02 and everything since arrives through the merged
       user config, with `hx --health hmml` reporting a parser and a server. The
@@ -106,7 +109,8 @@ Done, other than the two optional items at the end.
 
 ## On the desktop
 
-Done — `just doctor` reports **no gaps** as of 2026-07-26.
+Done — `just doctor` reported **no gaps** as of 2026-07-26. One new gap since:
+`hgh-issues` (2026-07-30) needs its one-per-machine build.
 
 - [x] **Dropped the local edit, pulled both repos.** `hobby-tooling` on `main` at
       `3e9507c`, `helix` on `custom` at `582a2dfa`, both clean.
@@ -150,6 +154,10 @@ Done — `just doctor` reports **no gaps** as of 2026-07-26.
       differences is inert here. Nothing to restore. Remember the file is now
       **generated** — anything worth keeping belongs in the checkout, or in
       `~/.config/helix/languages.local.toml` if it is machine-specific.
+- [ ] **`just install-issues`** — same one-per-machine Rust build as above. Until it
+      runs, `hgh-issues` is not on `PATH` and `just doctor` shows it as a gap. Note the
+      dashboard is only as useful as the `topic:<name>` labels are: `wusel`'s issues
+      carry them, the other repos' do not yet.
 - [ ] **Clone the hobby projects you actually want to work on.** `~/fun_repos` holds
       only `helix`, `hobby-mimisbrunnr`, `hobby-tooling` and the freshly cloned
       `bevy_asset_lsp`, so `hwt` still has nothing to make a worktree from.

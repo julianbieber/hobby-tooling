@@ -1,13 +1,13 @@
 ---
-description: Draft or refresh a GitHub issue body from the current conversation, then create or edit it with gh (with confirmation)
-allowed-tools: Bash(git branch:*), Bash(git remote:*), Bash(pwd:*), Bash(gh:*), Read
+description: Draft or refresh a GitHub issue body from the current conversation, then create or edit it with gh (with confirmation), tagging it with its topic
+allowed-tools: Bash(git branch:*), Bash(git remote:*), Bash(pwd:*), Bash(ls:*), Bash(gh:*), Read
 ---
 
-Write a proper GitHub issue **body**, derived from the **current conversation**.
-Issues are usually opened before any notes exist, so this skill does NOT read the
-notes directory — the conversation is the source. It confirms with you before
-writing and preserves any meaningful existing body rather than overwriting
-blindly.
+Write a proper GitHub issue **body**, derived from the **current conversation**,
+and tag the issue with the **topic** its work belongs under. Issues are usually
+opened before any notes exist, so this skill does NOT read the notes directory —
+the conversation is the source. It confirms with you before writing and preserves
+any meaningful existing body rather than overwriting blindly.
 
 ## Writing Standard (applies to everything this skill writes)
 
@@ -19,6 +19,38 @@ blindly.
   unverified, say so plainly ("not yet verified").
 - **Cite the source:** Every non-obvious claim names its evidence inline — PR #,
   commit SHA, file path, test name, or the exact command used.
+
+## The topic tag (why every issue gets a label)
+
+A hobby worktree lives at `~/fun_worktrees/PROJECT/TOPIC/TASK`. An issue already
+implies two of those three: the **project** is the repo it is filed in, and the
+**task** is `gh-<number>-<slug>`. **Topic is the missing component**, so the issue
+carries it as a label:
+
+```
+topic:features        ->  ~/fun_worktrees/<project>/features/gh-42-<slug>
+topic:perf, topic:ui  ->  first one wins; don't add two
+```
+
+`hgh-issues` (the issue dashboard) reads that label and nothing else: with it, an
+issue has a one-click **Start task** button that creates the worktree and opens an
+`hcdev` session; without it the issue is listed as *untagged* and cannot be
+launched at all. So the tag is not decoration — it is the thing that makes an issue
+actionable.
+
+Rules:
+
+- **Prefixed, always**: `topic:features`, never a bare `features` label. A repo's
+  ordinary labels (`bug`, `enhancement`, `good first issue`) must never be read as
+  topics.
+- **Directory-shaped values only**: `[A-Za-z0-9._-]+`, no leading dot, no spaces.
+  `topic: features` (stray space) and `topic:a/b` are rejected by the dashboard as
+  untagged. When in doubt, lowercase with `-` or `_` separators.
+- **Reuse an existing topic** where one fits. Existing topics are the second path
+  level: `ls ~/fun_worktrees/<project>/`. A new topic is fine when the work
+  genuinely doesn't belong to any of them — the label may name a topic whose
+  directory doesn't exist yet.
+- **One topic per issue.**
 
 ## Instructions
 
@@ -42,11 +74,14 @@ blindly.
      an issue, treat this as a **refresh** of that issue.
    - Otherwise this is a **new** issue.
 
-3. **For a refresh, fetch the current issue** and capture its title and body:
+3. **For a refresh, fetch the current issue** and capture its title, body, and labels:
 
    ```bash
    gh issue view <n> --json title,body,state,labels
    ```
+
+   A refresh normally leaves labels alone — the one exception is a **missing topic
+   tag**, which step 6b adds, since an untagged issue cannot be launched.
 
 4. **Assess the existing body**:
 
@@ -61,38 +96,72 @@ blindly.
    Standard. Where something is genuinely unknown, write a clearly-marked `TODO`
    rather than guessing.
 
-6. **Show the proposed body to the user and CONFIRM before writing.** Present the
-   full draft. For a refresh, state explicitly that you are about to replace the
-   existing body. Do not run `gh` until the user approves. Incorporate any edits
-   they give.
+6. **Resolve the topic and make sure its label exists** (see *The topic tag* above):
 
-7. **Write it:**
+   a. **Pick the topic:**
+      - Working inside a worktree? `pwd` gives it — the **second** component under
+        `~/fun_worktrees/PROJECT/`.
+      - Otherwise list what the project already uses and choose the one that fits:
+        ```bash
+        ls ~/fun_worktrees/{project}/
+        ```
+      - Nothing fits, or the project has no worktrees yet? Propose a new topic name
+        and say it is new. If the conversation gives no basis at all, **ask** — do
+        not invent one, and do not silently skip the tag.
+      - For a **refresh**, keep the existing `topic:` label if the issue has one and
+        it still fits; only propose a change when the work has genuinely moved.
+
+   b. **Ensure the label exists in the repo** — `gh issue create --label` fails on
+      an unknown label, so create it first if needed:
+      ```bash
+      gh label list --search "topic:" --json name --jq '.[].name'
+      gh label create "topic:{topic}" --color BFD4F2 \
+          --description "Task topic: worktrees land under ~/fun_worktrees/<project>/{topic}/"
+      ```
+      `gh label create` on an existing label is an error, not a no-op — check first.
+      One shared colour for every topic label keeps them visually one family.
+
+7. **Show the proposed body AND the topic label to the user, and CONFIRM before
+   writing.** Present the full draft plus the `topic:<topic>` you resolved (say so
+   when the label or the topic itself would be new). For a refresh, state explicitly
+   that you are about to replace the existing body. Do not run `gh` until the user
+   approves. Incorporate any edits they give.
+
+8. **Write it:**
 
    a. **New issue:**
       ```bash
-      gh issue create --title "<title>" --body "$(cat <<'BODY'
+      gh issue create --title "<title>" --label "topic:{topic}" --body "$(cat <<'BODY'
       ...
       BODY
       )"
       ```
-      Ask for a title first if the conversation doesn't imply an obvious one.
-      Suggest labels only if the repo already uses them (`gh label list`).
+      Ask for a title first if the conversation doesn't imply an obvious one. Add
+      further labels only if the repo already uses them (`gh label list`).
 
-   b. **Existing issue:**
+   b. **Existing issue:** body only — leave title, assignees, and state alone unless
+      asked:
       ```bash
       gh issue edit <n> --body "$(cat <<'BODY'
       ...
       BODY
       )"
       ```
-      Body only — leave title, labels, assignees, and state alone unless asked.
+      The single label exception: if the issue carries no `topic:` label, add one in
+      the same command (`--add-label "topic:{topic}"`), because an untagged issue
+      cannot be started from the dashboard. Never remove or replace other labels.
 
-8. **Confirm to the user** what was written and report the issue URL.
+9. **Confirm to the user** what was written and report the issue URL and the topic
+   label it carries.
 
-9. **Suggest the follow-up**, if a worktree doesn't exist yet: the issue number
-   makes a good task name, so
-   `hwt new gh-{number}-{slug} -p {project} -t {topic}` keeps the task, the
-   branch, and the issue traceable to each other.
+10. **Suggest the follow-up**, if a worktree doesn't exist yet — either of:
+
+    - `hgh-issues`, and click **Start task** on the issue: with the `topic:` label in
+      place it runs `hwt new` + `hcdev wt` in one go.
+    - by hand: `hwt new gh-{number}-{slug} -p {project} -t {topic}`.
+
+    Both keep the task, the branch, and the issue traceable to each other, and
+    `gh-{number}-{slug}` is exactly the task name the dashboard derives.
 
 ## Issue-Body Template
 
