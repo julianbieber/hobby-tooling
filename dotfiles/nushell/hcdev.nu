@@ -43,18 +43,6 @@ def hcdev-is-task-done [task_path: path] {
     (hcdev-read-task-meta $parts.project $parts.topic $parts.task).done
 }
 
-def hcdev-is-topic-done [topic_path: path] {
-    let tasks = try { ls $topic_path | where type == dir | get name } catch { return false }
-    if ($tasks | is-empty) { return false }
-    ($tasks | all { hcdev-is-task-done $in })
-}
-
-def hcdev-is-project-done [project_path: path] {
-    let topics = try { ls $project_path | where type == dir | get name } catch { return false }
-    if ($topics | is-empty) { return false }
-    ($topics | all { hcdev-is-topic-done $in })
-}
-
 # --- helpers ----------------------------------------------------------------
 
 # Pull the value of a flag out of a completion context line.
@@ -202,33 +190,49 @@ def hcdev-project-completions [] {
     } catch { [] }
 }
 
+# Topics come from the notes tree, not ~/fun_worktrees — mirroring hwt.nu, and
+# for the same reason: `hwt rm` prunes an emptied topic directory on the worktree
+# side while the notes keep it, so completing from the worktrees would hide every
+# topic that has no checked-out task right now. `hcdev new -t <topic>` needs the
+# full list most of all: it is the one command whose topic argument names a place
+# that does not exist on the worktree side yet.
 def hcdev-topic-completions [context?: string] {
-    if not ($WORKTREE_BASE | path exists) { return [] }
     let proj_filter = if $context != null { hcdev-flag $context ["--project" "-p"] } else { null }
-    try {
-        let projects = if $proj_filter != null {
-            let pp = ($WORKTREE_BASE | path join $proj_filter)
-            if ($pp | path exists) { [$pp] } else { [] }
-        } else {
-            ls $WORKTREE_BASE | where type == dir | get name
+
+    let notes_topics = if ($NOTES_BASE | path exists) {
+        try {
+            glob $"($NOTES_BASE)/*/*" --no-file --no-symlink
+            | each {|d|
+                let rel = ($d | path relative-to $NOTES_BASE | path split)
+                { project: ($rel | get 0), topic: ($rel | get 1) }
+            }
+        } catch { [] }
+    } else { [] }
+
+    let live = (hcdev-all-tasks)
+
+    $notes_topics
+    | append ($live | each {|t| { project: $t.project, topic: $t.topic } })
+    | where {|r| ($proj_filter == null) or ($r.project == $proj_filter) }
+    | uniq-by project topic
+    | group-by topic
+    | items {|topic, rows|
+        let projects = ($rows | get project | uniq | sort | str join ", ")
+        let open = ($live | where topic == $topic | where {|t| not (hcdev-is-task-done $t.path) } | length)
+        {
+            value: $topic
+            description: (if $open > 0 { $"($projects) — ($open) open" } else { $projects })
+            rank: (if $open > 0 { 0 } else { 1 })
         }
-        $projects | each {|project_path|
-            let project = ($project_path | path basename)
-            try {
-                ls $project_path | where type == dir | get name | each {|tp|
-                    let done = (hcdev-is-topic-done $tp)
-                    let desc = if $done { $"($project) [done]" } else { $project }
-                    { value: ($tp | path basename), description: $desc, done: $done }
-                }
-            } catch { [] }
-        }
-        | flatten
-        | uniq-by value
-        | sort-by done value
-        | each {|r| { value: $r.value, description: $r.description } }
-    } catch { [] }
+    }
+    | sort-by rank value
+    | each {|r| { value: $r.value, description: $r.description } }
 }
 
+# Tasks with a checkout on disk. Unlike topics this stays worktree-based: the one
+# task argument on this module (`hcdev wt`) opens an editor and a Claude pane in
+# the worktree, so a task from the notes tree with no checkout is not a session
+# `hcdev` could start. `hwt restore <task>` is the step in between.
 def hcdev-task-completions [context?: string] {
     if not ($WORKTREE_BASE | path exists) { return [] }
     let proj_filter = if $context != null { hcdev-flag $context ["--project" "-p"] } else { null }
