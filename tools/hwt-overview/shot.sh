@@ -1,10 +1,18 @@
 #!/usr/bin/env bash
-# Launch a dashboard binary (default hwt-overview), screenshot just its window, then kill it.
+# Launch a dashboard binary, screenshot just its window, then kill it.
+#
+#   ./shot.sh [OUT] [BIN] [EXE]
+#     OUT  where to write the PNG            (default /tmp/hwt-shot.png)
+#     BIN  window title to look for          (default hwt-overview)
+#     EXE  the binary to run                 (default ./target/release/$BIN, relative
+#                                             to this script — so a sibling tool passes
+#                                             its own path)
 set -u
 OUT="${1:-/tmp/hwt-shot.png}"
 BIN="${2:-hwt-overview}"
-cd "$(dirname "$0")"
-./target/release/"$BIN" >/tmp/hwt-run.log 2>&1 &
+HERE="$(cd "$(dirname "$0")" && pwd)"
+EXE="${3:-$HERE/target/release/$BIN}"
+"$EXE" >/tmp/hwt-run.log 2>&1 &
 APP=$!
 WID=""
 for _ in $(seq 1 60); do
