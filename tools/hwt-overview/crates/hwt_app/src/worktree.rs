@@ -7,6 +7,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bevy::prelude::*;
+use hwt_core::{days_from_civil, parse_ymd};
 use serde::{Deserialize, Serialize};
 
 /// A git status result for one repo, delivered from the async scan over a channel.
@@ -277,25 +278,6 @@ impl Task {
             1
         }
     }
-}
-
-/// Parse a `YYYY-MM-DD` string into `(year, month, day)`.
-fn parse_ymd(s: &str) -> Option<(i64, i64, i64)> {
-    let mut parts = s.trim().splitn(3, '-');
-    let y = parts.next()?.parse().ok()?;
-    let m = parts.next()?.parse().ok()?;
-    let d = parts.next()?.parse().ok()?;
-    Some((y, m, d))
-}
-
-/// Days since the Unix epoch (1970-01-01) for a civil date. Howard Hinnant's algorithm.
-fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = (if y >= 0 { y } else { y - 399 }) / 400;
-    let yoe = y - era * 400; // [0, 399]
-    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1; // [0, 365]
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
-    era * 146_097 + doe - 719_468
 }
 
 /// A topic grouping a set of tasks.
@@ -798,7 +780,10 @@ use hwt_core::spawn_detached;
 /// in a new terminal for this task.
 pub fn launch_cdev(task: &Task) {
     let dir = task.dir.to_string_lossy().into_owned();
-    let title = format!("hcdev-{}-{}-{}", task.id.project, task.id.topic, task.id.name);
+    let title = format!(
+        "hcdev-{}-{}-{}",
+        task.id.project, task.id.topic, task.id.name
+    );
     // Pass project and topic explicitly: the same task name can exist under two
     // projects, and `hcdev wt` errors on an ambiguous name rather than guessing.
     let cdev_cmd = format!(

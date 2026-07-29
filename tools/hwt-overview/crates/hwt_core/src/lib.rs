@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 use std::process::Command;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use log::warn;
 
@@ -96,6 +96,59 @@ pub fn notify(summary: &str, body: &str) {
 }
 
 // ---------------------------------------------------------------------------
+// Dates
+// ---------------------------------------------------------------------------
+
+/// Parse a `YYYY-MM-DD` string into `(year, month, day)`. Strict: trailing text fails.
+pub fn parse_ymd(s: &str) -> Option<(i64, i64, i64)> {
+    let mut parts = s.trim().splitn(3, '-');
+    let y = parts.next()?.parse().ok()?;
+    let m = parts.next()?.parse().ok()?;
+    let d = parts.next()?.parse().ok()?;
+    Some((y, m, d))
+}
+
+/// Days since the Unix epoch (1970-01-01) for a civil date. Howard Hinnant's algorithm.
+pub fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = (if y >= 0 { y } else { y - 399 }) / 400;
+    let yoe = y - era * 400; // [0, 399]
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1; // [0, 365]
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+    era * 146_097 + doe - 719_468
+}
+
+/// Parse a UTC RFC 3339 timestamp of the shape `gh` emits (`2026-07-26T20:44:11Z`).
+///
+/// Deliberately loose about the tail: fractional seconds and a numeric offset are
+/// accepted and then ignored, because every consumer of this feeds the result to
+/// [`rel_time`] and a few hours' skew cannot change a "3d ago" label. Returns `None`
+/// for a malformed date part or a pre-epoch timestamp.
+pub fn parse_rfc3339_utc(s: &str) -> Option<SystemTime> {
+    let (date, rest) = s.trim().split_once('T')?;
+    let (y, m, d) = parse_ymd(date)?;
+    // Strip the zone designator, then anything from a numeric offset onwards.
+    let time = rest.trim_end_matches('Z');
+    let time = time.split(['+', '-']).next().unwrap_or(time);
+    let mut parts = time.split(':');
+    let hour: i64 = parts.next()?.parse().ok()?;
+    let min: i64 = parts.next().unwrap_or("0").parse().ok()?;
+    // Seconds may carry a fraction (`11.523`); truncate it.
+    let sec: i64 = parts
+        .next()
+        .unwrap_or("0")
+        .split('.')
+        .next()
+        .unwrap_or("0")
+        .parse()
+        .ok()?;
+    let secs = days_from_civil(y, m, d) * 86_400 + hour * 3_600 + min * 60 + sec;
+    u64::try_from(secs)
+        .ok()
+        .map(|s| UNIX_EPOCH + Duration::from_secs(s))
+}
+
+// ---------------------------------------------------------------------------
 // Time formatting
 // ---------------------------------------------------------------------------
 
@@ -118,7 +171,44 @@ pub fn rel_time(t: SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
+
+    /// The date helpers agree with known epoch-day landmarks, and the timestamp parser
+    /// tolerates the tails `gh` and other tools attach (fraction, offset, bare `Z`).
+    #[test]
+    fn dates_parse_and_convert() {
+        assert_eq!(parse_ymd("2026-07-26"), Some((2026, 7, 26)));
+        assert_eq!(parse_ymd("  2026-07-26  "), Some((2026, 7, 26)));
+        assert_eq!(
+            parse_ymd("2026-07-26T20:44:11Z"),
+            None,
+            "strict: no trailing text"
+        );
+        assert_eq!(parse_ymd("nope"), None);
+
+        assert_eq!(days_from_civil(1970, 1, 1), 0);
+        assert_eq!(days_from_civil(1970, 1, 2), 1);
+        assert_eq!(days_from_civil(1969, 12, 31), -1);
+        assert_eq!(days_from_civil(2000, 3, 1), 11_017);
+
+        let t = parse_rfc3339_utc("2026-07-26T20:44:11Z").expect("gh's shape parses");
+        let secs = t.duration_since(UNIX_EPOCH).unwrap().as_secs();
+        // `date -u -d '2026-07-26T20:44:11Z' +%s`
+        assert_eq!(secs, 1_785_098_651);
+        // The tail is ignored, so these all land on the same instant as the bare form.
+        for s in [
+            "2026-07-26T20:44:11.523Z",
+            "2026-07-26T20:44:11+02:00",
+            "2026-07-26T20:44:11",
+        ] {
+            assert_eq!(parse_rfc3339_utc(s), Some(t), "tolerates the tail of {s}");
+        }
+        assert_eq!(
+            parse_rfc3339_utc("2026-07-26"),
+            None,
+            "date alone is not a timestamp"
+        );
+        assert_eq!(parse_rfc3339_utc("1969-01-01T00:00:00Z"), None, "pre-epoch");
+    }
 
     /// `rel_time` buckets ages into today / yesterday / days / months / years.
     #[test]
