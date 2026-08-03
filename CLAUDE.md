@@ -89,6 +89,35 @@ knowing: `cargo fmt`/`clippy` run from `tools/hgh-issues` reach into
 `tools/hwt-overview`, and a change to `hwt_core` needs both workspaces' tests
 (`just test` runs them).
 
+## Opening a session from a dashboard: two things that kill the terminal
+
+Both failures looked identical from the outside — the click opened an alacritty
+window that vanished before it drew a frame — and both are worth knowing, because
+either one silently comes back the moment a session name is spelled somewhere new.
+
+**A session name has to fit the socket path.** A session's IPC socket is
+`<runtime-dir>/zellij/contract_version_1/<session>`, and that path has to fit
+`sockaddr_un.sun_path` — 108 bytes on Linux. With the socket dir at 40 characters
+zellij rejects any name over 66, and `hcdev-<project>-<topic>-<task>` reaches 67 for
+an issue-derived task like `gh-6-simulate-food-production-and-city-growth`. So
+`hcdev-session-name` is the **only** place a session name is spelled: it measures the
+budget from the real socket dir, and when the three components overflow it, truncates
+and appends six hex characters of the full name's sha256. The hash is not decoration —
+plain truncation would land two long task names sharing a prefix on one session, and
+`hcdev wt A` would drop you into B's editor and Claude pane. `hwt sessions` imports the
+function rather than deriving a second copy of the rule. The dashboards still spell the
+*window* title the long way, which is fine: a title has no length limit, and it is not
+what zellij is asked for.
+
+**A launched terminal has to leave zellij behind.** Run from inside a zellij pane, a
+dashboard inherits `ZELLIJ`, `ZELLIJ_SESSION_NAME` and `ZELLIJ_PANE_ID`, and `setsid`
+does not undo that — the terminal it opens believes it is already inside that session.
+For the task you are *currently* in, `hcdev` then asks zellij to attach a session to
+itself, which zellij answers with a **panic**. `hwt_core::spawn_detached` therefore
+removes the three variables from every process it starts, and `hwt sessions` does the
+same with `with-env`. `hcdev-launch` also refuses the self-attach in so many words, for
+the case nothing spawned: a `hcdev wt <this task>` typed by hand.
+
 ## HMML is a Bevy dialect here
 
 `lsps/hobby-mml-lsp/grammar.md` is the **source of truth** for HMML (v2) and

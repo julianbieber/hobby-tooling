@@ -21,6 +21,12 @@ const WORKTREE_BASE = "~/fun_worktrees" | path expand
 const PROJECTS_BASE = "~/fun_repos" | path expand
 const NOTES_BASE = "~/fun_repos/hobby-mimisbrunnr/notes" | path expand
 
+# `hwt sessions` opens hcdev sessions, so it needs the session name for a task.
+# Imported rather than re-derived: the name is clamped to what zellij's socket
+# path allows, and a second copy of that rule would silently stop matching the
+# sessions hcdev actually creates.
+use hcdev.nu [hcdev-session-name]
+
 # Main hwt command - shows help.
 # Named `main` rather than `hwt`: a nushell module cannot export a command with
 # the same name as the module, and `use hwt.nu *` exposes `main` as `hwt`.
@@ -1284,7 +1290,7 @@ export def "hwt sessions" [
 
     let tasks = (all-tasks
         | where { not (is-task-done $in.path) }
-        | each {|t| $t | merge { session: $"hcdev-($t.project)-($t.topic)-($t.task)" } })
+        | each {|t| $t | merge { session: (hcdev-session-name $t.project $t.topic $t.task) } })
 
     let running = (try { zellij list-sessions --no-formatting | lines } catch { [] })
     let already = ($tasks | where {|t| session-running $running $t.session })
@@ -1302,7 +1308,12 @@ export def "hwt sessions" [
             print $"would open: ($t.session)  [($t.path)]"
         } else {
             print $"opening: ($t.session)"
-            ^setsid -f alacritty --working-directory $t.path --title $t.session -e nu --login -c $"hcdev wt '($t.task)' --project '($t.project)' --topic '($t.topic)'"
+            # Drop this shell's zellij variables: run from inside a session, the new
+            # terminal would otherwise look to zellij like a nested client of *that*
+            # session rather than a fresh top-level one.
+            with-env {ZELLIJ: null, ZELLIJ_SESSION_NAME: null, ZELLIJ_PANE_ID: null} {
+                ^setsid -f alacritty --working-directory $t.path --title $t.session -e nu --login -c $"hcdev wt '($t.task)' --project '($t.project)' --topic '($t.topic)'"
+            }
         }
     }
 }

@@ -111,9 +111,43 @@ def hcdev-task-context [] {
     { project: ($parts | get 0), topic: ($parts | get 1), task: ($parts | get 2) }
 }
 
+# The directory zellij puts its IPC sockets in — the same derivation zellij uses
+# (`ZELLIJ_SOCKET_DIR`, else `$XDG_RUNTIME_DIR/zellij`, else `$TMPDIR/zellij-<uid>`,
+# plus the client/server contract directory).
+def hcdev-zellij-sock-dir [] {
+    let tmp_fallback = $"($env.TMPDIR? | default '/tmp')/zellij-(^id -u | str trim)"
+    let base = ($env.ZELLIJ_SOCKET_DIR?
+        | default $"($env.XDG_RUNTIME_DIR? | default $tmp_fallback)/zellij")
+    $base | path join "contract_version_1"
+}
+
+# How long a session name zellij will accept here.
+#
+# A session's socket is <sock-dir>/<name>, and a Unix socket path has to fit in
+# sockaddr_un.sun_path — 108 bytes on Linux. zellij rejects the name outright when
+# it does not, so a long task name meant `hcdev wt` died the instant its terminal
+# opened. The floor keeps a nonsense sock dir from producing a zero-length budget.
+def hcdev-session-name-budget [] {
+    [8 (106 - (hcdev-zellij-sock-dir | str length))] | math max
+}
+
+# Bring a session name inside the budget, keeping distinct names distinct.
+#
+# The hash suffix is what makes truncation safe: two long names sharing a prefix
+# would otherwise collapse onto one session, and `hcdev wt A` would drop you into
+# B's editor and Claude pane. Every name handed to `hcdev-launch` goes through here.
+export def hcdev-clamp-session-name [name: string] {
+    let budget = (hcdev-session-name-budget)
+    if ($name | str length) <= $budget { return $name }
+    let hash = ($name | hash sha256 | str substring 0..<6)
+    let head = ($name | str substring 0..<($budget - 7) | str trim --right --char '-')
+    $"($head)-($hash)"
+}
+
 # Session name for a task. Three components, since the project leads the path.
-def hcdev-session-name [project: string, topic: string, task: string] {
-    $"hcdev-($project)-($topic)-($task)"
+# Exported so `hwt sessions` derives the same name rather than a second guess.
+export def hcdev-session-name [project: string, topic: string, task: string] {
+    hcdev-clamp-session-name $"hcdev-($project)-($topic)-($task)"
 }
 
 # Resolve the notes directory for a working directory, or null.
@@ -150,6 +184,14 @@ def --env hcdev-launch [dir: string, session: string] {
             print $"Cleaning up exited session: ($session)"
             zellij delete-session $session
         } else {
+            # `zellij attach` *panics* when the target is the session you are already
+            # in, so say it plainly instead. The dashboards do not hit this — they
+            # strip the zellij variables from the terminal they spawn — but a
+            # hand-typed `hcdev wt <this task>` from inside its own session would.
+            if ($env.ZELLIJ_SESSION_NAME? == $session) {
+                print $"Already in session: ($session)"
+                return
+            }
             print $"Attaching to existing session: ($session)"
             zellij attach $session
             return
@@ -351,7 +393,7 @@ export def --env "hcdev here" [] {
         hcdev-session-name $parts.project $parts.topic $parts.task
     } else {
         # Outside the worktree tree: name the session after the directory.
-        $"hcdev-($dir | path basename)"
+        hcdev-clamp-session-name $"hcdev-($dir | path basename)"
     }
     hcdev-launch $dir $session
 }
@@ -368,7 +410,7 @@ export def --env "hcdev dir" [
     let session = if $parts != null {
         hcdev-session-name $parts.project $parts.topic $parts.task
     } else {
-        $"hcdev-($dir | path basename)"
+        hcdev-clamp-session-name $"hcdev-($dir | path basename)"
     }
     hcdev-launch $dir $session
 }
