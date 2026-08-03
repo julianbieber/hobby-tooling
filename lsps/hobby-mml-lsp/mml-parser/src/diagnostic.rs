@@ -77,10 +77,10 @@ pub mod code {
     // Type imports (grammar §4.5).
     pub const MALFORMED_IMPORT: &str = "malformed-import";
     pub const DUPLICATE_IMPORT: &str = "duplicate-import";
-    /// Emitted only by filesystem-aware consumers (the LSP, the CLI, the index
-    /// tool) when a well-formed `use` import names a spec file that does not
-    /// exist on disk, or a type that the target spec does not define. The pure
-    /// parse/validate passes never produce it (mirrors [`UNRESOLVED_SPEC_REF`]).
+    /// Emitted only by filesystem-aware consumers (the LSP and the CLI) when a
+    /// well-formed `use` import names a spec file that does not exist on disk,
+    /// or a type that the target spec does not define. The pure parse/validate
+    /// passes never produce it (mirrors [`UNRESOLVED_SPEC_REF`]).
     pub const UNRESOLVED_IMPORT: &str = "unresolved-import";
 
     // Behavior (parse-time).
@@ -91,9 +91,9 @@ pub mod code {
     // Cross-spec references (grammar §5.4).
     pub const MALFORMED_SPEC_REF: &str = "malformed-spec-ref";
     pub const DUPLICATE_SPEC_REF: &str = "duplicate-spec-ref";
-    /// Emitted only by filesystem-aware consumers (the LSP, the CLI, the index
-    /// tool) when a well-formed `@ spec` ref does not resolve to a spec file on
-    /// disk. The pure parse/validate passes never produce it.
+    /// Emitted only by filesystem-aware consumers (the LSP and the CLI) when a
+    /// well-formed `@ spec` ref does not resolve to a spec file on disk. The
+    /// pure parse/validate passes never produce it.
     pub const UNRESOLVED_SPEC_REF: &str = "unresolved-spec-ref";
 
     // Source linkage (header `source.paths` + module `@ path`).

@@ -111,7 +111,7 @@ server, and both should show a tree-sitter parser and highlight queries.
 ## Installation
 
 ```bash
-just install-mml     # installs hobby-mml-lsp, hobby-mml-parser, hobby-mml-index
+just install-mml     # installs hobby-mml-lsp, hobby-mml-parser
 ```
 
 ## Known Limitations

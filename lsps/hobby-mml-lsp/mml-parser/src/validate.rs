@@ -195,7 +195,7 @@ pub fn validate(doc: &Document) -> Vec<Diagnostic> {
     // Type imports (grammar §4.5): shape, PascalCase, and duplicate checks. The
     // imported names join the resolution set below so `in:`/`out:`/field uses of
     // them stop erroring. Whether the target file/type actually exists needs a
-    // filesystem and is a warning emitted by fs-side consumers (LSP, CLI, index).
+    // filesystem and is a warning emitted by fs-side consumers (the LSP, the CLI).
     let mut imported: HashSet<&str> = HashSet::new();
     for import in doc.all_imports() {
         if !crate::ast::is_valid_spec_ref(import.spec.value.as_str()) {
@@ -319,8 +319,7 @@ pub fn validate(doc: &Document) -> Vec<Diagnostic> {
     }
 
     // Cross-spec references (grammar §5.4): shape only. Whether the target
-    // spec file exists needs a filesystem and is checked by the LSP, the CLI,
-    // and the index tool.
+    // spec file exists needs a filesystem and is checked by the LSP and the CLI.
     for spec in collect_spec_refs(doc) {
         check_spec_ref(spec, &mut diags);
     }

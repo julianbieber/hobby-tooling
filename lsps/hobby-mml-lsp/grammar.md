@@ -622,7 +622,7 @@ line in `## data` (a marker is a component; see [§4.6](#46--data--in-the-bevy-d
 `duplicate-module`.
 
 The `unresolved-*` codes need a filesystem and are emitted only by the
-filesystem-aware consumers (the LSP, `hobby-mml-parser --lint`, the index tool),
+filesystem-aware consumers (the LSP and `hobby-mml-parser --lint`),
 never by the pure parse/validate passes.
 
 ## 10. Worked examples
