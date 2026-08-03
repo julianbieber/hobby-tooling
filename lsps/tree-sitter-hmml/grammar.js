@@ -100,21 +100,41 @@ module.exports = grammar({
     // Type import: `use system/unit: Type, Type` (grammar §4.5). The ref reuses
     // the `spec_ref` node (same shape/highlight as an `@ spec` target); the
     // imported type names are plain identifiers after the `:`.
+    //
+    // `use extern crate::path: Type, …` (grammar §4.8) is the same line with a
+    // crate path in place of the spec ref. The `extern` keyword must be
+    // followed by a path token, so `use extern: Type` — an import from a unit
+    // that happens to be called `extern` — still matches the first branch.
     use_import: ($) =>
       seq(
         "use",
-        field(
-          "ref",
-          alias(
-            token(
-              prec(2, /[A-Za-z][A-Za-z0-9._-]*(\/[A-Za-z][A-Za-z0-9._-]*)?/),
+        choice(
+          seq(
+            field(
+              "ref",
+              alias(
+                token(
+                  prec(2, /[A-Za-z][A-Za-z0-9._-]*(\/[A-Za-z][A-Za-z0-9._-]*)?/),
+                ),
+                $.spec_ref,
+              ),
             ),
-            $.spec_ref,
+            ":",
+          ),
+          seq(
+            alias(token(prec(3, /extern[ \t]+/)), $.extern_keyword),
+            field("crate", $.crate_path),
+            ":",
           ),
         ),
-        ":",
         sepBy1(",", field("type", $.identifier)),
       ),
+
+    // A `::`-separated Rust path, lexed immediately after the `extern` keyword
+    // (which swallows its own trailing whitespace) so it never competes with
+    // the `spec_ref` token of the other branch.
+    crate_path: ($) =>
+      token.immediate(prec(3, /[A-Za-z_][A-Za-z0-9_]*(::[A-Za-z_][A-Za-z0-9_]*)*/)),
 
     // Header key/value: `system: …`, `unit: …`, `kind: …`, `repo: …`.
     field: ($) =>
@@ -145,25 +165,41 @@ module.exports = grammar({
 
     // `struct`/`enum` block. Members are treated uniformly (struct fields carry
     // a `: Type`, enum variants do not) — good enough for colouring.
+    //
+    // Both the `@ <path>` and the body are optional (grammar §4.7): a type that
+    // references real code may name only the members it changes, or none at all.
     type_definition: ($) =>
       seq(
         field("keyword", choice("struct", "enum")),
         field("name", $.identifier),
-        "{",
-        repeat(choice($.member, ",", $._newline)),
-        "}",
+        optional(seq("@", field("path", $.type_path))),
+        optional(seq("{", repeat(choice($.member, ",", $._newline)), "}")),
       ),
     member: ($) =>
       seq(
+        // `+` adds the member to the referenced type, `-` removes it; unmarked
+        // means "already there" (grammar §4.7).
+        optional(field("delta", $.delta)),
         field("name", $.identifier),
         optional(seq(":", field("type", $.type))),
         // Optional endpoint parameter source: `field: Type @query` (grammar §4.1).
         optional(seq("@", field("source", $.identifier))),
       ),
+    delta: ($) => token(prec(4, choice("+", "-"))),
 
-    // `marker Name` — a zero-sized component (grammar §8.1). Legal only in
-    // `## components`, which the LSP checks; here it is just a line shape.
-    marker_declaration: ($) => seq("marker", field("name", $.identifier)),
+    // A type declaration's `@ <path>`. Unlike `path`, it must also stop at `{`,
+    // because a body may follow on the same line.
+    type_path: ($) => token(prec(2, /[^@{\r\n]+/)),
+
+    // `marker Name [@ <path>]` — a zero-sized component (grammar §8.1). Legal
+    // only in `## components`, which the LSP checks; here it is just a line
+    // shape.
+    marker_declaration: ($) =>
+      seq(
+        "marker",
+        field("name", $.identifier),
+        optional(seq("@", field("path", $.type_path))),
+      ),
 
     type: ($) =>
       seq(

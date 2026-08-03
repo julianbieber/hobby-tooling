@@ -129,6 +129,31 @@ end of this file are the reference.
      onto the shared type — a refactor toward the owner, not a new type. A
      removed `use` whose type is still referenced will fail validation; treat
      that as a spec error to flag.
+   - **A type carrying `@ <path>`** (grammar §4.7) → **the type already exists;
+     never generate it.** The declaration is a *reference*, and its body — if it
+     has one at all — is a **delta against the real type**, not a definition of
+     it. This is the one place where reading a spec section literally corrupts
+     working code, so read it exactly:
+     - `+ field: Type` → **add** that field to the real struct at `@ <path>`,
+       and fix the construction sites the new field breaks.
+     - `- field` → **remove** that field, and the code that reads it.
+     - an **unmarked** field → an assertion that it is already there. Change
+       nothing. If it is missing, the spec is describing code that does not
+       exist — flag it, do not "helpfully" add the field.
+     - a field the body **does not mention** → **leave it exactly as it is.** A
+       reference body is never the complete field list, so a field's absence
+       from the spec says nothing whatsoever about the code. Deleting fields to
+       match a partial body is the failure this syntax exists to prevent.
+     - **no body at all** → nothing to do. The spec is naming a type, not
+       asking for a change.
+     - The `@ <path>` moving is a **re-target**, like a `source` change: the
+       type moved (or the spec was wrong about where it lived), which is not a
+       request to move it. Confirm with the human.
+     - After the change, the `#[derive(…)]` must still match the section it sits
+       under; if the section moved too, that is a role change, below.
+   - **`use extern`** (grammar §4.8) → a type from a dependency. Import it,
+     never define it. Adding one means the code should `use` that crate's type;
+     removing one whose name is still referenced is a spec error to flag.
    - **`## data`** struct/field change → the struct/DTO/type in code. An `enum`
      variant added/removed → the code's closed value set (Scala sealed
      trait/`enum`, Python `Enum`/`Literal[...]`, a Rust `enum`) **and** the
@@ -290,6 +315,17 @@ end of this file are the reference.
   unit into scope (bare `use unit: …` within the same system). Reuse a shared
   type this way instead of redeclaring it; resolves like `@ spec`. Unresolved
   target/type = warning.
+- Referencing existing code (grammar §4.7): a type declaration may end with
+  `@ <repo-relative-path>` — `struct Wave @ src/waves/mod.rs` — meaning the type
+  already exists there. The body then becomes **optional**, and when present it
+  is a **delta**: `+ field: Type` adds a field, `- field` removes one, an
+  unmarked field asserts one already exists, and anything not listed **stays as
+  it is**. Reference a type this unit does not own instead of restating it. The
+  filesystem-aware tools check the type is there, that its `#[derive(…)]` fits
+  the section's role, and that unmarked members exist — all warnings.
+- Dependency types (grammar §4.8): `use extern avian3d::prelude: Collider` for a
+  type from another crate. Same scope and role rules as `use`, and nothing else:
+  no file to resolve, no derive check, no members. Goto opens its docs.rs page.
 - `## behavior`: nested `-` bullets; control-flow keywords
   `if…: / else: / for each…: / while…: / try: / on error…:` (trailing `:`, body
   nested); everything else prose; declared names cross-link. An optional

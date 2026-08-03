@@ -1,5 +1,5 @@
 ---
-title: "Hobby HMML — language specification (v2.1, Bevy dialect)"
+title: "Hobby HMML — language specification (v2.2, Bevy dialect)"
 created: 2026-07-25
 tags:
   - spec
@@ -48,6 +48,32 @@ head, one review, one diff. You edit the `.hmml`; Claude translates spec → cod
 > there — the section is a type namespace in this dialect, not an interface —
 > and a `## data` name may not appear in an access list, because the whole point
 > of a role is that an access list is checkable against it.
+
+> **v2.2 (2026-08-04) — types that already exist.** A spec's type namespace
+> could be populated two ways: declare the type here, or import it from a
+> sibling `.hmml`. Most of a real feature's types are in neither place — they
+> are in the checkout's Rust, or in a dependency. All three workarounds were
+> wrong: **redeclaring** the type creates a second definition that drifts (and
+> reads to `/hmml-translate` as "make this exist", inviting a diff that deletes
+> real fields), **omitting** it makes every field naming it an `undefined-type`,
+> and **adding it to the built-in lists** claims Bevy defines it.
+>
+> v2.2 adds the missing vocabulary — *declared elsewhere* — in two forms, one
+> per guarantee:
+>
+> - **`@ <path>` on a declaration** ([§4.7](#47-referencing-a-rust-type--path)):
+>   the type is in this checkout, so the reference is **verified** — the type
+>   must be there, its `#[derive(…)]` must match the section it was filed under,
+>   and goto-definition lands on the real struct. The body becomes optional, and
+>   when present it is a **delta**: `+` adds a member, `-` removes one, unmarked
+>   asserts one already exists, and anything not listed stays as it is.
+> - **`use extern <crate::path>:`** ([§4.8](#48-importing-from-a-dependency-use-extern)):
+>   the type is in a dependency, so nothing is verifiable. It brings names into
+>   scope with the section's role and offers nothing else; goto opens its docs.rs
+>   page.
+>
+> Two keywords rather than one because the guarantee differs and should be
+> legible at a glance. Additive: every v2.1 spec is still a valid v2.2 spec.
 
 ## 1. File shape
 
@@ -134,9 +160,16 @@ struct Tile {
 Field names are snake_case or camelCase. The optional `@path` / `@query` /
 `@body` / `@header` suffix marks an endpoint parameter's source.
 
+The declaration line is `struct Name [@ <path>] [{ … }]`. The optional
+`@ <path>` makes it a **reference** to a type that already exists in real code
+([§4.7](#47-referencing-a-rust-type--path)) — which is what lets the body be
+omitted, and what turns a body that *is* present into a delta. A `struct` with
+neither a body nor a path says nothing, and is a `missing-type-body` error.
+
 ### 4.2 Enums
 
-Unit variants only, no payloads: `enum TileFormat { png, webp }`.
+Unit variants only, no payloads: `enum TileFormat { png, webp }`. The same
+`@ <path>` and optional body apply.
 
 ### 4.3 Type expressions
 
@@ -219,6 +252,97 @@ import into `## data` is role-less exactly like a local declaration.
 
 A field of a component may name a `## data` type freely — that is the whole
 point of the section.
+
+### 4.7 Referencing a Rust type (`@ <path>`)
+
+A type declaration may end its head with `@ <repo-relative-path>`, saying **this
+type already exists, over there**:
+
+```
+## components
+struct Wave @ src/waves/mod.rs
+struct EnemyHealth @ src/waves/mod.rs {
+  hp: f32,
+  + streak: u32,
+  - remaining,
+}
+marker Spawner @ src/waves/mod.rs
+```
+
+The path resolves exactly like a module's `@ path` ([§3](#3--modules)): against
+the declared `base:`, then the `source.repo` checkout roots, then the spec's own
+directory, then the workspace root. It is legal in **both dialects** and in
+every type-declaring section — a `## data` reference is role-less like any other
+`## data` name.
+
+**The body is optional, and when present it is a delta, not a definition.**
+Anything the body does not mention **stays as it is**. Each member line may
+carry a marker:
+
+| Line | Means |
+|---|---|
+| `+ streak: u32` | add this member to the real type |
+| `- remaining` | remove this member from the real type |
+| `hp: f32` | this member is already there (an assertion) |
+
+A removal needs no type — the field being removed already has one, in the code.
+A `+` or `-` on a type that declares its own shape is a `malformed-field` error:
+there is nothing to change.
+
+**Only unmarked members are assertions**, and only assertions can be
+contradicted. A `+` that has not landed yet and a `-` that has not been applied
+yet are the normal state of a spec whose work is outstanding, which is exactly
+when it is read most; diagnosing them would make every in-progress spec noisy.
+`/hmml-translate` reads them the other way round — as the change to make.
+
+The filesystem-aware tools check four things, all **warnings**:
+
+- the file declares no such type → `rust-type-not-found`
+- its `#[derive(…)]` does not match the section's role → `rust-role-mismatch`
+- the spec says `struct` and the code says `enum`, or `marker` names a struct
+  with fields → `rust-shape-mismatch`
+- an unmarked member is not there → `rust-member-unknown`
+
+A path that does not resolve produces one `unresolved-source-path` warning and
+none of the above: nothing about a file that is not there is knowable, so one
+warning is honest and four would be noise.
+
+The derive check is the one worth the whole feature. In Bevy a type's role
+**is** its derive, so filing a `#[derive(Resource)]` type under `## components`
+— the classic spec error — is caught at the moment it is cheap to fix. A
+reference is worth more than a copy precisely because a copy cannot be checked.
+
+Bevy renamed buffered events, so `## events` accepts `Event`, `Message`,
+`BufferedEvent`, or `EntityEvent`; they are the same statement about the type.
+
+### 4.8 Importing from a dependency (`use extern`)
+
+A Bevy game leans on components it does not own — avian's `Collider`, a
+plugin's marker. No path in this checkout names them:
+
+```
+## components
+use extern avian3d::prelude: Collider, RigidBody
+```
+
+Same rules as a `use` import ([§4.5](#45-importing-types-use)): names join the
+type namespace, **the section assigns the role**, importing a name twice or one
+also defined locally is `duplicate-import`. And nothing else — there is no file
+to resolve, no derive to check, no members. Only the path's shape is checkable
+(`crate` or `crate::module::path`), which is `malformed-extern-import`.
+
+That asymmetry is why it is a second keyword rather than a path that happens not
+to resolve. `@ <path>` means *verified*; `use extern` means *taken on trust*, and
+a reader should not have to resolve a path to tell which they are looking at.
+
+`use extern` is told from an ordinary import by token count: `use extern foo: T`
+has a target after the keyword, whereas `use extern: T` is an import from a
+sibling unit that happens to be called `extern`. Requiring the second token
+keeps a legal unit name from being stolen.
+
+Goto-definition on an external type opens its **docs.rs** page in the editor's
+browser — for a type with no file on this machine, its documentation is the
+nearest thing to a definition there is.
 
 ## 5. `## behavior`
 
@@ -340,6 +464,11 @@ one in `## events` is an event, and one in `## data` has no role at all
 ([§4.6](#46--data--in-the-bevy-dialect)). Role is what makes an access list
 checkable, and it is why the same name may not be declared in two of these
 sections (`duplicate-type`).
+
+For a type that references real code ([§4.7](#47-referencing-a-rust-type--path))
+the section's claim is checked against the code's `#[derive(…)]` — the one place
+where "the section assigns the role" can be wrong out loud, and the reason a
+reference beats a copy.
 
 Put a type here only if a system actually accesses it as a component, resource,
 or event. A shape that merely *appears inside* one of those — a field type, an
@@ -469,7 +598,13 @@ Stable codes, matched exactly by the skills and the LSP. Defined in
 `bad-param-source`, `unterminated-block`, plus `malformed-marker` for a `marker`
 line in `## data` (a marker is a component; see [§4.6](#46--data--in-the-bevy-dialect)).
 
-**Imports:** `malformed-import`, `duplicate-import`, `unresolved-import` (warn).
+**Imports:** `malformed-import`, `duplicate-import`, `unresolved-import` (warn),
+`malformed-extern-import`.
+
+**Rust references** ([§4.7](#47-referencing-a-rust-type--path)):
+`missing-type-body`, `malformed-type-path`, plus the filesystem-aware
+`rust-type-not-found` (warn), `rust-role-mismatch` (warn),
+`rust-shape-mismatch` (warn), `rust-member-unknown` (warn).
 
 **Behavior:** `dangling-else`, `dangling-on-error`, `malformed-binding`.
 
@@ -498,7 +633,7 @@ compiled into the test suite, so they cannot drift:
 | File | Shows |
 |---|---|
 | `mml-parser/tests/fixtures/examples/enemy-waves.hmml` | `kind: plugin` — all three world sections, a role-less `## data`, three systems, ordering, a `marker`, a `where:` binding |
-| `mml-parser/tests/fixtures/examples/spawn-enemies.hmml` | `kind: system` — `## access`, imports across specs into both `## data` and a world section, a `-` query exclusion |
+| `mml-parser/tests/fixtures/examples/spawn-enemies.hmml` | `kind: system` — `## access`, imports across specs into both `## data` and a world section, a `-` query exclusion, a Rust reference with a `+`/`-` delta body, and a `use extern` import |
 | `mml-parser/tests/fixtures/examples/get-map-tile.hmml` | `kind: endpoint` — `method`, param sources |
 | `mml-parser/tests/fixtures/examples/mesh-terrain-chunks.hmml` | `kind: workflow` — `Queue`/`Stream` in/out |
 | `mml-parser/tests/fixtures/examples/shared-data-imports.hmml` | `use` type imports |
@@ -513,6 +648,11 @@ compiled into the test suite, so they cannot drift:
 - **Bevy kinds:** every access-list name resolves to a declared, imported, or
   built-in item, in a role that fits its key; every system has a `schedule:`.
   Shapes no system accesses directly live in `## data`, not in a world section.
+- **A type this unit does not own is referenced, not restated** — `@ <path>` for
+  code in this checkout ([§4.7](#47-referencing-a-rust-type--path)),
+  `use extern` for a dependency
+  ([§4.8](#48-importing-from-a-dependency-use-extern)). A referenced type's body
+  lists only what changes.
 - Behavior control flow uses only the closed keyword set.
 - Declared names are written verbatim in prose so they cross-link.
 - Invariants are checkable claims, not restatements of the behavior.

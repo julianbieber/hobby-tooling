@@ -24,6 +24,7 @@ pub mod lexer;
 pub mod lint;
 pub mod parser;
 pub mod paths;
+pub mod rust_source;
 pub mod span;
 pub mod validate;
 

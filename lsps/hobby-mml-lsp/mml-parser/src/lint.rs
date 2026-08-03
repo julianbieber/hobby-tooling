@@ -13,12 +13,13 @@ use crate::ast::Document;
 use crate::diagnostic::code;
 use crate::{Diagnostic, paths, validate};
 
-/// All lint checks combined: unresolved `@ spec` refs, `use` imports, and
-/// source paths.
+/// All lint checks combined: unresolved `@ spec` refs, `use` imports, source
+/// paths, and Rust type references.
 pub fn lint(doc: &Document, current_file: &Path, workspace_root: Option<&Path>) -> Vec<Diagnostic> {
     let mut out = unresolved_spec_refs(doc, current_file, workspace_root);
     out.extend(unresolved_imports(doc, current_file, workspace_root));
     out.extend(unresolved_source_paths(doc, current_file, workspace_root));
+    out.extend(rust_references(doc, current_file, workspace_root));
     out
 }
 
@@ -117,26 +118,8 @@ pub fn unresolved_source_paths(
         return Vec::new();
     }
 
-    let current_dir = current_file.parent().map(Path::to_path_buf);
-    let base = doc
-        .header
-        .base
-        .as_ref()
-        .and_then(|b| paths::base_dir(&b.value, current_dir.as_deref(), workspace_root));
-    let repo_dirs: Vec<PathBuf> = doc
-        .header
-        .source
-        .as_ref()
-        .and_then(|s| s.repo.as_ref())
-        .map(|r| paths::repo_dirs(&r.value, current_file, workspace_root))
-        .unwrap_or_default();
-    let search_dirs: Vec<&Path> = base
-        .as_deref()
-        .into_iter()
-        .chain(repo_dirs.iter().map(PathBuf::as_path))
-        .chain(current_dir.as_deref())
-        .chain(workspace_root)
-        .collect();
+    let dirs = paths::source_search_dirs(doc, current_file, workspace_root);
+    let search_dirs: Vec<&Path> = dirs.iter().map(PathBuf::as_path).collect();
     let searched = search_dirs
         .iter()
         .map(|d| d.display().to_string())
@@ -162,6 +145,191 @@ pub fn unresolved_source_paths(
             ))
         })
         .collect()
+}
+
+/// Warnings for type declarations that reference real Rust code (grammar §4.7):
+/// the type is missing from the file it claims to live in, its `#[derive(…)]`
+/// disagrees with the section it was filed under, its shape disagrees with the
+/// keyword, or a member the spec asserts is not there.
+///
+/// **Only unmarked members are assertions.** `+ field` and `- field` state what
+/// the spec wants done to the code, so a `+` that has not landed yet and a `-`
+/// that has not been applied yet are both the normal mid-implementation state,
+/// not drift. Diagnosing them would make every spec noisy for exactly as long as
+/// its work is outstanding — which is when it is being read most.
+///
+/// A path that does not resolve produces **one** `unresolved-source-path`
+/// warning (from [`unresolved_source_paths`], which sees type paths too) and
+/// nothing here, rather than one warning per unverifiable claim about a file
+/// that is not there.
+pub fn rust_references(
+    doc: &Document,
+    current_file: &Path,
+    workspace_root: Option<&Path>,
+) -> Vec<Diagnostic> {
+    let refs = doc.rust_refs();
+    if refs.is_empty() {
+        return Vec::new();
+    }
+    let dirs = paths::source_search_dirs(doc, current_file, workspace_root);
+    let search_dirs: Vec<&Path> = dirs.iter().map(PathBuf::as_path).collect();
+
+    let mut out = Vec::new();
+    for (def, role) in refs {
+        let Some(path) = def.path() else { continue };
+        let (raw, _line, _col) = paths::split_suffix(&path.value);
+        let Some(target) = paths::resolve(raw, &search_dirs) else {
+            continue; // already reported as `unresolved-source-path`
+        };
+        let items = crate::rust_source::items_in(&target);
+        let name = def.name();
+        let Some(item) = crate::rust_source::item_named(&items, &name.value) else {
+            out.push(Diagnostic::warning(
+                name.span,
+                code::RUST_TYPE_NOT_FOUND,
+                format!(
+                    "`{}` declares no type named `{}`; check the path, or the name if it was \
+                     renamed",
+                    raw, name.value
+                ),
+            ));
+            continue;
+        };
+        check_shape(def, item, &mut out);
+        check_role(def, item, role, &mut out);
+        check_members(def, item, &mut out);
+    }
+    out
+}
+
+/// The spec's keyword against the code's: `struct` vs `enum`, and a `marker`
+/// against a type that turns out to carry fields.
+fn check_shape(
+    def: &crate::ast::TypeDef,
+    item: &crate::rust_source::RustItem,
+    out: &mut Vec<Diagnostic>,
+) {
+    use crate::ast::TypeDef;
+    use crate::rust_source::RustShape;
+    let name = def.name();
+    let complaint = match (def, item.shape) {
+        (TypeDef::Enum { .. }, RustShape::Struct | RustShape::UnitStruct) => {
+            Some("a `struct`".to_string())
+        }
+        (TypeDef::Struct { .. }, RustShape::Enum) => Some("an `enum`".to_string()),
+        (TypeDef::Marker { .. }, RustShape::Struct) => Some(format!(
+            "a struct with fields ({})",
+            item.members.join(", ")
+        )),
+        (TypeDef::Marker { .. }, RustShape::Enum) => Some("an `enum`".to_string()),
+        _ => None,
+    };
+    if let Some(found) = complaint {
+        let spec_noun = match def {
+            TypeDef::Struct { .. } => "struct",
+            TypeDef::Enum { .. } => "enum",
+            TypeDef::Marker { .. } => "marker",
+        };
+        out.push(Diagnostic::warning(
+            name.span,
+            code::RUST_SHAPE_MISMATCH,
+            format!(
+                "the spec calls `{}` a {spec_noun}, but the code declares {found}",
+                name.value
+            ),
+        ));
+    }
+}
+
+/// The derive against the section. This is the check that catches the classic
+/// Bevy spec error — filing a resource under `## components` — at the one moment
+/// it is cheap to fix, and it is why a reference is worth more than a copy.
+fn check_role(
+    def: &crate::ast::TypeDef,
+    item: &crate::rust_source::RustItem,
+    role: Option<crate::ast::Role>,
+    out: &mut Vec<Diagnostic>,
+) {
+    use crate::ast::Role;
+    let Some(role) = role else {
+        return; // `## data` assigns no role, so there is nothing to disagree with
+    };
+    let wanted: &[&str] = match role {
+        Role::Component => &["Component"],
+        Role::Resource => &["Resource"],
+        // Bevy renamed `Event` to `Message` for buffered events; both are the
+        // same statement about the type, so either satisfies `## events`.
+        Role::Event => &["Event", "Message", "BufferedEvent", "EntityEvent"],
+    };
+    if wanted.iter().any(|d| item.derives(d)) {
+        return;
+    }
+    let name = def.name();
+    let found = if item.derives.is_empty() {
+        "it derives nothing".to_string()
+    } else {
+        format!("it derives {}", item.derives.join(", "))
+    };
+    out.push(Diagnostic::warning(
+        name.span,
+        code::RUST_ROLE_MISMATCH,
+        format!(
+            "`{}` is declared in `## {}`, which claims `#[derive({})]`, but {found}",
+            name.value,
+            role.section(),
+            wanted[0],
+        ),
+    ));
+}
+
+/// Unmarked members against the real type's. A spec is free to mention only the
+/// fields that matter, so a field the code has and the spec omits is silent —
+/// abstraction is the point. The reverse is drift.
+fn check_members(
+    def: &crate::ast::TypeDef,
+    item: &crate::rust_source::RustItem,
+    out: &mut Vec<Diagnostic>,
+) {
+    use crate::ast::{Delta, TypeDef};
+    // A tuple struct has no member names to match against, so nothing is
+    // checkable and everything would be a false positive.
+    if item.members.is_empty() {
+        return;
+    }
+    let asserted: Vec<(&crate::span::Spanned<String>, &str)> = match def {
+        TypeDef::Struct {
+            fields: Some(fields),
+            ..
+        } => fields
+            .iter()
+            .filter(|f| f.delta == Delta::Keep)
+            .map(|f| (&f.name, "field"))
+            .collect(),
+        TypeDef::Enum {
+            variants: Some(variants),
+            ..
+        } => variants
+            .iter()
+            .filter(|v| v.delta == Delta::Keep)
+            .map(|v| (&v.name, "variant"))
+            .collect(),
+        _ => return,
+    };
+    for (member, noun) in asserted {
+        if item.members.contains(&member.value) {
+            continue;
+        }
+        out.push(Diagnostic::warning(
+            member.span,
+            code::RUST_MEMBER_UNKNOWN,
+            format!(
+                "`{}` has no {noun} `{}`; mark it `+ {}` to ask for it, or drop the line",
+                def.name().value,
+                member.value,
+                member.value,
+            ),
+        ));
+    }
 }
 
 #[cfg(test)]
@@ -272,6 +440,108 @@ mod tests {
             .map(|d| &src[d.span.start..d.span.end])
             .collect();
         assert_eq!(missing, ["Ghost", "Wraith"], "{diags:?}");
+    }
+
+    // ---- Rust references (grammar §4.7) ---------------------------------
+
+    const WAVES_RS: &str = r#"
+use bevy::prelude::*;
+
+#[derive(Component)]
+pub struct Wave {
+    pub index: u32,
+    pub remaining: u32,
+}
+
+#[derive(Resource)]
+pub struct WaveConfig {
+    pub interval_secs: f32,
+}
+
+#[derive(Component)]
+pub struct Spawner;
+"#;
+
+    /// A plugin spec beside a `waves.rs` holding [`WAVES_RS`].
+    fn rust_tree(sections: &str) -> (tempfile::TempDir, PathBuf, String) {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("waves.rs"), WAVES_RS).unwrap();
+        let src = format!(
+            "system: s\nunit: u\nkind: plugin\n\n{sections}\n## systems\n\n## behavior\n- x\n\n## invariants\n"
+        );
+        let current = dir.path().join("u.hmml");
+        (dir, current, src)
+    }
+
+    fn rust_codes(sections: &str) -> Vec<(String, String)> {
+        let (_dir, current, src) = rust_tree(sections);
+        rust_references(&doc(&src), &current, None)
+            .into_iter()
+            .map(|d| {
+                (
+                    d.code.to_string(),
+                    src[d.span.start..d.span.end].to_string(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_reference_that_matches_the_code_is_silent() {
+        let diags = rust_codes(
+            "## components\nstruct Wave @ waves.rs {\n  index: u32,\n}\nmarker Spawner @ waves.rs\n\n\
+             ## resources\nstruct WaveConfig @ waves.rs\n",
+        );
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn a_missing_type_is_reported_against_the_name() {
+        let diags = rust_codes("## components\nstruct Ghost @ waves.rs\n");
+        assert_eq!(diags, [("rust-type-not-found".into(), "Ghost".into())]);
+    }
+
+    #[test]
+    fn the_derive_must_match_the_section() {
+        // WaveConfig is a Resource; filing it under `## components` is the
+        // classic Bevy spec error, and the derive is what catches it.
+        let diags = rust_codes("## components\nstruct WaveConfig @ waves.rs\n");
+        assert_eq!(diags, [("rust-role-mismatch".into(), "WaveConfig".into())]);
+    }
+
+    #[test]
+    fn a_role_less_data_reference_is_never_role_checked() {
+        let diags = rust_codes("## data\nstruct WaveConfig @ waves.rs\n");
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn a_marker_pointing_at_a_struct_with_fields_is_a_shape_mismatch() {
+        let diags = rust_codes("## components\nmarker Wave @ waves.rs\n");
+        assert_eq!(diags, [("rust-shape-mismatch".into(), "Wave".into())]);
+    }
+
+    #[test]
+    fn only_unmarked_members_are_asserted() {
+        // `index` exists; `+ streak` and `- remaining` state intent, so neither
+        // is drift while the work is outstanding. Only `bogus` is a claim the
+        // code contradicts.
+        let diags = rust_codes(
+            "## components\nstruct Wave @ waves.rs {\n  index: u32,\n  bogus: u32,\n  + streak: u32,\n  - remaining,\n}\n",
+        );
+        assert_eq!(diags, [("rust-member-unknown".into(), "bogus".into())]);
+    }
+
+    #[test]
+    fn an_unresolved_path_warns_once_rather_than_per_claim() {
+        // The file is not there, so nothing about it is knowable: one
+        // `unresolved-source-path`, and no rust-* noise on top.
+        let (_dir, current, src) =
+            rust_tree("## components\nstruct Wave @ nope.rs {\n  index: u32,\n  other: u32,\n}\n");
+        let d = doc(&src);
+        assert!(rust_references(&d, &current, None).is_empty());
+        let codes: Vec<&str> = lint(&d, &current, None).iter().map(|x| x.code).collect();
+        assert_eq!(codes, ["unresolved-source-path"]);
     }
 
     #[test]

@@ -66,16 +66,45 @@ impl Backend {
         }
     }
 
+    /// Ask the client to open `url` in whatever it uses for external documents.
+    /// Falls back to the OS opener when the client does not advertise
+    /// `window/showDocument`, so the jump works even where the protocol route
+    /// does not exist.
+    async fn open_external(&self, url: String) {
+        let params = ShowDocumentParams {
+            uri: match Url::parse(&url) {
+                Ok(u) => u,
+                Err(_) => return,
+            },
+            external: Some(true),
+            take_focus: Some(true),
+            selection: None,
+        };
+        if matches!(self.client.show_document(params).await, Ok(true)) {
+            return;
+        }
+        let opener = std::env::var("BROWSER").unwrap_or_else(|_| "xdg-open".to_string());
+        let _ = std::process::Command::new(opener)
+            .arg(&url)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    }
+
     /// Rebuild the cached state for `uri` and publish its diagnostics. The parse
     /// happens under the lock; the async publish happens after it is released.
     async fn refresh(&self, uri: Url, text: String, version: Option<i32>) {
         let diags = {
             let (doc, mut all) = analyze(&text);
-            // Filesystem pass: warn on `@ spec` refs whose target is missing.
+            // Filesystem pass. The full `lint` set, not a hand-picked subset:
+            // an unresolved path is precisely the thing that makes
+            // goto-into-source silently no-op, so the editor is where it is
+            // most worth saying. It is also what keeps the Rust-reference
+            // checks honest — they stay quiet on an unresolved path and rely on
+            // `unresolved-source-path` to report it once.
             if let Ok(file) = uri.to_file_path() {
                 let ws = self.workspace_root.get().map(PathBuf::as_path);
-                all.extend(lint::unresolved_spec_refs(&doc, &file, ws));
-                all.extend(lint::unresolved_imports(&doc, &file, ws));
+                all.extend(lint::lint(&doc, &file, ws));
                 all.sort_by_key(|d| (d.span.start, d.span.end));
             }
             let line_index = LineIndex::new(&text);
@@ -267,6 +296,19 @@ fn hover_at(
 
     let word = analysis::word_at(&ds.text, offset)?;
     let section = analysis::section_at(&ds.text, offset);
+    // A type that lives elsewhere answers for itself before the spec does:
+    // showing the bodyless spec line would be the one hover with nothing in it.
+    if let Some(markdown) =
+        extern_hover(ds, &word.text).or_else(|| rust_hover(ds, uri, workspace_root, &word.text))
+    {
+        return Some(Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: markdown,
+            }),
+            range: Some(ds.range(word.span)),
+        });
+    }
     let markdown = match section {
         SectionKind::Behavior | SectionKind::Invariants => module_hover(ds, &word.text)
             .or_else(|| system_hover(ds, &word.text))
@@ -296,6 +338,64 @@ fn module_hover(ds: &DocState, name: &str) -> Option<String> {
         s.push_str(&format!("\n\n`@ {}`", p.value));
     }
     Some(s)
+}
+
+/// Hover for a type imported from a dependency (grammar §4.8). There is no file
+/// to read, so the useful thing to say is where it comes from and where to read
+/// about it.
+fn extern_hover(ds: &DocState, name: &str) -> Option<String> {
+    let import = analysis::extern_named(&ds.doc, name)?;
+    let role = ds
+        .doc
+        .roles()
+        .get(name)
+        .map(|r| format!(" — {}", r.noun()))
+        .unwrap_or_default();
+    Some(format!(
+        "**{name}**{role}\n\n`{}::{name}`, from the `{}` crate\n\n[docs.rs]({})",
+        import.path.value,
+        import.crate_name(),
+        import.docs_url(name),
+    ))
+}
+
+/// Hover for a type that references real code (grammar §4.7): what the code
+/// actually says, read from disk. The spec line may be a single bodyless
+/// declaration, so the interesting content is all on the other side of the
+/// path — including the derives, which are what the role check is about.
+fn rust_hover(
+    ds: &DocState,
+    uri: &Url,
+    workspace_root: Option<&Path>,
+    name: &str,
+) -> Option<String> {
+    let def = analysis::type_def_named(&ds.doc, name)?;
+    let path = def.path()?;
+    let file = uri.to_file_path().ok()?;
+    let dirs = paths::source_search_dirs(&ds.doc, &file, workspace_root);
+    let search_dirs: Vec<&Path> = dirs.iter().map(PathBuf::as_path).collect();
+    let (raw, _line, _col) = paths::split_suffix(&path.value);
+
+    let mut out = format!("**{name}** — declared in `{raw}`");
+    let Some(target) = paths::resolve(raw, &search_dirs) else {
+        out.push_str("\n\n_path does not resolve_");
+        return Some(out);
+    };
+    let items = mml_parser::rust_source::items_in(&target);
+    let Some(item) = mml_parser::rust_source::item_named(&items, name) else {
+        out.push_str(&format!("\n\n_no `{name}` in that file_"));
+        return Some(out);
+    };
+    out.push_str(&format!("\n\n{} ", item.shape.noun()));
+    if item.derives.is_empty() {
+        out.push_str("with no derives");
+    } else {
+        out.push_str(&format!("deriving `{}`", item.derives.join("`, `")));
+    }
+    if !item.members.is_empty() {
+        out.push_str(&format!("\n\n```rust\n{}\n```", item.members.join(",\n")));
+    }
+    Some(out)
 }
 
 fn type_hover(ds: &DocState, name: &str) -> Option<String> {
@@ -397,13 +497,91 @@ fn spec_hover(raw: &str, uri: &Url, workspace_root: Option<&Path>) -> String {
     out
 }
 
+/// Where a goto-definition lands. Two destinations, because a spec's types do
+/// not all live in the same world: some are defined here, some in the
+/// checkout's Rust, and some in a dependency that exists on this machine only
+/// as documentation.
+///
+/// Kept out of `analysis` deliberately — resolving is pure, but *showing* an
+/// external document is an async client round-trip, so the decision is made
+/// here and the pure layer stays free of `tower_lsp` types.
+enum DefTarget {
+    Local(Location),
+    /// A URL for the client to open externally (grammar §4.8 → docs.rs).
+    External(String),
+}
+
+/// Resolve a type that references real code (grammar §4.7) to a location inside
+/// that code. The struct's line is *discovered* by name rather than written
+/// down, so it survives the file being edited; an explicit `:line:col` suffix on
+/// the path still wins, for the case where a human pinned one deliberately.
+fn rust_definition(
+    ds: &DocState,
+    uri: &Url,
+    workspace_root: Option<&Path>,
+    def: &TypeDef,
+) -> Option<Location> {
+    let path = def.path()?;
+    let file = uri.to_file_path().ok()?;
+    let dirs = paths::source_search_dirs(&ds.doc, &file, workspace_root);
+    let search_dirs: Vec<&Path> = dirs.iter().map(PathBuf::as_path).collect();
+    let (raw, line, col) = paths::split_suffix(&path.value);
+    let target = paths::resolve(raw, &search_dirs)?;
+
+    let line = line.map(|l| l.saturating_sub(1)).or_else(|| {
+        let items = mml_parser::rust_source::items_in(&target);
+        mml_parser::rust_source::item_named(&items, &def.name().value).map(|i| i.line - 1)
+    });
+    let position = Position {
+        line: line.unwrap_or(0),
+        character: col.map(|c| c.saturating_sub(1)).unwrap_or(0),
+    };
+    Some(Location {
+        uri: Url::from_file_path(&target).ok()?,
+        range: Range {
+            start: position,
+            end: position,
+        },
+    })
+}
+
+/// Goto for a bare type name: into the Rust for a reference, out to docs.rs for
+/// an external import, and `None` for a type this spec really does define
+/// (which the in-spec lookups then handle).
+fn type_target(
+    ds: &DocState,
+    uri: &Url,
+    workspace_root: Option<&Path>,
+    name: &str,
+) -> Option<DefTarget> {
+    if let Some(import) = analysis::extern_named(&ds.doc, name) {
+        return Some(DefTarget::External(import.docs_url(name)));
+    }
+    let def = analysis::type_def_named(&ds.doc, name)?;
+    if !def.is_reference() {
+        return None;
+    }
+    rust_definition(ds, uri, workspace_root, def).map(DefTarget::Local)
+}
+
 fn definition_at(
     ds: &DocState,
     uri: &Url,
     workspace_root: Option<&Path>,
     pos: Position,
-) -> Option<GotoDefinitionResponse> {
+) -> Option<DefTarget> {
     let offset = ds.offset(pos);
+
+    // A type name the cursor is on, wherever it appears — the declaration line,
+    // an access list, or behavior prose. A referenced type's definition really
+    // is in the code, so every one of those jumps there; the spec line is a
+    // reference, not a definition.
+    if let Some(word) = analysis::word_at(&ds.text, offset)
+        && analysis::type_path_at(&ds.doc, offset).is_none()
+        && let Some(target) = type_target(ds, uri, workspace_root, &word.text)
+    {
+        return Some(target);
+    }
 
     // Cross-spec ref: jump to the referenced `.hmml` file.
     if let Some(r) = analysis::spec_ref_at(&ds.doc, offset) {
@@ -417,7 +595,7 @@ fn definition_at(
             line: 0,
             character: 0,
         };
-        return Some(GotoDefinitionResponse::Scalar(Location {
+        return Some(DefTarget::Local(Location {
             uri: target_uri,
             range: Range { start, end: start },
         }));
@@ -428,7 +606,7 @@ fn definition_at(
     if let Some((spec, ty)) = analysis::import_type_at(&ds.doc, offset) {
         let file = uri.to_file_path().ok()?;
         return import_type_definition(&spec.value, &ty.value, &file, workspace_root)
-            .map(GotoDefinitionResponse::Scalar);
+            .map(DefTarget::Local);
     }
     if let Some(r) = analysis::import_ref_at(&ds.doc, offset) {
         let file = uri.to_file_path().ok()?;
@@ -440,7 +618,7 @@ fn definition_at(
             line: 0,
             character: 0,
         };
-        return Some(GotoDefinitionResponse::Scalar(Location {
+        return Some(DefTarget::Local(Location {
             uri: Url::from_file_path(&target).ok()?,
             range: Range { start, end: start },
         }));
@@ -484,7 +662,7 @@ fn definition_at(
             line: line.map(|l| l.saturating_sub(1)).unwrap_or(0),
             character: col.map(|c| c.saturating_sub(1)).unwrap_or(0),
         };
-        return Some(GotoDefinitionResponse::Scalar(Location {
+        return Some(DefTarget::Local(Location {
             uri: target_uri,
             range: Range {
                 start: position,
@@ -500,7 +678,7 @@ fn definition_at(
     if let Some((_key, _roles, item)) = analysis::access_item_at(&ds.doc, offset)
         && let Some(t) = analysis::type_named(&ds.symbols, &item.value)
     {
-        return Some(GotoDefinitionResponse::Scalar(Location {
+        return Some(DefTarget::Local(Location {
             uri: uri.clone(),
             range: ds.range(t.name_span),
         }));
@@ -508,7 +686,7 @@ fn definition_at(
     if let Some(r) = analysis::ordering_ref_at(&ds.doc, offset)
         && let Some(s) = analysis::system_named(&ds.symbols, &r.value)
     {
-        return Some(GotoDefinitionResponse::Scalar(Location {
+        return Some(DefTarget::Local(Location {
             uri: uri.clone(),
             range: ds.range(s.name_span),
         }));
@@ -525,7 +703,7 @@ fn definition_at(
             .or_else(|| analysis::system_named(&ds.symbols, &word.text).map(|s| s.name_span))
             .or_else(|| analysis::type_named(&ds.symbols, &word.text).map(|t| t.name_span))
     }?;
-    Some(GotoDefinitionResponse::Scalar(Location {
+    Some(DefTarget::Local(Location {
         uri: uri.clone(),
         range: ds.range(span),
     }))
@@ -556,7 +734,9 @@ fn path_target_at(ds: &DocState, offset: usize) -> Option<&str> {
             }
         }
     }
-    None
+    // A type's `@ <path>` (grammar §4.7) resolves like any other source path —
+    // without this, goto on the path itself silently no-ops.
+    analysis::type_path_at(&ds.doc, offset).map(|p| p.value.as_str())
 }
 
 fn references_at(ds: &DocState, uri: &Url, pos: Position, include_decl: bool) -> Vec<Location> {
@@ -770,17 +950,34 @@ fn system_symbols(ds: &DocState) -> Vec<DocumentSymbol> {
         .collect()
 }
 
+/// The detail string for a type in the outline. A reference names the file it
+/// lives in, so the outline distinguishes what this spec defines from what it
+/// merely points at (grammar §4.7).
+fn type_detail(t: &TypeDef, own: Option<&str>) -> Option<String> {
+    match (t.path(), own) {
+        (Some(p), Some(own)) => Some(format!("{own} @ {}", p.value)),
+        (Some(p), None) => Some(format!("@ {}", p.value)),
+        (None, own) => own.map(str::to_string),
+    }
+}
+
 fn type_symbols(ds: &DocState, types: &[TypeDef]) -> Vec<DocumentSymbol> {
     types
         .iter()
         .map(|t| match t {
-            TypeDef::Struct { name, fields, span } => {
+            TypeDef::Struct {
+                name, fields, span, ..
+            } => {
                 let children = fields
                     .iter()
+                    .flatten()
                     .map(|f| {
+                        let detail =
+                            f.ty.as_ref()
+                                .map(|ty| ds.text[ty.span.start..ty.span.end].to_string());
                         doc_symbol(
-                            f.name.value.clone(),
-                            Some(ds.text[f.ty.span.start..f.ty.span.end].to_string()),
+                            format!("{}{}", f.delta.marker(), f.name.value),
+                            detail,
                             SymbolKind::FIELD,
                             ds.range(f.span),
                             ds.range(f.name.span),
@@ -790,7 +987,7 @@ fn type_symbols(ds: &DocState, types: &[TypeDef]) -> Vec<DocumentSymbol> {
                     .collect();
                 doc_symbol(
                     name.value.clone(),
-                    None,
+                    type_detail(t, None),
                     SymbolKind::STRUCT,
                     ds.range(*span),
                     ds.range(name.span),
@@ -801,32 +998,34 @@ fn type_symbols(ds: &DocState, types: &[TypeDef]) -> Vec<DocumentSymbol> {
                 name,
                 variants,
                 span,
+                ..
             } => {
                 let children = variants
                     .iter()
+                    .flatten()
                     .map(|v| {
                         doc_symbol(
-                            v.value.clone(),
+                            format!("{}{}", v.delta.marker(), v.name.value),
                             None,
                             SymbolKind::ENUM_MEMBER,
-                            ds.range(v.span),
-                            ds.range(v.span),
+                            ds.range(v.name.span),
+                            ds.range(v.name.span),
                             Vec::new(),
                         )
                     })
                     .collect();
                 doc_symbol(
                     name.value.clone(),
-                    None,
+                    type_detail(t, None),
                     SymbolKind::ENUM,
                     ds.range(*span),
                     ds.range(name.span),
                     children,
                 )
             }
-            TypeDef::Marker { name, span } => doc_symbol(
+            TypeDef::Marker { name, span, .. } => doc_symbol(
                 name.value.clone(),
-                Some("marker".to_string()),
+                type_detail(t, Some("marker")),
                 SymbolKind::STRUCT,
                 ds.range(*span),
                 ds.range(name.span),
@@ -1004,6 +1203,27 @@ fn completions_at(
             .iter()
             .map(|t| item(t.clone(), CompletionItemKind::STRUCT, "imported type"))
             .collect(),
+        // A type's `@ <path>` (grammar §4.7) almost always names a file the
+        // spec already points at, so the header's `source.paths` and the paths
+        // already used by other declarations are the whole useful list.
+        CompletionContext::TypePath => {
+            let mut seen: Vec<String> = ds
+                .doc
+                .header
+                .source
+                .iter()
+                .flat_map(|s| s.paths.iter())
+                .chain(ds.doc.all_type_defs().filter_map(TypeDef::path))
+                .chain(ds.doc.modules.iter().filter_map(|m| m.path.as_ref()))
+                .chain(ds.doc.systems.iter().filter_map(|s| s.path.as_ref()))
+                .map(|p| p.value.clone())
+                .collect();
+            seen.sort();
+            seen.dedup();
+            seen.into_iter()
+                .map(|p| item(p, CompletionItemKind::FILE, "source path"))
+                .collect()
+        }
         CompletionContext::SpecRef | CompletionContext::ImportRef => {
             let Some(se) = spec_entries else {
                 return Vec::new();
@@ -1150,15 +1370,32 @@ impl LanguageServer for Backend {
         params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
         let p = params.text_document_position_params;
-        let docs = self.documents.lock().unwrap();
-        Ok(docs.get(&p.text_document.uri).and_then(|ds| {
-            definition_at(
-                ds,
-                &p.text_document.uri,
-                self.workspace_root.get().map(PathBuf::as_path),
-                p.position,
-            )
-        }))
+        // Resolve under the lock, then drop it: showing an external document is
+        // a round-trip to the client, and holding a std mutex across an await
+        // would be both wrong and deadlock-prone.
+        let target = {
+            let docs = self.documents.lock().unwrap();
+            docs.get(&p.text_document.uri).and_then(|ds| {
+                definition_at(
+                    ds,
+                    &p.text_document.uri,
+                    self.workspace_root.get().map(PathBuf::as_path),
+                    p.position,
+                )
+            })
+        };
+        match target {
+            Some(DefTarget::Local(loc)) => Ok(Some(GotoDefinitionResponse::Scalar(loc))),
+            // A dependency's type has no file on this machine, so "go to its
+            // definition" means its documentation. `external: true` hands the
+            // URL to the editor's own opener rather than naming a browser here,
+            // which would be wrong on any machine but the one it was written on.
+            Some(DefTarget::External(url)) => {
+                self.open_external(url).await;
+                Ok(None)
+            }
+            None => Ok(None),
+        }
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -1334,7 +1571,7 @@ mod tests {
             "sample a HeightTile from ".len() as u32,
         );
         let resp = definition_at(&ds, &uri(), None, pos).expect("definition");
-        let GotoDefinitionResponse::Scalar(loc) = resp else {
+        let DefTarget::Local(loc) = resp else {
             panic!("scalar")
         };
         assert_eq!(loc.uri, uri());
@@ -1358,7 +1595,7 @@ mod tests {
         let at_off = text.find("src/chunk/scheduler.rs").unwrap() + 2; // inside the path token
         let pos = to_lsp_pos(ds.line_index.position(at_off));
         let resp = definition_at(&ds, &uri(), Some(dir.path()), pos).expect("definition");
-        let GotoDefinitionResponse::Scalar(loc) = resp else {
+        let DefTarget::Local(loc) = resp else {
             panic!("scalar")
         };
         assert!(loc.uri.path().ends_with("src/chunk/scheduler.rs"));
@@ -1391,7 +1628,7 @@ mod tests {
         let at_off = ds.text.find("pkg/worker.py").unwrap() + 2;
         let pos = to_lsp_pos(ds.line_index.position(at_off));
         let resp = definition_at(&ds, &uri(), None, pos).expect("definition via base");
-        let GotoDefinitionResponse::Scalar(loc) = resp else {
+        let DefTarget::Local(loc) = resp else {
             panic!("scalar")
         };
         assert!(loc.uri.path().ends_with("pkg/worker.py"));
@@ -1429,7 +1666,7 @@ mod tests {
         let pos = to_lsp_pos(ds.line_index.position(at_off));
         let resp = definition_at(&ds, &file_uri, Some(task.path()), pos)
             .expect("definition via source.repo");
-        let GotoDefinitionResponse::Scalar(loc) = resp else {
+        let DefTarget::Local(loc) = resp else {
             panic!("scalar")
         };
         assert!(loc.uri.path().ends_with("request-worker/pkg/worker.py"));
@@ -1439,7 +1676,7 @@ mod tests {
         let pos = to_lsp_pos(ds.line_index.position(at_off));
         let resp = definition_at(&ds, &file_uri, Some(task.path()), pos)
             .expect("module @ path via source.repo");
-        let GotoDefinitionResponse::Scalar(loc) = resp else {
+        let DefTarget::Local(loc) = resp else {
             panic!("scalar")
         };
         assert!(loc.uri.path().ends_with("request-worker/pkg/worker.py"));
@@ -1538,14 +1775,14 @@ mod tests {
                 .position(text.find("@ spec other").unwrap() + 7),
         );
         let resp = definition_at(&ds, &file_uri, None, pos).expect("goto ref");
-        let GotoDefinitionResponse::Scalar(loc) = resp else {
+        let DefTarget::Local(loc) = resp else {
             panic!("scalar")
         };
         assert!(loc.uri.path().ends_with("other.hmml"));
 
         let pos = to_lsp_pos(ds.line_index.position(text.find("@ spec two").unwrap() + 7));
         let resp = definition_at(&ds, &file_uri, None, pos).expect("goto second ref");
-        let GotoDefinitionResponse::Scalar(loc) = resp else {
+        let DefTarget::Local(loc) = resp else {
             panic!("scalar")
         };
         assert!(loc.uri.path().ends_with("two.hmml"));
@@ -1646,7 +1883,7 @@ mod tests {
         let off = text.find("use model: Offer").unwrap() + "use model: ".len();
         let pos = to_lsp_pos(ds.line_index.position(off));
         let resp = definition_at(&ds, &file_uri, None, pos).expect("goto imported type");
-        let GotoDefinitionResponse::Scalar(loc) = resp else {
+        let DefTarget::Local(loc) = resp else {
             panic!("scalar")
         };
         assert!(loc.uri.path().ends_with("model.hmml"));
@@ -1665,7 +1902,7 @@ mod tests {
         let off = text.find("use model").unwrap() + "use ".len();
         let pos = to_lsp_pos(ds.line_index.position(off));
         let resp = definition_at(&ds, &file_uri, None, pos).expect("goto import ref");
-        let GotoDefinitionResponse::Scalar(loc) = resp else {
+        let DefTarget::Local(loc) = resp else {
             panic!("scalar")
         };
         assert!(loc.uri.path().ends_with("model.hmml"));
@@ -1895,7 +2132,7 @@ mod tests {
             + "writes:   ".len();
         let pos = to_lsp_pos(ds.line_index.position(off));
         let resp = definition_at(&ds, &plugin_uri(), None, pos).expect("goto type");
-        let GotoDefinitionResponse::Scalar(loc) = resp else {
+        let DefTarget::Local(loc) = resp else {
             panic!("scalar")
         };
         let decl = at(PLUGIN, "struct WaveState", 0);
@@ -1905,7 +2142,7 @@ mod tests {
         let off = PLUGIN.find("after:    tick_wave_timer").unwrap() + "after:    ".len();
         let pos = to_lsp_pos(ds.line_index.position(off));
         let resp = definition_at(&ds, &plugin_uri(), None, pos).expect("goto system");
-        let GotoDefinitionResponse::Scalar(loc) = resp else {
+        let DefTarget::Local(loc) = resp else {
             panic!("scalar")
         };
         let decl = at(PLUGIN, "tick_wave_timer — advances", 0);
@@ -1925,7 +2162,7 @@ mod tests {
         let pos = to_lsp_pos(ds.line_index.position(off));
         let resp =
             definition_at(&ds, &plugin_uri(), Some(dir.path()), pos).expect("goto into source");
-        let GotoDefinitionResponse::Scalar(loc) = resp else {
+        let DefTarget::Local(loc) = resp else {
             panic!("scalar")
         };
         assert!(loc.uri.path().ends_with("src/waves/timer.rs"));
@@ -2057,5 +2294,189 @@ mod tests {
         assert!(diags.is_empty(), "{diags:#?}");
         let fs_diags = lint::lint(&doc, &spec, Some(dir.path()));
         assert!(fs_diags.is_empty(), "{fs_diags:#?}");
+    }
+}
+
+// ---- Rust references (grammar §4.7) and extern imports (§4.8) --------------
+
+#[cfg(test)]
+mod rust_ref_tests {
+    use super::*;
+    use std::fs;
+
+    const WAVES_RS: &str = r#"use bevy::prelude::*;
+
+#[derive(Resource)]
+pub struct WaveConfig {
+    pub interval_secs: f32,
+}
+
+#[derive(Component)]
+pub struct Wave {
+    pub index: u32,
+}
+"#;
+
+    /// A plugin spec beside a real `waves.rs`, returning the doc state and the
+    /// spec's own URI so goto has somewhere to resolve paths from.
+    fn tree(sections: &str) -> (tempfile::TempDir, DocState, Url) {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("waves.rs"), WAVES_RS).unwrap();
+        let text = format!(
+            "system: s\nunit: u\nkind: plugin\n\n{sections}\n## systems\n\n## behavior\n- x\n\n## invariants\n"
+        );
+        let (doc, _) = analyze(&text);
+        let line_index = LineIndex::new(&text);
+        let symbols = analysis::symbols(&doc);
+        let uri = Url::from_file_path(dir.path().join("u.hmml")).unwrap();
+        let ds = DocState {
+            text,
+            doc,
+            line_index,
+            symbols,
+        };
+        (dir, ds, uri)
+    }
+
+    fn goto(ds: &DocState, uri: &Url, needle: &str, extra: usize) -> Option<DefTarget> {
+        let off = ds.text.find(needle).unwrap() + extra;
+        let pos = to_lsp_pos(ds.line_index.position(off));
+        definition_at(ds, uri, None, pos)
+    }
+
+    #[test]
+    fn goto_on_a_referenced_type_lands_on_the_rust_declaration() {
+        let (_dir, ds, uri) = tree("## components\nstruct Wave @ waves.rs\n");
+        let DefTarget::Local(loc) = goto(&ds, &uri, "struct Wave @", 7).expect("a definition")
+        else {
+            panic!("expected a file location")
+        };
+        assert!(loc.uri.path().ends_with("waves.rs"));
+        // Line 8 (0-based) is `pub struct Wave {`, discovered by name rather
+        // than written down in the spec.
+        assert_eq!(loc.range.start.line, 8);
+    }
+
+    #[test]
+    fn goto_from_an_access_list_reaches_the_rust_too() {
+        // The spec line is a reference, not a definition, so *every* mention of
+        // the name goes where the type actually is.
+        let (_dir, ds, uri) = tree(
+            "## resources\nstruct WaveConfig @ waves.rs\n\n## systems\ntick — ticks\n  schedule: Update\n  reads:    WaveConfig\n",
+        );
+        let DefTarget::Local(loc) =
+            goto(&ds, &uri, "reads:    WaveConfig", 10).expect("a definition")
+        else {
+            panic!("expected a file location")
+        };
+        assert!(loc.uri.path().ends_with("waves.rs"));
+        assert_eq!(loc.range.start.line, 3);
+    }
+
+    #[test]
+    fn goto_on_an_owned_type_stays_in_the_spec() {
+        let (_dir, ds, uri) = tree("## components\nstruct Local {\n  n: u32,\n}\n");
+        let DefTarget::Local(loc) = goto(&ds, &uri, "struct Local", 7).expect("a definition")
+        else {
+            panic!("expected a file location")
+        };
+        assert!(loc.uri.path().ends_with("u.hmml"));
+    }
+
+    #[test]
+    fn goto_on_an_extern_type_opens_its_docs() {
+        let (_dir, ds, uri) = tree("## components\nuse extern avian3d::prelude: Collider\n");
+        let target = goto(&ds, &uri, "Collider", 1).expect("a definition");
+        match target {
+            DefTarget::External(url) => {
+                assert_eq!(
+                    url,
+                    "https://docs.rs/avian3d/latest/avian3d/?search=Collider"
+                )
+            }
+            DefTarget::Local(_) => panic!("a dependency's type has no file here"),
+        }
+    }
+
+    #[test]
+    fn goto_on_the_path_itself_opens_the_file() {
+        let (_dir, ds, uri) = tree("## components\nstruct Wave @ waves.rs\n");
+        let DefTarget::Local(loc) = goto(&ds, &uri, "@ waves.rs", 3).expect("a definition") else {
+            panic!("expected a file location")
+        };
+        assert!(loc.uri.path().ends_with("waves.rs"));
+    }
+
+    #[test]
+    fn hover_on_a_reference_shows_the_real_derives_and_fields() {
+        let (_dir, ds, uri) = tree("## components\nstruct Wave @ waves.rs\n");
+        let off = ds.text.find("struct Wave @").unwrap() + 7;
+        let pos = to_lsp_pos(ds.line_index.position(off));
+        let hover = hover_at(&ds, &uri, None, pos).expect("hover");
+        let HoverContents::Markup(m) = hover.contents else {
+            panic!("markup")
+        };
+        assert!(m.value.contains("waves.rs"), "{}", m.value);
+        assert!(m.value.contains("Component"), "{}", m.value);
+        assert!(m.value.contains("index"), "{}", m.value);
+    }
+
+    #[test]
+    fn hover_on_an_extern_type_links_to_docs_rs() {
+        let (_dir, ds, uri) = tree("## components\nuse extern avian3d::prelude: Collider\n");
+        let off = ds.text.find("Collider").unwrap() + 1;
+        let pos = to_lsp_pos(ds.line_index.position(off));
+        let hover = hover_at(&ds, &uri, None, pos).expect("hover");
+        let HoverContents::Markup(m) = hover.contents else {
+            panic!("markup")
+        };
+        assert!(m.value.contains("docs.rs/avian3d"), "{}", m.value);
+        assert!(m.value.contains("component"), "{}", m.value);
+    }
+
+    /// The flagship `kind: system` fixture, linted against a tree that really
+    /// contains what it references. This is the end-to-end path — spec text →
+    /// path resolution → Rust parse → derive and member checks — and it is
+    /// compiled in, so the fixture and this feature cannot drift apart.
+    #[test]
+    fn the_spawn_enemies_fixture_lints_clean_against_a_real_tree() {
+        const SPAWN: &str =
+            include_str!("../../mml-parser/tests/fixtures/examples/spawn-enemies.hmml");
+        let dir = tempfile::tempdir().unwrap();
+        let waves = dir.path().join("src/waves");
+        fs::create_dir_all(&waves).unwrap();
+        fs::write(
+            waves.join("spawn.rs"),
+            "use bevy::prelude::*;\n\n#[derive(Component)]\npub struct SpawnCooldown {\n    pub seconds: f32,\n}\n",
+        )
+        .unwrap();
+        // The sibling spec every `use enemy-waves:` line imports from.
+        fs::write(
+            dir.path().join("enemy-waves.hmml"),
+            include_str!("../../mml-parser/tests/fixtures/examples/enemy-waves.hmml"),
+        )
+        .unwrap();
+        for f in ["mod.rs", "timer.rs"] {
+            fs::write(waves.join(f), "x").unwrap();
+        }
+
+        let spec = dir.path().join("spawn-enemies.hmml");
+        fs::write(&spec, SPAWN).unwrap();
+        let (doc, diags) = analyze(SPAWN);
+        assert!(diags.is_empty(), "{diags:#?}");
+        // `seconds` is asserted and present; `+ jitter` is intent, not drift;
+        // the `Component` derive matches `## components`; and `Collider` comes
+        // from a dependency, so nothing tries to resolve it.
+        let fs_diags = lint::lint(&doc, &spec, Some(dir.path()));
+        assert!(fs_diags.is_empty(), "{fs_diags:#?}");
+    }
+
+    #[test]
+    fn a_role_mismatch_reaches_the_editor_as_a_warning() {
+        // WaveConfig derives Resource; the spec files it as a component.
+        let (dir, ds, _uri) = tree("## components\nstruct WaveConfig @ waves.rs\n");
+        let diags = lint::lint(&ds.doc, &dir.path().join("u.hmml"), None);
+        let codes: Vec<&str> = diags.iter().map(|d| d.code).collect();
+        assert_eq!(codes, ["rust-role-mismatch"], "{diags:?}");
     }
 }

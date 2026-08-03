@@ -18,7 +18,7 @@
 use std::ops::Range;
 
 use mml_parser::Position;
-use mml_parser::ast::{Document, Role, Step, TypeDef};
+use mml_parser::ast::{Document, ExternImport, Role, Step, TypeDef};
 use mml_parser::span::{Span, Spanned};
 
 // ---- constants -------------------------------------------------------------
@@ -270,14 +270,22 @@ pub struct TypeSym {
     /// The ECS role, for a type declared in a world section; `None` for a
     /// `## data` type in the classic dialect.
     pub role: Option<Role>,
+    /// The `@ <path>` of a type that references real code (grammar §4.7).
+    /// `Some` means this spec line is a reference, not a definition — so the
+    /// definition goto should reach is in Rust, not here.
+    pub rust_path: Option<String>,
 }
 
 impl TypeSym {
     /// What hover and completion call this: `component struct`, `enum`, …
     pub fn detail(&self) -> String {
-        match self.role {
+        let base = match self.role {
             Some(role) => format!("{} {}", role.noun(), self.shape.noun()),
             None => self.shape.noun().to_string(),
+        };
+        match &self.rust_path {
+            Some(path) => format!("{base} @ {path}"),
+            None => base,
         }
     }
 }
@@ -332,6 +340,7 @@ pub fn symbols(doc: &Document) -> Symbols {
             def_span: t.span(),
             shape,
             role,
+            rust_path: t.path().map(|p| p.value.clone()),
         }
     };
     let mut types: Vec<TypeSym> = doc.data.types.iter().map(|t| to_sym(t, None)).collect();
@@ -462,6 +471,29 @@ pub fn import_on_line(doc: &Document, offset: usize) -> Option<&mml_parser::ast:
         .find(|i| offset >= i.span.start && offset <= i.span.end)
 }
 
+/// The `use extern` import that brought `name` into scope (grammar §4.8), if
+/// any. What tells "this type is in a dependency" from "this type is somewhere
+/// in the checkout" — and therefore whether goto opens docs.rs or a file.
+pub fn extern_named<'a>(doc: &'a Document, name: &str) -> Option<&'a ExternImport> {
+    doc.all_extern_imports()
+        .find(|i| i.types.iter().any(|t| t.value == name))
+}
+
+/// The declared type named `name`, whichever section declared it. Unlike
+/// [`type_named`] this reaches the AST node, so callers can see the `@ <path>`
+/// that makes it a reference.
+pub fn type_def_named<'a>(doc: &'a Document, name: &str) -> Option<&'a TypeDef> {
+    doc.all_type_defs().find(|t| t.name().value == name)
+}
+
+/// The type declaration whose `@ <path>` span contains `offset` — the cursor
+/// sitting on a Rust reference's path.
+pub fn type_path_at(doc: &Document, offset: usize) -> Option<&Spanned<String>> {
+    doc.all_type_defs()
+        .filter_map(TypeDef::path)
+        .find(|p| offset >= p.span.start && offset <= p.span.end)
+}
+
 /// Whether `prefix` (the line text before the cursor) ends inside an `@ spec `
 /// annotation whose ref is still being typed.
 fn in_spec_ref(prefix: &str) -> bool {
@@ -549,6 +581,10 @@ pub enum CompletionContext {
     /// After `use <ref>: ` in `## data` — offer the type names the referenced
     /// unit defines.
     ImportType,
+    /// After `@ ` on a type declaration (grammar §4.7) — offer the paths this
+    /// spec already names, since a spec's types overwhelmingly live in the
+    /// files its header points at.
+    TypePath,
     /// After `@ spec ` on a module/behavior/invariant line — offer spec refs.
     SpecRef,
     /// Start of a behavior bullet — offer control-flow keywords + names.
@@ -557,6 +593,23 @@ pub enum CompletionContext {
     BehaviorProse,
     /// No useful completion.
     Other,
+}
+
+/// Whether `prefix` ends inside a type declaration's `@ <path>` — the cursor is
+/// past an `@` on a `struct` / `enum` / `marker` line, and no `{` has opened the
+/// body yet.
+fn in_type_path(prefix: &str) -> bool {
+    let trimmed = prefix.trim_start();
+    if !["struct ", "enum ", "marker "]
+        .iter()
+        .any(|kw| trimmed.starts_with(kw))
+    {
+        return false;
+    }
+    match trimmed.rfind('@') {
+        Some(at) => !trimmed[at..].contains('{'),
+        None => false,
+    }
 }
 
 /// The `key` part of a `key: …` line, if the cursor prefix already contains a
@@ -605,11 +658,21 @@ pub fn completion_context(text: &str, offset: usize) -> CompletionContext {
             // A `use` import line takes precedence over the generic
             // `key: Type` classification (it also contains a `:`).
             if let Some(after_use) = prefix.trim_start().strip_prefix("use ") {
-                if after_use.contains(':') {
+                // `use extern crate::path: T` — the target is a crate path, and
+                // nothing on this machine can enumerate one.
+                if let Some(after_extern) = after_use.strip_prefix("extern ") {
+                    if after_extern.contains(':') && !after_extern.ends_with(':') {
+                        CompletionContext::ImportType
+                    } else {
+                        CompletionContext::Other
+                    }
+                } else if after_use.contains(':') {
                     CompletionContext::ImportType
                 } else {
                     CompletionContext::ImportRef
                 }
+            } else if in_type_path(prefix) {
+                CompletionContext::TypePath
             } else if key_before_colon(prefix).is_some() {
                 CompletionContext::Type
             } else {
@@ -1032,7 +1095,8 @@ mod tests {
     // --- Bevy dialect ---
 
     const PLUGIN: &str = include_str!("../../mml-parser/tests/fixtures/examples/enemy-waves.hmml");
-    const SYSTEM: &str = include_str!("../../mml-parser/tests/fixtures/examples/spawn-enemies.hmml");
+    const SYSTEM: &str =
+        include_str!("../../mml-parser/tests/fixtures/examples/spawn-enemies.hmml");
 
     #[test]
     fn sections_cover_the_bevy_kinds() {
@@ -1225,5 +1289,48 @@ mod tests {
         let (spec, ty) = import_type_at(&doc, off).expect("imported type");
         assert_eq!(spec.value, "enemy-waves");
         assert_eq!(ty.value, "WaveConfig");
+    }
+}
+
+#[cfg(test)]
+mod rust_ref_completion_tests {
+    use super::*;
+
+    const SPEC: &str = "system: s\nunit: u\nkind: plugin\nsource:\n  repo: r\n  paths:\n    - src/waves/mod.rs\n\n## components\nstruct Wave @ src/waves/mod.rs\nuse extern avian3d::prelude: Collider\n";
+
+    fn ctx_at(needle: &str, extra: usize) -> CompletionContext {
+        let off = SPEC.find(needle).unwrap() + needle.len() + extra;
+        completion_context(SPEC, off)
+    }
+
+    #[test]
+    fn a_types_at_path_offers_paths_not_types() {
+        assert_eq!(ctx_at("struct Wave @", 0), CompletionContext::TypePath);
+        assert_eq!(ctx_at("struct Wave @ src", 0), CompletionContext::TypePath);
+    }
+
+    #[test]
+    fn a_body_after_the_path_is_a_type_position_again() {
+        let src = "system: s\nunit: u\nkind: plugin\n\n## components\nstruct Wave @ waves.rs {\n  hp: \n}\n";
+        let off = src.find("hp: ").unwrap() + 4;
+        assert_eq!(completion_context(src, off), CompletionContext::Type);
+    }
+
+    #[test]
+    fn an_extern_crate_path_has_nothing_to_offer_but_its_types_do() {
+        // Nothing on this machine can enumerate a crate path…
+        assert_eq!(ctx_at("use extern ", 0), CompletionContext::Other);
+        // …but past the colon we are naming types, like any other import.
+        assert_eq!(
+            ctx_at("use extern avian3d::prelude: ", 0),
+            CompletionContext::ImportType
+        );
+    }
+
+    #[test]
+    fn a_plain_use_line_is_unaffected() {
+        let src = "system: s\nunit: u\nkind: plugin\n\n## components\nuse other\n";
+        let off = src.find("use other").unwrap() + 9;
+        assert_eq!(completion_context(src, off), CompletionContext::ImportRef);
     }
 }

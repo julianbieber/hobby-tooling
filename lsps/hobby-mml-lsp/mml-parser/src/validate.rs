@@ -174,7 +174,11 @@ pub fn validate(doc: &Document) -> Vec<Diagnostic> {
 
     // Duplicate fields within each struct.
     for def in doc.all_type_defs() {
-        if let TypeDef::Struct { fields, .. } = def {
+        if let TypeDef::Struct {
+            fields: Some(fields),
+            ..
+        } = def
+        {
             let mut seen: HashSet<&str> = HashSet::new();
             for field in fields {
                 if !seen.insert(field.name.value.as_str()) {
@@ -230,6 +234,47 @@ pub fn validate(doc: &Document) -> Vec<Diagnostic> {
         }
     }
 
+    // External-crate imports (grammar §4.8). Same scope and duplicate rules as
+    // a spec import — the section still assigns the role — but the target is a
+    // crate path with nothing to resolve it against, so only its shape is
+    // checkable, here and nowhere else.
+    for import in doc.all_extern_imports() {
+        if !crate::ast::is_valid_crate_path(import.path.value.as_str()) {
+            diags.push(Diagnostic::error(
+                import.path.span,
+                code::MALFORMED_EXTERN_IMPORT,
+                format!(
+                    "`{}` is not a Rust path; expected `crate` or `crate::module::path`",
+                    import.path.value
+                ),
+            ));
+        }
+        for ty in &import.types {
+            let name = ty.value.as_str();
+            if !is_pascal_type(name) {
+                diags.push(Diagnostic::error(
+                    ty.span,
+                    code::MALFORMED_EXTERN_IMPORT,
+                    format!("imported type `{name}` must be a PascalCase type name"),
+                ));
+                continue;
+            }
+            if defined.contains(name) {
+                diags.push(Diagnostic::error(
+                    ty.span,
+                    code::DUPLICATE_IMPORT,
+                    format!("`{name}` is imported but also defined locally in this spec"),
+                ));
+            } else if !imported.insert(name) {
+                diags.push(Diagnostic::error(
+                    ty.span,
+                    code::DUPLICATE_IMPORT,
+                    format!("duplicate import of type `{name}`"),
+                ));
+            }
+        }
+    }
+
     // Every type referenced in a field / in: / out: must resolve.
     let known: HashSet<&str> = PRIMITIVES
         .iter()
@@ -241,9 +286,13 @@ pub fn validate(doc: &Document) -> Vec<Diagnostic> {
         .collect();
 
     for def in doc.all_type_defs() {
-        if let TypeDef::Struct { fields, .. } = def {
-            for field in fields {
-                check_type(&field.ty, &known, &mut diags);
+        if let TypeDef::Struct {
+            fields: Some(fields),
+            ..
+        } = def
+        {
+            for field in fields.iter().filter_map(|f| f.ty.as_ref()) {
+                check_type(field, &known, &mut diags);
             }
         }
     }
@@ -451,9 +500,10 @@ pub fn collect_spec_refs(doc: &Document) -> Vec<&Spanned<String>> {
 }
 
 /// All source-code references in the document: the header `source.paths`
-/// entries, each module's `@ path`, and each system entry's `@ path`. Whether a
-/// path resolves to a real file needs a filesystem and is checked by fs-aware
-/// consumers (`lint`, the LSP).
+/// entries, each module's `@ path`, each system entry's `@ path`, and each
+/// type declaration's `@ path` (grammar §4.7). Whether a path resolves to a
+/// real file needs a filesystem and is checked by fs-aware consumers (`lint`,
+/// the LSP).
 pub fn collect_source_paths(doc: &Document) -> Vec<&Spanned<String>> {
     let mut paths = Vec::new();
     if let Some(source) = &doc.header.source {
@@ -461,6 +511,7 @@ pub fn collect_source_paths(doc: &Document) -> Vec<&Spanned<String>> {
     }
     paths.extend(doc.modules.iter().filter_map(|m| m.path.as_ref()));
     paths.extend(doc.systems.iter().filter_map(|s| s.path.as_ref()));
+    paths.extend(doc.all_type_defs().filter_map(TypeDef::path));
     paths
 }
 

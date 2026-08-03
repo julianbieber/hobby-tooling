@@ -378,6 +378,7 @@ test:
     cd mcps/just-mcp && cargo test
     cd mcps/lsp-mcp && cargo test
     cd mcps/tree-extract && cargo test
+    cd tools/hobby-mml-index && cargo test
     cd tools/hwt-overview && cargo test --workspace
     cd tools/hgh-issues && cargo test --workspace
 

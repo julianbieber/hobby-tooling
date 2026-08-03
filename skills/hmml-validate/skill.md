@@ -41,6 +41,25 @@ Every finding is one of four verdicts. Use them exactly:
 - **CANNOT-VERIFY** — the claim needs a runtime/dynamic check you could not run
   (missing test infra, no discoverable enforcement site). Say so; do not guess.
 
+**Referenced types are where drift shows up first** (grammar §4.7). A
+declaration ending in `@ <path>` claims a type exists in real code, so it is
+checkable in ways prose is not — and `hobby-mml-parser --lint` finds most of it
+for you. Map each finding to a verdict:
+
+- `rust-type-not-found` — the type was renamed or moved → **SPEC-AHEAD**.
+- `rust-role-mismatch` — its `#[derive(…)]` no longer matches the section (a
+  component became a resource) → **SPEC-AHEAD**, and a real design change worth
+  calling out, not a typo.
+- `rust-member-unknown` — an unmarked field the spec asserts is gone →
+  **SPEC-AHEAD**.
+- A **`+` or `-` member that has been applied** — the `+` field now exists, or
+  the `-` field is gone — is **CONFORMS**, and worth reporting as a spec-hygiene
+  note: the delta has landed and the marker can be dropped. A `+`/`-` that has
+  *not* landed is outstanding work, not drift; the linter is silent on both, so
+  this one is yours to read.
+- A field the code has and the reference body omits is **not** CODE-AHEAD. A
+  reference body is a delta by definition, so omission carries no claim.
+
 ## Instructions
 
 1. **Identify the spec and fix the reference version.** Specs live **per task**
@@ -233,6 +252,17 @@ Every finding is one of four verdicts. Use them exactly:
   lines that bring a data model defined by another unit into scope. Resolves
   like `@ spec` (a sibling `<unit>.hmml` in the same task directory); unresolved
   target/type = warning.
+- Referencing existing code (grammar §4.7): a type declaration may end with
+  `@ <repo-relative-path>` — `struct Wave @ src/waves/mod.rs` — meaning the type
+  already exists there. The body then becomes **optional**, and when present it
+  is a **delta**: `+ field: Type` adds a field, `- field` removes one, an
+  unmarked field asserts one already exists, and anything not listed **stays as
+  it is**. Reference a type this unit does not own instead of restating it. The
+  filesystem-aware tools check the type is there, that its `#[derive(…)]` fits
+  the section's role, and that unmarked members exist — all warnings.
+- Dependency types (grammar §4.8): `use extern avian3d::prelude: Collider` for a
+  type from another crate. Same scope and role rules as `use`, and nothing else:
+  no file to resolve, no derive check, no members. Goto opens its docs.rs page.
 - `## behavior`: nested `-` bullets; control-flow keywords
   `if…: / else: / for each…: / while…: / try: / on error…:`; else free prose;
   declared names cross-link. Symbols `X`/`Y`/`N` are abstract quantities, and an

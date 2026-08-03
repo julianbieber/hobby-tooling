@@ -41,6 +41,20 @@ role — a field type, an enum a component is built from. `in:`/`out:` stay
 illegal there, and a `## data` name in an access list is a role mismatch: the
 section is a type namespace in this dialect, not an interface.
 
+v2.2 lets a spec **point at a type instead of restating it**. `struct Wave @
+src/waves/mod.rs` says the type is already there: the body becomes optional, and
+when present it is a *delta* — `+` adds a member, `-` removes one, unmarked
+asserts one exists, and anything unlisted stays as it is. Because the target is
+real Rust on disk, the reference is checked: the type must exist, its
+`#[derive(…)]` must match the section's role (filing a `Resource` under
+`## components` is the classic spec error, and now a warning), and
+goto-definition lands on the struct. `use extern avian3d::prelude: Collider`
+covers a dependency's type, which nothing local can verify — a second keyword,
+because the guarantee differs and a reader should not have to resolve a path to
+tell which they are looking at. Reading the Rust is `mml-parser/src/rust_source.rs`,
+via the vendored `tree-sitter-rust` grammar rather than the Helix grammar cache,
+so `hobby-mml-parser --lint` keeps working on a machine with no built grammars.
+
 That divergence ends any prospect of re-merging with the work binary, and makes
 upstream `mml-parser` cherry-picks a manual job — a cost accepted deliberately,
 since the Bevy dialect has no business in a work repo.
@@ -58,7 +72,7 @@ docs and parser cannot drift:
 | Fixture | Shows |
 |---|---|
 | `enemy-waves.hmml` | `kind: plugin` — world sections, role-less `## data`, systems, ordering, `marker`, `where:` |
-| `spawn-enemies.hmml` | `kind: system` — `## access`, cross-spec imports into `## data` and a world section, query exclusion |
+| `spawn-enemies.hmml` | `kind: system` — `## access`, cross-spec imports into `## data` and a world section, query exclusion, a Rust reference with a `+`/`-` delta body, `use extern` |
 | `get-map-tile.hmml` | `kind: endpoint` — `method`, param sources |
 | `mesh-terrain-chunks.hmml` | `kind: workflow` — `Queue`/`Stream` |
 | `shared-data-imports.hmml` / `cross-spec-refs.hmml` | `use` imports, `@ spec` refs |

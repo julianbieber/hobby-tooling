@@ -49,6 +49,31 @@ pub mod code {
     pub const BAD_PARAM_SOURCE: &str = "bad-param-source";
     pub const UNTERMINATED_BLOCK: &str = "unterminated-block";
 
+    // Rust references (grammar §4.7) — a type declaration carrying `@ <path>`.
+    /// A `struct`/`enum` with no `{ … }` body and no `@ <path>` to reference.
+    /// A body may only be omitted when the type is declared in real code.
+    pub const MISSING_TYPE_BODY: &str = "missing-type-body";
+    /// The `@` annotation on a type declaration is not a usable source path —
+    /// empty, or an `@ spec` ref (a type points at code, never at a spec).
+    pub const MALFORMED_TYPE_PATH: &str = "malformed-type-path";
+    /// Emitted only by filesystem-aware consumers: the referenced file resolves
+    /// but declares no type of that name.
+    pub const RUST_TYPE_NOT_FOUND: &str = "rust-type-not-found";
+    /// Emitted only by filesystem-aware consumers: the referenced Rust type's
+    /// `#[derive(…)]` does not match the ECS role of the section it was filed
+    /// under (a `#[derive(Resource)]` type declared in `## components`).
+    pub const RUST_ROLE_MISMATCH: &str = "rust-role-mismatch";
+    /// Emitted only by filesystem-aware consumers: the spec says `struct` and
+    /// the code says `enum`, or `marker` names a struct that has fields.
+    pub const RUST_SHAPE_MISMATCH: &str = "rust-shape-mismatch";
+    /// Emitted only by filesystem-aware consumers: an *unmarked* field or
+    /// variant — one the spec asserts already exists — is absent from the real
+    /// type. `+` / `-` members are intent, never assertions, so they are silent.
+    pub const RUST_MEMBER_UNKNOWN: &str = "rust-member-unknown";
+
+    // External-crate imports (grammar §4.8).
+    pub const MALFORMED_EXTERN_IMPORT: &str = "malformed-extern-import";
+
     // Type imports (grammar §4.5).
     pub const MALFORMED_IMPORT: &str = "malformed-import";
     pub const DUPLICATE_IMPORT: &str = "duplicate-import";

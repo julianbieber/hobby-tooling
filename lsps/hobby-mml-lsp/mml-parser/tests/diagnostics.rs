@@ -660,3 +660,118 @@ fn plugin_is_offered_as_a_kind() {
     assert!(d.message.contains("plugin"), "{}", d.message);
     assert!(d.message.contains("system"), "{}", d.message);
 }
+
+// ---- Rust references (grammar §4.7) and extern imports (§4.8) --------------
+
+/// A `kind: plugin` spec body with `sections` spliced in.
+fn plugin(sections: &str) -> String {
+    format!(
+        "system: s\nunit: u\nkind: plugin\n\n{sections}\n## systems\n\n## behavior\n- x\n\n## invariants\n"
+    )
+}
+
+#[test]
+fn a_reference_may_omit_its_body_entirely() {
+    let src = plugin("## components\nstruct Wave @ src/waves.rs\nmarker Spawner @ src/waves.rs\n");
+    let (doc, diags) = analyze(&src);
+    assert!(diags.is_empty(), "unexpected diagnostics: {diags:#?}");
+    let wave = &doc.components.types[0];
+    assert!(wave.is_reference());
+    assert_eq!(wave.path().unwrap().value, "src/waves.rs");
+    match wave {
+        mml_parser::ast::TypeDef::Struct { fields, .. } => assert!(fields.is_none()),
+        _ => panic!("Wave should be a struct"),
+    }
+}
+
+#[test]
+fn a_body_without_a_path_is_still_required() {
+    let src = plugin("## components\nstruct Wave\n");
+    let d = only(&src, code::MISSING_TYPE_BODY);
+    assert_eq!(d.severity, Severity::Error);
+    assert_span(&src, &d, "Wave");
+}
+
+#[test]
+fn a_type_points_at_code_not_at_a_spec() {
+    let src = plugin("## components\nstruct Wave @ spec other\n");
+    let d = only(&src, code::MALFORMED_TYPE_PATH);
+    assert_eq!(d.severity, Severity::Error);
+}
+
+#[test]
+fn deltas_parse_on_a_reference() {
+    use mml_parser::ast::Delta;
+    let src = plugin(
+        "## components\nstruct Wave @ src/waves.rs {\n  index: u32,\n  + streak: u32,\n  - remaining,\n}\n",
+    );
+    let (doc, diags) = analyze(&src);
+    assert!(diags.is_empty(), "unexpected diagnostics: {diags:#?}");
+    match &doc.components.types[0] {
+        mml_parser::ast::TypeDef::Struct { fields, .. } => {
+            let fields = fields.as_ref().unwrap();
+            let got: Vec<(&str, Delta)> = fields
+                .iter()
+                .map(|f| (f.name.value.as_str(), f.delta))
+                .collect();
+            assert_eq!(
+                got,
+                [
+                    ("index", Delta::Keep),
+                    ("streak", Delta::Add),
+                    ("remaining", Delta::Remove),
+                ]
+            );
+            // A removal needs no type; the field being removed already has one.
+            assert!(fields[2].ty.is_none());
+        }
+        _ => panic!("Wave should be a struct"),
+    }
+}
+
+#[test]
+fn a_delta_on_an_owned_type_is_rejected() {
+    let src = plugin("## components\nstruct Wave {\n  + index: u32,\n}\n");
+    let d = only(&src, code::MALFORMED_FIELD);
+    assert_eq!(d.severity, Severity::Error);
+    assert_span(&src, &d, "+");
+}
+
+#[test]
+fn extern_import_brings_a_crate_type_into_scope_with_the_sections_role() {
+    let src = plugin(
+        "## components\nuse extern avian3d::prelude: Collider\n\n## resources\nstruct Cfg {\n  hit: Collider,\n}\n",
+    );
+    let (doc, diags) = analyze(&src);
+    assert!(diags.is_empty(), "unexpected diagnostics: {diags:#?}");
+    let imp = &doc.components.extern_imports[0];
+    assert_eq!(imp.path.value, "avian3d::prelude");
+    assert_eq!(imp.crate_name(), "avian3d");
+    assert_eq!(
+        imp.docs_url("Collider"),
+        "https://docs.rs/avian3d/latest/avian3d/?search=Collider"
+    );
+    // The role came from the section, so it is queryable like any component.
+    assert_eq!(
+        doc.roles().get("Collider"),
+        Some(&mml_parser::ast::Role::Component)
+    );
+}
+
+#[test]
+fn a_unit_named_extern_is_still_a_spec_import() {
+    // `use extern: T` has no second token, so the keyword does not steal a
+    // legal unit name.
+    let src = plugin("## components\nuse extern: Wave\n");
+    let (doc, _diags) = analyze(&src);
+    assert_eq!(doc.components.imports[0].spec.value, "extern");
+    assert!(doc.components.extern_imports.is_empty());
+}
+
+#[test]
+fn a_malformed_crate_path_is_reported() {
+    let src = plugin("## components\nuse extern 3avian::prelude: Collider\n");
+    let d = only(&src, code::MALFORMED_EXTERN_IMPORT);
+    assert_eq!(d.severity, Severity::Error);
+    assert_span(&src, &d, "3avian::prelude");
+}

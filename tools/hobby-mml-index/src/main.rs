@@ -199,13 +199,24 @@ fn parse_spec(text: &str) -> Option<SpecEntry> {
     let system = doc.header.system.as_ref()?.value.clone();
     let unit = doc.header.unit.as_ref()?.value.clone();
     let kind = doc.header.kind.as_ref()?.value.as_str().to_string();
-    let (repo, paths) = match &doc.header.source {
+    let (repo, mut paths): (Option<String>, Vec<String>) = match &doc.header.source {
         Some(src) => (
             src.repo.as_ref().map(|r| r.value.clone()),
             src.paths.iter().map(|p| p.value.clone()).collect(),
         ),
         None => (None, Vec::new()),
     };
+    // A type referencing real code (grammar §4.7) names a file the spec is
+    // about just as much as a `source.paths` entry does. Folding them in keeps
+    // the manifest's linkage complete for a spec whose header lists only the
+    // plugin module but whose components live a directory away.
+    paths.extend(
+        doc.all_type_defs()
+            .filter_map(mml_parser::ast::TypeDef::path)
+            .map(|p| mml_parser::paths::split_suffix(&p.value).0.to_string()),
+    );
+    paths.sort();
+    paths.dedup();
 
     let mut refs: Vec<SpecId> = mml_parser::validate::collect_spec_refs(&doc)
         .into_iter()

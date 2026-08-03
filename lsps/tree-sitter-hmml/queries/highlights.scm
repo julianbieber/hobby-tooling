@@ -42,6 +42,12 @@
 ; `marker Name` — a zero-sized component (grammar §8.1).
 "marker" @keyword
 (marker_declaration name: (identifier) @type)
+
+; A type declaration's `@ <path>` — the real code it references (grammar §4.7),
+; and the `+` / `-` that mark what the body asks to change there.
+(type_definition path: (type_path) @string.special.path)
+(marker_declaration path: (type_path) @string.special.path)
+(delta) @operator
 ; Endpoint parameter source: `field: Type @query` (grammar §4.1).
 (member source: (identifier) @attribute)
 
@@ -63,6 +69,11 @@
 ; `spec_ref` highlight above; the imported names are types.
 "use" @keyword.control.import
 (use_import type: (identifier) @type)
+
+; External-crate imports: `use extern crate::path: Type` (grammar §4.8). The
+; crate path highlights as a path like every other pointer out of the file.
+(extern_keyword) @keyword.control.import
+(crate_path) @string.special.path
 
 ; Behavior control-flow keywords.
 (keyword) @keyword.control

@@ -65,3 +65,56 @@ fn check_mode_ignores_source_paths() {
     assert!(out.status.success(), "{stdout}");
     assert!(!stdout.contains("unresolved-source-path"), "{stdout}");
 }
+
+/// The Rust-reference checks (grammar §4.7) have to reach the **binary**, not
+/// just the library: `--lint` is what every `hmml-*` skill shells out to, so a
+/// check the CLI does not run is a check that does not exist for the workflow
+/// it was built for. This test exists because the CLI once named its lint
+/// passes one by one and silently omitted every later one.
+#[test]
+fn lint_runs_the_rust_reference_checks() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("waves.rs"),
+        "use bevy::prelude::*;\n\n#[derive(Resource)]\npub struct WaveConfig {\n    pub interval_secs: f32,\n}\n",
+    )
+    .unwrap();
+    // `WaveConfig` derives Resource but is filed as a component, and `Ghost`
+    // is not in the file at all.
+    let spec = dir.path().join("one.hmml");
+    fs::write(
+        &spec,
+        "system: s\nunit: one\nkind: plugin\n\n\
+## components\nstruct WaveConfig @ waves.rs\nstruct Ghost @ waves.rs\n\n\
+## systems\n\n## behavior\n- x\n\n## invariants\n",
+    )
+    .unwrap();
+
+    let (ok, stdout) = run_lint(&spec);
+    assert!(!ok, "expected a nonzero exit:\n{stdout}");
+    assert!(stdout.contains("rust-role-mismatch"), "{stdout}");
+    assert!(stdout.contains("rust-type-not-found"), "{stdout}");
+}
+
+/// A spec whose reference matches the code exits clean — including a `+` field
+/// that has not landed yet, which is outstanding work rather than drift.
+#[test]
+fn lint_is_silent_on_a_matching_reference_and_on_pending_deltas() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("waves.rs"),
+        "use bevy::prelude::*;\n\n#[derive(Component)]\npub struct Wave {\n    pub index: u32,\n}\n",
+    )
+    .unwrap();
+    let spec = dir.path().join("one.hmml");
+    fs::write(
+        &spec,
+        "system: s\nunit: one\nkind: plugin\n\n\
+## components\nstruct Wave @ waves.rs {\n  index: u32,\n  + streak: u32,\n}\n\n\
+## systems\n\n## behavior\n- x\n\n## invariants\n",
+    )
+    .unwrap();
+
+    let (ok, stdout) = run_lint(&spec);
+    assert!(ok, "expected exit 0, got:\n{stdout}");
+}
