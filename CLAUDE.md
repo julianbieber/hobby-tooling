@@ -86,8 +86,14 @@ The one `feathers_kit` copy in this repo exists so the *work* dashboard cannot
 regress. A second hobby copy would protect nothing and drift, and sharing the kit
 is also what keeps the two windows looking like one tool. Two consequences worth
 knowing: `cargo fmt`/`clippy` run from `tools/hgh-issues` reach into
-`tools/hwt-overview`, and a change to `hwt_core` needs both workspaces' tests
-(`just test` runs them).
+`tools/hwt-overview`, and **editing** `hwt_core` means both workspaces' tests
+have to pass before you commit, not just the one you edited in (`just test` runs
+them).
+
+That is a pre-commit concern only. **Installing never needs tests** — the
+committed code is already tested, so `install-overview` / `install-issues` build
+and replace the binaries and nothing more. Running `just test` because an install
+touched a shared crate is wasted work.
 
 ## Opening a session from a dashboard: two things that kill the terminal
 
