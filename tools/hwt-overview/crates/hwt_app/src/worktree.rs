@@ -780,6 +780,8 @@ use hwt_core::spawn_detached;
 /// in a new terminal for this task.
 pub fn launch_cdev(task: &Task) {
     let dir = task.dir.to_string_lossy().into_owned();
+    // Window title only. `hcdev` spells the zellij session name the same way, but shortens
+    // it when the three components overflow the socket path; a title has no such limit.
     let title = format!(
         "hcdev-{}-{}-{}",
         task.id.project, task.id.topic, task.id.name

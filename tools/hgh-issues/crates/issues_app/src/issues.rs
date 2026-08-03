@@ -499,7 +499,9 @@ impl LaunchSpec {
         )
     }
 
-    /// The zellij/terminal title `hcdev` will use for this task.
+    /// The terminal title for this task's session, spelled the way `hcdev` spells a
+    /// session name. Cosmetic only — `hcdev` shortens the name it hands zellij when the
+    /// three components overflow the socket path, and a window title has no such limit.
     fn session_title(&self) -> String {
         format!("hcdev-{}-{}-{}", self.project, self.topic, self.task)
     }

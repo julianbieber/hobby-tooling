@@ -77,10 +77,24 @@ pub fn git_capture(path: &std::path::Path, args: &[&str]) -> Option<String> {
 // Detached processes
 // ---------------------------------------------------------------------------
 
+/// Zellij advertises the pane it started a process in through these. A dashboard launched from
+/// a zellij pane inherits them, and would pass them on to every terminal it opens.
+const ZELLIJ_PANE_ENV: [&str; 3] = ["ZELLIJ", "ZELLIJ_SESSION_NAME", "ZELLIJ_PANE_ID"];
+
 /// Spawn a command detached from this process (via `setsid`), so terminals/browsers opened from
 /// the dashboard outlive it. Failures are logged, never fatal.
+///
+/// The child does not inherit [`ZELLIJ_PANE_ENV`]. Detaching from the process is not enough when
+/// the process is itself running in a zellij pane: the terminal would start believing it is
+/// already inside that session, and `hcdev` would then ask zellij to attach a session to itself —
+/// which zellij answers with a panic, so the new terminal vanished the moment it appeared.
 pub fn spawn_detached(args: &[&str]) {
-    if let Err(e) = Command::new("setsid").args(args).spawn() {
+    let mut cmd = Command::new("setsid");
+    cmd.args(args);
+    for var in ZELLIJ_PANE_ENV {
+        cmd.env_remove(var);
+    }
+    if let Err(e) = cmd.spawn() {
         warn!("failed to spawn `{}`: {e}", args.join(" "));
     }
 }
