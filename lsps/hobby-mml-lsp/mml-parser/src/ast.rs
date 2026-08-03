@@ -72,6 +72,39 @@ impl Document {
         )
     }
 
+    /// Every `use extern` import in the document (grammar §4.8), from `## data`
+    /// and the three world sections alike.
+    pub fn all_extern_imports(&self) -> impl Iterator<Item = &ExternImport> {
+        self.data.extern_imports.iter().chain(
+            self.world_sections()
+                .into_iter()
+                .flat_map(|w| w.extern_imports.iter()),
+        )
+    }
+
+    /// Every type declaration that references real code (grammar §4.7), paired
+    /// with the ECS role of the section it sits in — `None` for `## data`.
+    /// This is what the filesystem-aware checks walk.
+    pub fn rust_refs(&self) -> Vec<(&TypeDef, Option<Role>)> {
+        let mut out: Vec<(&TypeDef, Option<Role>)> = self
+            .data
+            .types
+            .iter()
+            .filter(|t| t.is_reference())
+            .map(|t| (t, None))
+            .collect();
+        for section in self.world_sections() {
+            out.extend(
+                section
+                    .types
+                    .iter()
+                    .filter(|t| t.is_reference())
+                    .map(|t| (t, Some(section.role))),
+            );
+        }
+        out
+    }
+
     /// Every name `## data` brings into scope — declared and imported alike.
     /// In the Bevy dialect these are the role-less shapes (grammar §4.6): legal
     /// as a field type, illegal in an access list.
@@ -81,6 +114,7 @@ impl Document {
             .iter()
             .map(TypeDef::name)
             .chain(self.data.imports.iter().flat_map(|i| i.types.iter()))
+            .chain(self.data.extern_imports.iter().flat_map(|i| i.types.iter()))
     }
 
     /// The ECS role of every declared and imported world name. Used to check
@@ -286,6 +320,9 @@ pub struct DataSection {
     /// `use <system>/<unit>: Type, …` type imports (grammar §4.5), which pull
     /// type definitions from another unit into this file's scope, role-less.
     pub imports: Vec<Import>,
+    /// `use extern <crate::path>: Type, …` imports (grammar §4.8) — types from a
+    /// dependency, which no path in this checkout can name.
+    pub extern_imports: Vec<ExternImport>,
     pub types: Vec<TypeDef>,
     /// `in:` — the unit's input type. Classic kinds only.
     pub input: Option<TypeExpr>,
@@ -306,23 +343,84 @@ pub struct Import {
     pub span: Span,
 }
 
+/// A `use extern <crate::path>: Type, Type` line (grammar §4.8): types that come
+/// from a dependency rather than from this checkout.
+///
+/// It brings names into scope and takes the declaring section's ECS role,
+/// exactly like an [`Import`] — and offers **nothing else**. There is no file to
+/// resolve, no derive to check against, and no fields. That asymmetry is why it
+/// is a separate keyword rather than a path that happens not to resolve: the
+/// guarantee differs, so the syntax should too.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ExternImport {
+    /// The `::`-separated crate path (`avian3d::prelude`), first segment being
+    /// the crate. Never resolved against the filesystem.
+    pub path: Spanned<String>,
+    pub types: Vec<Spanned<String>>,
+    pub span: Span,
+}
+
+impl ExternImport {
+    /// The crate name — the first `::` segment, which is what docs.rs is
+    /// addressed by.
+    pub fn crate_name(&self) -> &str {
+        self.path
+            .value
+            .split("::")
+            .next()
+            .unwrap_or(&self.path.value)
+    }
+
+    /// The docs.rs URL for one of this import's types. Uses rustdoc's search
+    /// form rather than a guessed `struct.<Name>.html`: a `use extern` line
+    /// carries no item kind, and a wrong guess is a 404 while a search always
+    /// lands somewhere useful.
+    pub fn docs_url(&self, ty: &str) -> String {
+        let krate = self.crate_name();
+        format!("https://docs.rs/{krate}/latest/{krate}/?search={ty}")
+    }
+}
+
+/// Whether `s` is a well-formed `::`-separated Rust path — the target of a
+/// `use extern` line. Each segment matches `[A-Za-z_][A-Za-z0-9_]*`; a single
+/// segment (a bare crate name) is fine.
+pub fn is_valid_crate_path(s: &str) -> bool {
+    !s.is_empty()
+        && s.split("::").all(|seg| {
+            seg.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                && seg.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        })
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum TypeDef {
     Struct {
         name: Spanned<String>,
-        fields: Vec<Field>,
+        /// The field list, or `None` when the `{ … }` body was omitted
+        /// entirely — legal only for a type that references real code
+        /// (grammar §4.7). `Some(vec![])` is an explicit empty `{}`, which is a
+        /// different statement and stays distinguishable.
+        fields: Option<Vec<Field>>,
+        /// `@ <path>` — the real code this type is declared in (grammar §4.7).
+        /// When set, the body is a **delta**, not a definition.
+        path: Option<Spanned<String>>,
         span: Span,
     },
     Enum {
         name: Spanned<String>,
-        variants: Vec<Spanned<String>>,
+        variants: Option<Vec<Variant>>,
+        path: Option<Spanned<String>>,
         span: Span,
     },
     /// `marker Name` — a zero-sized component (grammar §8.1). Legal only in the
     /// Bevy world sections; markers are common enough in Bevy that spelling one
     /// as an empty `struct` reads badly.
-    Marker { name: Spanned<String>, span: Span },
+    Marker {
+        name: Spanned<String>,
+        path: Option<Spanned<String>>,
+        span: Span,
+    },
 }
 
 impl TypeDef {
@@ -341,6 +439,58 @@ impl TypeDef {
             | TypeDef::Marker { span, .. } => *span,
         }
     }
+
+    /// The `@ <path>` annotation, when this declaration references a type that
+    /// already exists in real code (grammar §4.7).
+    pub fn path(&self) -> Option<&Spanned<String>> {
+        match self {
+            TypeDef::Struct { path, .. }
+            | TypeDef::Enum { path, .. }
+            | TypeDef::Marker { path, .. } => path.as_ref(),
+        }
+    }
+
+    /// Whether this declaration points at existing code rather than defining a
+    /// new shape. A reference's body lists only the members it wants **added**
+    /// (`+`), **removed** (`-`), or asserted to exist (unmarked); everything it
+    /// does not mention stays as it is.
+    pub fn is_reference(&self) -> bool {
+        self.path().is_some()
+    }
+}
+
+/// What a member line in a referenced type's body asks for (grammar §4.7).
+/// Meaningless — and rejected — in a type that declares its own shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Delta {
+    /// Unmarked: the member is asserted to already exist as written. The only
+    /// variant that a filesystem-aware check can contradict.
+    #[default]
+    Keep,
+    /// `+ name: Type` — add this member to the real type.
+    Add,
+    /// `- name` — remove this member from the real type.
+    Remove,
+}
+
+impl Delta {
+    pub fn marker(self) -> &'static str {
+        match self {
+            Delta::Keep => "",
+            Delta::Add => "+",
+            Delta::Remove => "-",
+        }
+    }
+}
+
+/// One `enum` variant. Carries a [`Delta`] for the same reason a [`Field`] does:
+/// a referenced enum's body adds and removes variants rather than restating the
+/// whole set.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Variant {
+    pub name: Spanned<String>,
+    pub delta: Delta,
 }
 
 // ---- Bevy world sections (grammar §8.1) ------------------------------------
@@ -382,6 +532,7 @@ impl Role {
 pub struct WorldSection {
     pub role: Role,
     pub imports: Vec<Import>,
+    pub extern_imports: Vec<ExternImport>,
     pub types: Vec<TypeDef>,
 }
 
@@ -390,20 +541,24 @@ impl WorldSection {
         WorldSection {
             role,
             imports: Vec::new(),
+            extern_imports: Vec::new(),
             types: Vec::new(),
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.imports.is_empty() && self.types.is_empty()
+        self.imports.is_empty() && self.extern_imports.is_empty() && self.types.is_empty()
     }
 
-    /// Every name this section brings into scope — defined and imported alike.
+    /// Every name this section brings into scope — defined, imported from a
+    /// sibling spec, and imported from a dependency alike. All three take the
+    /// section's role; that is the whole of what the section decides.
     pub fn names(&self) -> impl Iterator<Item = &Spanned<String>> {
         self.types
             .iter()
             .map(TypeDef::name)
             .chain(self.imports.iter().flat_map(|i| i.types.iter()))
+            .chain(self.extern_imports.iter().flat_map(|i| i.types.iter()))
     }
 }
 
@@ -503,10 +658,15 @@ pub struct QueryFilter {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Field {
     pub name: Spanned<String>,
-    pub ty: TypeExpr,
+    /// `None` only for a `- name` removal, which needs no type — the field
+    /// being removed already has one, in the code.
+    pub ty: Option<TypeExpr>,
     /// Endpoint parameter source (`path`/`query`/`body`/`header`); grammar §4.1.
     /// `None` when the field carries no `@source` annotation.
     pub source: Option<Spanned<String>>,
+    /// Whether this line adds, removes, or asserts the field (grammar §4.7).
+    /// Always [`Delta::Keep`] in a type that declares its own shape.
+    pub delta: Delta,
     pub span: Span,
 }
 

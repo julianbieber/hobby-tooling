@@ -135,6 +135,26 @@ with no `Component`/`Resource`/`Event` derive goes.
      definition — the shared type then has one home and can't drift. Import from
      the unit that *owns* the type (defines it locally), not one that itself
      imports it.
+   - **Point at the code you read it from.** You are extracting from real code,
+     so every type you declare has a file: end its declaration with
+     `@ <repo-relative-path>` (grammar §4.7). That is what makes
+     goto-definition work from the spec into the struct, and what lets the tools
+     check the spec against the code later. Omit it only for a type you
+     *synthesized* rather than found (an endpoint's request record assembled
+     from loose params — the worked example marks those with a `# synthesized:`
+     comment).
+   - **Ownership decides whether to restate the fields.** If this unit owns the
+     type — it exists for this feature, and a reader of this spec needs its
+     shape — declare it with `@ <path>` and a full body. If the unit merely
+     *touches* a type that belongs elsewhere, reference it with `@ <path>` and
+     **no body**, or a body naming only the one or two fields the behavior
+     actually reads. A reference body is a delta, so listing a subset is a
+     legitimate statement, not an incomplete one.
+   - **A type from a dependency** — avian's `Collider`, another plugin's marker
+     — has no path in this checkout. Bring it in with
+     `use extern avian3d::prelude: Collider` (grammar §4.8) in the section that
+     gives it its role. Do **not** invent a path into `~/.cargo`, and do not
+     leave it undeclared.
 
 ### 4b. Extracting Bevy code
 
@@ -155,6 +175,11 @@ four sections, and **the derive decides which**.
     shadows the built-in and is almost always a mistake.
   - Reuse before redeclaring, exactly as in step 4: `use enemy-waves: Wave` at
     the top of the world section that gives it its role.
+  - **The derive you read the role off is the derive the tools will check.**
+    Since you are filing the type by its derive, end the declaration with
+    `@ <path>` and the two can be verified against each other from then on — a
+    `#[derive(Resource)]` type that drifts into `## components` becomes a
+    `rust-role-mismatch` warning instead of a silent lie.
 
 - **`## data`** — the types the unit needs that carry **none** of those three
   derives: a plain `struct`/`enum` that appears as a *field* of a component or
@@ -326,6 +351,17 @@ four sections, and **the derive decides which**.
   is a sibling `.hmml` in the same task directory. Reuse a shared type this way
   instead of redeclaring it; resolves like `@ spec`. Unresolved target/type =
   warning.
+- Referencing existing code (grammar §4.7): a type declaration may end with
+  `@ <repo-relative-path>` — `struct Wave @ src/waves/mod.rs` — meaning the type
+  already exists there. The body then becomes **optional**, and when present it
+  is a **delta**: `+ field: Type` adds a field, `- field` removes one, an
+  unmarked field asserts one already exists, and anything not listed **stays as
+  it is**. Reference a type this unit does not own instead of restating it. The
+  filesystem-aware tools check the type is there, that its `#[derive(…)]` fits
+  the section's role, and that unmarked members exist — all warnings.
+- Dependency types (grammar §4.8): `use extern avian3d::prelude: Collider` for a
+  type from another crate. Same scope and role rules as `use`, and nothing else:
+  no file to resolve, no derive check, no members. Goto opens its docs.rs page.
 - `## behavior`: nested `-` bullets; control-flow keywords
   `if…: / else: / for each…: / while…: / try: / on error…:` (trailing `:`, body
   nested); everything else prose; declared names cross-link. An optional

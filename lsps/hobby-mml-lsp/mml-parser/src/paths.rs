@@ -86,6 +86,39 @@ pub fn resolve(raw: &str, search_dirs: &[&Path]) -> Option<PathBuf> {
         .and_then(|c| c.canonicalize().ok())
 }
 
+/// The directories a spec's source paths resolve against, in order: the
+/// declared `base:` first, then the `source.repo` checkout roots, then the spec
+/// file's own directory, then the workspace root.
+///
+/// This is the one definition of that order. It backs goto-into-real-source,
+/// the `unresolved-source-path` lint, and the Rust-reference checks
+/// (grammar §4.7) alike — three consumers that must agree, or goto silently
+/// no-ops on a path the linter called fine.
+pub fn source_search_dirs(
+    doc: &crate::ast::Document,
+    current_file: &Path,
+    workspace_root: Option<&Path>,
+) -> Vec<PathBuf> {
+    let current_dir = current_file.parent().map(Path::to_path_buf);
+    let base = doc
+        .header
+        .base
+        .as_ref()
+        .and_then(|b| base_dir(&b.value, current_dir.as_deref(), workspace_root));
+    let repo_dirs = doc
+        .header
+        .source
+        .as_ref()
+        .and_then(|s| s.repo.as_ref())
+        .map(|r| repo_dirs(&r.value, current_file, workspace_root))
+        .unwrap_or_default();
+    base.into_iter()
+        .chain(repo_dirs)
+        .chain(current_dir)
+        .chain(workspace_root.map(Path::to_path_buf))
+        .collect()
+}
+
 /// Existing checkout directories for the header's `source.repo`, in resolution
 /// order. `source.paths` are relative to the repo checkout root (linkage.md).
 ///

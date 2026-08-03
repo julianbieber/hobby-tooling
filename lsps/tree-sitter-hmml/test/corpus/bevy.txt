@@ -206,3 +206,67 @@ struct SpawnPoint {
       (identifier)
       (type
         (identifier)))))
+
+================================================================================
+rust references: bodyless, with a delta body, and a marker
+================================================================================
+
+## components
+struct Wave @ src/waves/mod.rs
+struct EnemyHealth @ src/waves/mod.rs {
+  hp: f32,
+  + streak: u32,
+  - remaining,
+}
+marker Spawner @ src/waves/mod.rs
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (section_header
+    (section_marker)
+    name: (section_name))
+  (type_definition
+    name: (identifier)
+    path: (type_path))
+  (type_definition
+    name: (identifier)
+    path: (type_path)
+    (member
+      name: (identifier)
+      type: (type
+        name: (identifier)))
+    (member
+      delta: (delta)
+      name: (identifier)
+      type: (type
+        name: (identifier)))
+    (member
+      delta: (delta)
+      name: (identifier)))
+  (marker_declaration
+    name: (identifier)
+    path: (type_path)))
+
+================================================================================
+extern imports name a crate, not a sibling unit
+================================================================================
+
+## components
+use extern avian3d::prelude: Collider, RigidBody
+use enemy-waves: Wave
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (section_header
+    (section_marker)
+    name: (section_name))
+  (use_import
+    (extern_keyword)
+    crate: (crate_path)
+    type: (identifier)
+    type: (identifier))
+  (use_import
+    ref: (spec_ref)
+    type: (identifier)))

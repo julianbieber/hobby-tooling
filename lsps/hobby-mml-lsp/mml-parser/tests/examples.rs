@@ -93,7 +93,8 @@ fn lowercase_enum_variants_are_accepted() {
         .expect("ReloadOutcome enum");
     match outcome {
         mml_parser::ast::TypeDef::Enum { variants, .. } => {
-            let names: Vec<_> = variants.iter().map(|v| v.value.as_str()).collect();
+            let variants = variants.as_ref().expect("a declared enum has a body");
+            let names: Vec<_> = variants.iter().map(|v| v.name.value.as_str()).collect();
             assert_eq!(names, ["swapped", "unchanged", "rejected", "skipped"]);
         }
         _ => panic!("ReloadOutcome should be an enum"),
@@ -130,6 +131,7 @@ out: String
     assert_eq!(doc.header.method.as_ref().unwrap().value, "GET");
     match &doc.data.types[0] {
         mml_parser::ast::TypeDef::Struct { fields, .. } => {
+            let fields = fields.as_ref().expect("a declared struct has a body");
             assert_eq!(fields[0].source.as_ref().unwrap().value, "path");
             assert_eq!(fields[1].source.as_ref().unwrap().value, "query");
         }

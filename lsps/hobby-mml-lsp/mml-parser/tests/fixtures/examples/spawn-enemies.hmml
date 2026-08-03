@@ -11,8 +11,13 @@ use enemy-waves: SpawnPoint, SpawnPattern
 
 ## components
 use enemy-waves: Wave, EnemyHealth, Spawner
+use extern avian3d::prelude: Collider
 struct SpawnBudget {
   remaining: u32,
+}
+struct SpawnCooldown @ src/waves/spawn.rs {
+  seconds: f32,
+  + jitter: f32,
 }
 
 ## resources
@@ -26,7 +31,7 @@ run_if:   WaveState.due
 query:    Transform + Spawner - SpawnBudget
 reads:    WaveConfig, Time
 writes:   WaveState
-spawns:   EnemyHealth, Wave, SpawnBudget
+spawns:   EnemyHealth, Wave, SpawnBudget, Collider, SpawnCooldown
 
 ## behavior
 - compute the wave size as WaveConfig.base_count scaled by WaveState.current

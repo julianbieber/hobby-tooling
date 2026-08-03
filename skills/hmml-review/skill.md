@@ -40,6 +40,13 @@ in the plan.
    task's worktree checkout `~/fun_worktrees/{project}/{topic}/{task}` (fall back to
    `~/fun_repos/{repo}`); `source.paths` are the entry points. Read enough of
    that code to ground the review in what actually exists today.
+   A type declared with `@ <path>` (grammar §4.7) already exists there — read
+   it, because the spec deliberately shows only a delta. Tell the reviewers
+   which types those are: a referenced type is **shared code this unit does not
+   own**, so a change to one has blast radius beyond this feature, and "just add
+   a field" is a different proposition from adding one to a type being created
+   here. A `use extern` type belongs to a dependency and cannot be changed at
+   all — only used differently.
 4. **Parse `--min-priority`** (default `low` = all). Strip it from the argument.
 
 ## Step 2 — Fan out parallel lens reviewers

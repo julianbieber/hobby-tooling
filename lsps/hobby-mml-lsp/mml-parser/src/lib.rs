@@ -24,6 +24,7 @@ pub mod lexer;
 pub mod lint;
 pub mod parser;
 pub mod paths;
+pub mod rust_source;
 pub mod span;
 pub mod validate;
 
@@ -35,10 +36,10 @@ pub use validate::validate;
 
 /// The hobby-dialect spec extension, without the leading dot.
 ///
-/// Distinct from the work dialect's `.mml` so Helix, the LSP, and the index
-/// tool can tell the two apart by *file type* rather than by a path glob. Every
-/// place that builds or filters a spec filename goes through this constant —
-/// keep it that way, so the extension stays a one-line change.
+/// Distinct from the work dialect's `.mml` so Helix and the LSP can tell the
+/// two apart by *file type* rather than by a path glob. Every place that builds
+/// or filters a spec filename goes through this constant — keep it that way, so
+/// the extension stays a one-line change.
 pub const SPEC_EXT: &str = "hmml";
 
 /// Parse and validate `src`, returning the [`Document`] together with all

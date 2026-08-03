@@ -482,8 +482,10 @@ impl Parser {
                 }
                 j += 1;
             } else if keyword_at(c, "use") {
-                let imp = self.parse_use_import(line);
-                data.imports.push(imp);
+                match self.parse_use_line(line) {
+                    UseLine::Spec(imp) => data.imports.push(imp),
+                    UseLine::Extern(imp) => data.extern_imports.push(imp),
+                }
                 j += 1;
             } else if keyword_at(c, "marker") {
                 // `marker` declares a *component*; a `## data` type has no role.
@@ -551,8 +553,10 @@ impl Parser {
                 }
                 j += 1;
             } else if keyword_at(c, "use") {
-                let imp = self.parse_use_import(line);
-                section.imports.push(imp);
+                match self.parse_use_line(line) {
+                    UseLine::Spec(imp) => section.imports.push(imp),
+                    UseLine::Extern(imp) => section.extern_imports.push(imp),
+                }
                 j += 1;
             } else if c.starts_with("in:") || c.starts_with("out:") {
                 let (s, e) = line.content_span();
@@ -578,14 +582,24 @@ impl Parser {
         }
     }
 
-    /// Parse a `marker Name` line — a zero-sized component (grammar §8.1).
+    /// Parse a `marker Name [@ <path>]` line — a zero-sized component
+    /// (grammar §8.1), optionally referencing the unit struct that already
+    /// declares it (§4.7).
     fn parse_marker(&mut self, line: &Line, role: Role) -> Option<TypeDef> {
         let c = line.content;
         let (cs, ce) = line.content_span();
         let kw = "marker";
-        let name_raw = &c[kw.len()..];
+        let head = &c[kw.len()..];
+        let head_abs = cs + kw.len();
+        let (name_raw, path) = match head.find('@') {
+            Some(at) => (
+                &head[..at],
+                self.parse_type_path(&head[at..], head_abs + at),
+            ),
+            None => (head, None),
+        };
         let name = name_raw.trim();
-        let name_abs = cs + kw.len() + leading_ws(name_raw);
+        let name_abs = head_abs + leading_ws(name_raw);
         let name_span = Span::new(name_abs, name_abs + name.len());
 
         if role != Role::Component {
@@ -613,6 +627,7 @@ impl Parser {
         }
         Some(TypeDef::Marker {
             name: Spanned::new(name.to_owned(), name_span),
+            path,
             span: Span::new(cs, ce),
         })
     }
@@ -881,6 +896,91 @@ impl Parser {
         filter
     }
 
+    /// Dispatch a `use …` line to the spec-import or extern-import form.
+    ///
+    /// The two are told apart by token count before the separating colon:
+    /// `use extern <crate::path>: T` has a target *after* the keyword, whereas
+    /// `use extern: T` is an ordinary import from a sibling unit that happens to
+    /// be named `extern`. Requiring the second token keeps a legal unit name
+    /// from being stolen by a keyword.
+    fn parse_use_line(&mut self, line: &Line) -> UseLine {
+        let rest = &line.content["use".len()..];
+        let after_kw = rest.trim_start();
+        if let Some(tail) = after_kw.strip_prefix("extern")
+            && tail.starts_with([' ', '\t'])
+        {
+            let abs = line.content_start + "use".len() + leading_ws(rest) + "extern".len();
+            return UseLine::Extern(self.parse_extern_import(line, tail, abs));
+        }
+        UseLine::Spec(self.parse_use_import(line))
+    }
+
+    /// Parse a `use extern <crate::path>: Type, Type` line (grammar §4.8).
+    /// `s` is everything after the `extern` keyword, starting at `abs`.
+    ///
+    /// The separating colon is the first `:` that is not part of a `::`, so a
+    /// crate path is never mistaken for the separator.
+    fn parse_extern_import(&mut self, line: &Line, s: &str, abs: usize) -> ExternImport {
+        let (cs, ce) = line.content_span();
+        let Some(colon) = find_path_colon(s) else {
+            self.push(Diagnostic::error(
+                Span::new(cs, ce),
+                code::MALFORMED_EXTERN_IMPORT,
+                "expected `use extern crate::path: Type, …`",
+            ));
+            let end = abs + s.trim_end().len();
+            return ExternImport {
+                path: Spanned::new(s.trim().to_owned(), Span::new(abs + leading_ws(s), end)),
+                types: Vec::new(),
+                span: Span::new(cs, ce),
+            };
+        };
+
+        let path_raw = &s[..colon];
+        let path_str = path_raw.trim();
+        let path_abs = abs + leading_ws(path_raw);
+        let path_span = Span::new(path_abs, path_abs + path_str.len());
+        if path_str.is_empty() {
+            self.push(Diagnostic::error(
+                path_span,
+                code::MALFORMED_EXTERN_IMPORT,
+                "`use extern` is missing its crate path; expected `use extern crate::path: Type`",
+            ));
+        }
+
+        let types = self.parse_import_type_list(&s[colon + 1..], abs + colon + 1);
+        if types.is_empty() && !path_str.is_empty() {
+            self.push(Diagnostic::error(
+                Span::new(cs, ce),
+                code::MALFORMED_EXTERN_IMPORT,
+                "`use extern` names no types to import; expected `use extern crate::path: Type, …`",
+            ));
+        }
+
+        ExternImport {
+            path: Spanned::new(path_str.to_owned(), path_span),
+            types,
+            span: Span::new(cs, ce),
+        }
+    }
+
+    /// The comma-separated type list after an import's `:`, with spans.
+    fn parse_import_type_list(&mut self, raw: &str, abs: usize) -> Vec<Spanned<String>> {
+        let mut types = Vec::new();
+        for (item_abs, item) in split_commas(raw, abs) {
+            let t = item.trim();
+            if t.is_empty() {
+                continue;
+            }
+            let t_abs = item_abs + leading_ws(item);
+            types.push(Spanned::new(
+                t.to_owned(),
+                Span::new(t_abs, t_abs + t.len()),
+            ));
+        }
+        types
+    }
+
     /// Parse a `use <spec-ref>: Type, Type` import line (grammar §4.5). The ref
     /// carries no colon, so the first `:` separates it from the comma-separated
     /// type list. Structural problems (missing `:`, empty ref, empty type list)
@@ -922,18 +1022,7 @@ impl Parser {
             ));
         }
 
-        let mut types = Vec::new();
-        for (item_abs, item) in split_commas(types_raw, types_abs) {
-            let t = item.trim();
-            if t.is_empty() {
-                continue;
-            }
-            let t_abs = item_abs + leading_ws(item);
-            types.push(Spanned::new(
-                t.to_owned(),
-                Span::new(t_abs, t_abs + t.len()),
-            ));
-        }
+        let types = self.parse_import_type_list(types_raw, types_abs);
         if had_colon && types.is_empty() && !spec_str.is_empty() {
             self.push(Diagnostic::error(
                 Span::new(cs, ce),
@@ -965,6 +1054,11 @@ impl Parser {
 
     /// Parse a `struct`/`enum` block starting at `body[start]`. Returns the
     /// definition and the index of the first line after the closing `}`.
+    ///
+    /// The declaration line is `struct Name [@ <path>] [{ … }]`. The `@ <path>`
+    /// makes it a **reference** to a type that already exists in real code
+    /// (grammar §4.7), which is what lets the body be omitted — and what turns
+    /// a body that *is* present into a delta rather than a definition.
     fn parse_type_def(&mut self, body: &[Line], start: usize, is_struct: bool) -> (TypeDef, usize) {
         let first = &body[start];
         let c = first.content;
@@ -972,10 +1066,21 @@ impl Parser {
         let def_start = first.content_start;
 
         let brace_rel = c.find('{');
-        let name_end = brace_rel.unwrap_or(c.len());
-        let name_raw = &c[kw.len()..name_end];
+        let head_end = brace_rel.unwrap_or(c.len());
+        let head = &c[kw.len()..head_end];
+        let head_abs = first.content_start + kw.len();
+
+        // `Name` and an optional `@ <path>`, split on the first `@` — a type
+        // name never contains one.
+        let (name_raw, path) = match head.find('@') {
+            Some(at) => (
+                &head[..at],
+                self.parse_type_path(&head[at..], head_abs + at),
+            ),
+            None => (head, None),
+        };
         let name = name_raw.trim();
-        let name_abs = first.content_start + kw.len() + leading_ws(name_raw);
+        let name_abs = head_abs + leading_ws(name_raw);
         let name_span = Span::new(name_abs, name_abs + name.len());
         if !is_pascal(name) {
             self.push(Diagnostic::error(
@@ -987,6 +1092,28 @@ impl Parser {
                 code::MALFORMED_STRUCT,
                 format!("expected a PascalCase {kw} name"),
             ));
+        }
+
+        // A body may only be omitted by a reference: with no path and no
+        // braces, nothing says what the type is.
+        if brace_rel.is_none() && path.is_some() {
+            let span = Span::new(def_start, first.content_start + c.len());
+            let def = if is_struct {
+                TypeDef::Struct {
+                    name: Spanned::new(name.to_owned(), name_span),
+                    fields: None,
+                    path,
+                    span,
+                }
+            } else {
+                TypeDef::Enum {
+                    name: Spanned::new(name.to_owned(), name_span),
+                    variants: None,
+                    path,
+                    span,
+                }
+            };
+            return (def, start + 1);
         }
 
         // Collect (absolute_start, text) segments between the braces.
@@ -1010,8 +1137,11 @@ impl Parser {
             None => {
                 self.push(Diagnostic::error(
                     name_span,
-                    code::MALFORMED_STRUCT,
-                    format!("expected `{{` after {kw} name"),
+                    code::MISSING_TYPE_BODY,
+                    format!(
+                        "`{kw} {name}` has no body; give it `{{ … }}`, or point at the code that \
+                         already declares it with `@ <path>`"
+                    ),
                 ));
             }
         }
@@ -1046,22 +1176,25 @@ impl Parser {
         }
 
         let span = Span::new(def_start, end_offset);
+        let is_ref = path.is_some();
         if is_struct {
-            let fields = self.parse_fields(&segments);
+            let fields = self.parse_fields(&segments, is_ref);
             (
                 TypeDef::Struct {
                     name: Spanned::new(name.to_owned(), name_span),
-                    fields,
+                    fields: Some(fields),
+                    path,
                     span,
                 },
                 j,
             )
         } else {
-            let variants = self.parse_variants(&segments);
+            let variants = self.parse_variants(&segments, is_ref);
             (
                 TypeDef::Enum {
                     name: Spanned::new(name.to_owned(), name_span),
-                    variants,
+                    variants: Some(variants),
+                    path,
                     span,
                 },
                 j,
@@ -1069,7 +1202,66 @@ impl Parser {
         }
     }
 
-    fn parse_fields(&mut self, segments: &[(usize, &str)]) -> Vec<Field> {
+    /// Parse the `@ <path>` annotation on a type declaration line — the same
+    /// source path a module line carries, and deliberately *not* an `@ spec`
+    /// ref: a type points at code, never at another spec (which is what `use`
+    /// is for). `s` starts at the `@`.
+    fn parse_type_path(&mut self, s: &str, abs: usize) -> Option<Spanned<String>> {
+        let after = &s[1..];
+        let raw = after.trim();
+        let raw_abs = abs + 1 + leading_ws(after);
+        let span = Span::new(raw_abs, raw_abs + raw.len());
+        if raw.is_empty() {
+            self.push(Diagnostic::error(
+                Span::at(abs),
+                code::MALFORMED_TYPE_PATH,
+                "`@` on a type declaration is missing its path; expected `@ <repo-relative-path>`",
+            ));
+            return None;
+        }
+        if raw == "spec" || raw.starts_with("spec ") {
+            self.push(Diagnostic::error(
+                span,
+                code::MALFORMED_TYPE_PATH,
+                "a type's `@` points at the code that declares it, not at a spec; import a type \
+                 from another spec with `use <unit>: Type`",
+            ));
+            return None;
+        }
+        Some(Spanned::new(raw.to_owned(), span))
+    }
+
+    /// Split a leading `+` / `-` delta marker off a member line (grammar §4.7).
+    /// `is_ref` is whether the enclosing type references real code; a marker
+    /// anywhere else is meaningless, because there is nothing to change.
+    fn split_delta<'a>(
+        &mut self,
+        item: &'a str,
+        abs: usize,
+        is_ref: bool,
+        noun: &str,
+    ) -> (Delta, &'a str, usize) {
+        let delta = match item.as_bytes().first() {
+            Some(b'+') => Delta::Add,
+            Some(b'-') => Delta::Remove,
+            _ => return (Delta::Keep, item, abs),
+        };
+        if !is_ref {
+            self.push(Diagnostic::error(
+                Span::new(abs, abs + 1),
+                code::MALFORMED_FIELD,
+                format!(
+                    "`{}` marks a change to a type declared elsewhere; this {noun} declares its \
+                     own shape, so list it without a marker",
+                    delta.marker()
+                ),
+            ));
+        }
+        let rest = &item[1..];
+        (delta, rest.trim_start(), abs + 1 + leading_ws(rest))
+    }
+
+    fn parse_fields(&mut self, segments: &[(usize, &str)], is_ref: bool) -> Vec<Field> {
         let mut fields = Vec::new();
         for &(abs, seg) in segments {
             for (item_abs, item) in split_commas(seg, abs) {
@@ -1078,7 +1270,29 @@ impl Parser {
                     continue;
                 }
                 let item_abs = item_abs + leading_ws(item);
+                let (delta, item_trim, item_abs) =
+                    self.split_delta(item_trim, item_abs, is_ref, "struct");
                 let Some(colon) = item_trim.find(':') else {
+                    // A removal needs no type: the field being removed already
+                    // has one, in the code.
+                    if delta == Delta::Remove {
+                        let fname_span = Span::new(item_abs, item_abs + item_trim.len());
+                        if !is_lower_id(item_trim) {
+                            self.push(Diagnostic::error(
+                                fname_span,
+                                code::MALFORMED_FIELD,
+                                format!("field name `{item_trim}` must be snake_case or camelCase"),
+                            ));
+                        }
+                        fields.push(Field {
+                            name: Spanned::new(item_trim.to_owned(), fname_span),
+                            ty: None,
+                            source: None,
+                            delta,
+                            span: fname_span,
+                        });
+                        continue;
+                    }
                     self.push(Diagnostic::error(
                         Span::new(item_abs, item_abs + item_trim.len()),
                         code::MALFORMED_FIELD,
@@ -1128,8 +1342,9 @@ impl Parser {
                 let span = Span::new(fname_abs, end);
                 fields.push(Field {
                     name: Spanned::new(fname.to_owned(), fname_span),
-                    ty,
+                    ty: Some(ty),
                     source,
+                    delta,
                     span,
                 });
             }
@@ -1137,7 +1352,7 @@ impl Parser {
         fields
     }
 
-    fn parse_variants(&mut self, segments: &[(usize, &str)]) -> Vec<Spanned<String>> {
+    fn parse_variants(&mut self, segments: &[(usize, &str)], is_ref: bool) -> Vec<Variant> {
         let mut variants = Vec::new();
         for &(abs, seg) in segments {
             for (item_abs, item) in split_commas(seg, abs) {
@@ -1146,6 +1361,7 @@ impl Parser {
                     continue;
                 }
                 let v_abs = item_abs + leading_ws(item);
+                let (delta, v, v_abs) = self.split_delta(v, v_abs, is_ref, "enum");
                 let span = Span::new(v_abs, v_abs + v.len());
                 if !is_ident(v) {
                     self.push(Diagnostic::error(
@@ -1154,7 +1370,10 @@ impl Parser {
                         format!("enum variant `{v}` is not a valid identifier"),
                     ));
                 }
-                variants.push(Spanned::new(v.to_owned(), span));
+                variants.push(Variant {
+                    name: Spanned::new(v.to_owned(), span),
+                    delta,
+                });
             }
         }
         variants
@@ -1526,6 +1745,33 @@ fn split_whitespace_spans(s: &str, base: usize) -> Vec<(usize, &str)> {
 
 fn leading_ws(s: &str) -> usize {
     s.len() - s.trim_start().len()
+}
+
+/// Which `use …` form a line is. Both bring type names into scope and both take
+/// the declaring section's role; only what backs the name differs.
+enum UseLine {
+    /// `use <unit>: Type, …` — from a sibling spec (grammar §4.5).
+    Spec(Import),
+    /// `use extern <crate::path>: Type, …` — from a dependency (grammar §4.8).
+    Extern(ExternImport),
+}
+
+/// The index of the first `:` in `s` that is not part of a `::` — the colon
+/// separating a Rust path from the type list it introduces.
+fn find_path_colon(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b':' {
+            if bytes.get(i + 1) == Some(&b':') {
+                i += 2;
+                continue;
+            }
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
 }
 
 /// Whether `c` begins with keyword `kw` as a whole word (followed by whitespace,

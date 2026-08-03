@@ -40,7 +40,7 @@ scripts/                              # install logic too involved for a justfil
 lsps/hobby-mml-lsp/                   # forked HMML language server + grammar.md
 lsps/{claude,claude-skills,treesitter-class,path}-lsp/   # vendored from the work checkout
 mcps/{just-mcp, lsp-mcp, tree-extract}/   # vendored from the work checkout
-tools/{hobby-mml-index, hwt-overview, hgh-issues}/
+tools/{hwt-overview, hgh-issues}/
 ```
 
 ## `topic:<name>` is how an issue names its worktree
@@ -138,9 +138,9 @@ filters a spec filename goes through it, so the extension stays a one-line
 change.
 
 The **binaries keep their `hobby-mml-*` names** (`hobby-mml-lsp`,
-`hobby-mml-parser`, `hobby-mml-index`), as do the crate directories. That is
+`hobby-mml-parser`), as do the crate directories. That is
 deliberate, not an oversight: they never collided with the work `mml-lsp` /
-`mml-parser` / `mml-index` on `PATH` in the first place, so renaming them would
+`mml-parser` on `PATH` in the first place, so renaming them would
 buy nothing and cost a `cargo uninstall` dance plus stale `~/.cargo/bin`
 entries. The language is HMML; the programs that read it are `hobby-mml-*`.
 

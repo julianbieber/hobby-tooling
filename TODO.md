@@ -65,7 +65,7 @@ tooling regardless — `just local-paths` reports what this machine resolved, an
 
 | server | source | reachable from a hobby machine? |
 |---|---|---|
-| `hobby-mml-lsp`, `hobby-mml-parser`, `hobby-mml-index` | this repo | yes — `just install-mml` |
+| `hobby-mml-lsp`, `hobby-mml-parser` | this repo | yes — `just install-mml` |
 | `claude-lsp`, `claude-skills-lsp`, `treesitter-class-lsp`, `path_lsp` | this repo, `lsps/` | yes — `just install-lsps` |
 | `bevy_asset_lsp` | `codeberg.org/julianbieber/bevy_asset_lsp` | yes — `just install-lsps` |
 | `static_completions_lsp` | work tooling checkout | no — and fine: declared for markdown, silently inert where the binary is absent |

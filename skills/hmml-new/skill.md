@@ -121,6 +121,16 @@ that is where the shapes with **no** ECS role go (grammar §4.6).
      it only ever appears *inside* something a system accesses, it belongs in
      `## data`. Declaring a field type as a component is the mistake this split
      exists to prevent.
+   - **Types that already exist** — a new feature is rarely built only from new
+     shapes. When the idea leans on a component the codebase already has, do
+     **not** redeclare it: reference it with `struct Name @ <path>` and no body
+     (grammar §4.7), and give the body only the fields the feature wants
+     *changed* (`+ field: Type` to add one). For a type from a dependency, use
+     `use extern <crate::path>: Name`. Since there is no code for the new parts
+     yet, most of the draft is ordinary declarations — the references are for
+     what the feature is built *on top of*. Grep the worktree before assuming a
+     shape is new; a redeclared type is a second definition that will drift, and
+     `/hmml-translate` reads it as an instruction to create one.
    - **`## systems`** *(kind: plugin)* — guess ~2–4 systems, each a snake_case
      name, a one-line responsibility, and an access block. `schedule:` is
      required; add `after:` where the ordering is part of the idea, and the
@@ -202,6 +212,17 @@ that is where the shapes with **no** ECS role go (grammar §4.6).
   is a bare `<unit>` resolving to a sibling `<unit>.hmml` in the same task dir.
   Reuse a shared type this way instead of redeclaring it; resolves like
   `@ spec`. Unresolved target/type = warning.
+- Referencing existing code (grammar §4.7): a type declaration may end with
+  `@ <repo-relative-path>` — `struct Wave @ src/waves/mod.rs` — meaning the type
+  already exists there. The body then becomes **optional**, and when present it
+  is a **delta**: `+ field: Type` adds a field, `- field` removes one, an
+  unmarked field asserts one already exists, and anything not listed **stays as
+  it is**. Reference a type this unit does not own instead of restating it. The
+  filesystem-aware tools check the type is there, that its `#[derive(…)]` fits
+  the section's role, and that unmarked members exist — all warnings.
+- Dependency types (grammar §4.8): `use extern avian3d::prelude: Collider` for a
+  type from another crate. Same scope and role rules as `use`, and nothing else:
+  no file to resolve, no derive check, no members. Goto opens its docs.rs page.
 - `## behavior`: nested `-` bullets; control-flow keywords
   `if…: / else: / for each…: / while…: / try: / on error…:` (trailing `:`, body
   nested); everything else prose; declared names cross-link.

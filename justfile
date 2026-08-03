@@ -354,11 +354,10 @@ install-lsps:
 
 # The parser CLI matters: the hmml-* skills shell out to `hobby-mml-parser --lint`.
 
-# Build + install the forked HMML language server, parser CLI, and index
+# Build + install the forked HMML language server and parser CLI
 install-mml:
     cd lsps/hobby-mml-lsp && cargo install --path mml-lsp
     cd lsps/hobby-mml-lsp && cargo install --path mml-parser
-    cd tools/hobby-mml-index && cargo install --path .
 
 # ---------------------------------------------------------------------------
 # Diagnostics

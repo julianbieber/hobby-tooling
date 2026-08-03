@@ -188,6 +188,16 @@
             "named": true
           }
         ]
+      },
+      "path": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "type_path",
+            "named": true
+          }
+        ]
       }
     }
   },
@@ -195,6 +205,16 @@
     "type": "member",
     "named": true,
     "fields": {
+      "delta": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "delta",
+            "named": true
+          }
+        ]
+      },
       "name": {
         "multiple": false,
         "required": true,
@@ -462,6 +482,16 @@
             "named": true
           }
         ]
+      },
+      "path": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "type_path",
+            "named": true
+          }
+        ]
       }
     },
     "children": {
@@ -479,9 +509,19 @@
     "type": "use_import",
     "named": true,
     "fields": {
+      "crate": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "crate_path",
+            "named": true
+          }
+        ]
+      },
       "ref": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "spec_ref",
@@ -499,6 +539,16 @@
           }
         ]
       }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "extern_keyword",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -571,8 +621,16 @@
     "named": true
   },
   {
+    "type": "crate_path",
+    "named": true
+  },
+  {
     "type": "data",
     "named": false
+  },
+  {
+    "type": "delta",
+    "named": true
   },
   {
     "type": "despawns",
@@ -589,6 +647,10 @@
   {
     "type": "events",
     "named": false
+  },
+  {
+    "type": "extern_keyword",
+    "named": true
   },
   {
     "type": "identifier",
@@ -669,6 +731,10 @@
   {
     "type": "systems",
     "named": false
+  },
+  {
+    "type": "type_path",
+    "named": true
   },
   {
     "type": "use",

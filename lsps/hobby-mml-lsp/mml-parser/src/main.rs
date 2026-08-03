@@ -72,10 +72,17 @@ fn main() -> ExitCode {
     // Filesystem checks resolve against the file's real location; a relative
     // CLI argument is canonicalized so worktree/`~/projects` lookups work.
     if let Ok(abs) = Path::new(&path).canonicalize() {
-        diagnostics.extend(lint::unresolved_spec_refs(&doc, &abs, None));
-        diagnostics.extend(lint::unresolved_imports(&doc, &abs, None));
+        // `--lint` is the full filesystem pass; the other modes keep the two
+        // reference checks that were always cheap. Go through `lint::lint`
+        // rather than naming the checks one by one — a hand-picked list silently
+        // omits every check added after it was written, which is exactly how the
+        // Rust-reference checks came to be invisible from the binary the
+        // `hmml-*` skills shell out to.
         if matches!(mode, Mode::Lint) {
-            diagnostics.extend(lint::unresolved_source_paths(&doc, &abs, None));
+            diagnostics.extend(lint::lint(&doc, &abs, None));
+        } else {
+            diagnostics.extend(lint::unresolved_spec_refs(&doc, &abs, None));
+            diagnostics.extend(lint::unresolved_imports(&doc, &abs, None));
         }
         diagnostics.sort_by_key(|d| (d.span.start, d.span.end));
     }
