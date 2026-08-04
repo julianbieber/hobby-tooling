@@ -25,7 +25,7 @@ blindly. Marks genuine unknowns as `TODO` instead of guessing.
 Every issue gets a **`topic:<name>`** label, creating the label in the repo when
 it is missing. That label is the one component of `~/fun_worktrees/PROJECT/TOPIC/TASK`
 an issue cannot otherwise supply — the project is the repo, the task is
-`gh-<number>-<slug>` — and it is what gives `hgh-issues` a one-click **Start task**
+`gh-<number>-<slug>` — and it is what gives `hdash` a one-click **Start task**
 button. An untagged issue shows up in the dashboard as *untagged* and cannot be
 launched, so the skill resolves a topic (from the worktree path, from the project's
 existing topics, or by asking) rather than skipping the label.

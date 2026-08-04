@@ -40,12 +40,12 @@ scripts/                              # install logic too involved for a justfil
 lsps/hobby-mml-lsp/                   # forked HMML language server + grammar.md
 lsps/{claude,claude-skills,treesitter-class,path}-lsp/   # vendored from the work checkout
 mcps/{just-mcp, lsp-mcp, tree-extract}/   # vendored from the work checkout
-tools/{hwt-overview, hgh-issues}/
+tools/hdash/                          # the work dashboard (Bevy)
 ```
 
 ## `topic:<name>` is how an issue names its worktree
 
-`hgh-issues` lists open GitHub issues and turns one into a dev session with a
+`hdash` lists open GitHub issues and turns one into a dev session with a
 click. The whole thing rests on a label. A worktree lives at
 `~/fun_worktrees/PROJECT/TOPIC/TASK`, and an issue already implies two of those
 three — the **project** is the repo it was filed in, the **task** is
@@ -75,25 +75,47 @@ and a slug changes whenever the title is edited, so the derived name is what a
 path — not the label — supplies the topic for `hcdev wt`, since the path is what
 `hcdev` has to find.
 
-## The two dashboards share their crates
+## One dashboard, because there was only ever one list
 
-`tools/hwt-overview` starts from the worktrees that exist; `tools/hgh-issues`
-starts from the issues that have none yet. Separate workspaces, separate windows,
-but `hgh-issues` **path-depends** on `../hwt-overview/crates/{feathers_kit,hwt_core}`
-instead of copying them — the same move `mcps/tree-extract` makes into `lsps/`.
+`tools/hdash` replaces `hwt-overview` (the worktrees that exist) and `hgh-issues`
+(the issues that have none yet). They were the same app over two halves of one
+list: `hgh-issues` walked `~/fun_worktrees` to decide whether an issue had a
+worktree, `hwt-overview` drew that worktree with no idea an issue existed, and
+~370 lines of chrome, sidebar, channel plumbing and card recipe were duplicated
+per app.
 
-The one `feathers_kit` copy in this repo exists so the *work* dashboard cannot
-regress. A second hobby copy would protect nothing and drift, and sharing the kit
-is also what keeps the two windows looking like one tool. Two consequences worth
-knowing: `cargo fmt`/`clippy` run from `tools/hgh-issues` reach into
-`tools/hwt-overview`, and **editing** `hwt_core` means both workspaces' tests
-have to pass before you commit, not just the one you edited in (`just test` runs
-them).
+**The join is the whole point.** An issue's worktree is named `gh-<number>-<slug>`,
+so matching on the *number* pairs the two halves — and `matches_issue` accepts the
+pre-convention spellings (`issue-9_dotfile_repo_retire`) that a name-based match
+would miss. One card then carries a piece of work from the issue through the
+worktree and its PRs to the day it is marked done, with the primary button always
+the next step: **Start task** → **Open hcdev** → (**Restore** if the worktree was
+removed). The filesystem walk `find_worktree` did is gone: the task half already
+holds that tree, so the match is pure and in-memory.
 
-That is a pre-commit concern only. **Installing never needs tests** — the
-committed code is already tested, so `install-overview` / `install-issues` build
-and replace the binaries and nothing more. Running `just test` because an install
-touched a shared crate is wasted work.
+Three consequences worth knowing:
+
+- **Topic is no longer a grouping level.** An unstarted issue has a topic *label*
+  and no topic *directory*, so there is nothing to group it under. The list is
+  flat and globally sorted by how much attention an item wants; project and topic
+  are printed on the card.
+- **Both content toggles are load-bearing defaults.** `show_done` off (there are
+  ~25× more done tasks than open ones) and `show_untagged` on (an untagged issue
+  is the one item the app cannot act on, so it is the one that most needs to be
+  seen).
+- **`~/fun_repos` holds upstream clones**, not just my projects, and `hdash` asks
+  `gh` for every one of them — a `bevy` or `helix` checkout contributes 200 open
+  issues that are nobody's work here. `hgh-issues` had the same gap ("no denylist
+  yet"); the merged list makes it louder because those issues now share a list
+  with tasks.
+
+`feathers_kit` stays a deliberate fork of the work copy so the *work* dashboard
+cannot regress, and this is the repo's only copy. With one workspace there is no
+longer a cross-workspace path dependency, so `cargo fmt`/`clippy` no longer reach
+sideways and editing `hwt_core` needs one workspace's tests, not two.
+
+**Installing never needs tests** — the committed code is already tested, so
+`install-dash` builds and replaces the binary and nothing more.
 
 ## Opening a session from a dashboard: two things that kill the terminal
 
@@ -111,7 +133,7 @@ budget from the real socket dir, and when the three components overflow it, trun
 and appends six hex characters of the full name's sha256. The hash is not decoration —
 plain truncation would land two long task names sharing a prefix on one session, and
 `hcdev wt A` would drop you into B's editor and Claude pane. `hwt sessions` imports the
-function rather than deriving a second copy of the rule. The dashboards still spell the
+function rather than deriving a second copy of the rule. `hdash` still spells the
 *window* title the long way, which is fine: a title has no length limit, and it is not
 what zellij is asked for.
 

@@ -59,8 +59,7 @@ bootstrap: preflight clone-notes git-identity bootstrap-config install-chobby in
     @echo ""
     @echo "Then, optionally:"
     @echo "    just install-mcps      the general-purpose MCP servers (Rust build)"
-    @echo "    just install-overview  the hwt-overview dashboard (Rust build)"
-    @echo "    just install-issues    the hgh-issues dashboard (Rust build)"
+    @echo "    just install-dash      the hdash work dashboard (Rust build)"
     @echo "    just install-mml       forked HMML language server (Rust build)"
     @echo "    just install-lsps      the hobby language servers Helix references"
     @echo "    just helix-build       rebuild hx itself from the discovered checkout"
@@ -69,7 +68,7 @@ bootstrap: preflight clone-notes git-identity bootstrap-config install-chobby in
     @echo "════════════════════════════════════════════════════════════════"
 
 # Bootstrap plus every optional Rust build and the MCP servers.
-bootstrap-full: bootstrap install-mcps install-overview install-issues install-mml install-lsps
+bootstrap-full: bootstrap install-mcps install-dash install-mml install-lsps
     @echo "Full install done. Still need: chobby, then /login."
 
 # Say so when invoked from a worktree — the install still targets the main checkout,
@@ -313,17 +312,17 @@ install-mcps:
     echo ""
     CLAUDE_CONFIG_DIR="{{CONFIG_DIR}}" claude mcp list
 
-# Build + install the hwt-overview dashboard
-install-overview:
-    cd tools/hwt-overview && cargo install --path crates/hwt_app
+# One workspace, one binary. `hwt-overview` and `hgh-issues` were two windows over two
+# halves of one list — issues that have no worktree yet, and the worktrees that exist —
+# and each had to reason about the other's half to draw its own cards. `hdash` joins them
+# on the issue number a task name carries, so a piece of work is one card from the issue
+# to the day it is done.
 
-# `hgh-issues` is its own workspace but shares hwt-overview's `feathers_kit` and
-# `hwt_core` through path dependencies, so the two dashboards cannot drift apart
-# visually and there is no third copy of the UI kit in this repo.
-
-# Build + install the hgh-issues GitHub-issue dashboard
-install-issues:
-    cd tools/hgh-issues && cargo install --path crates/issues_app
+# Build + install the hdash dashboard
+install-dash:
+    cd tools/hdash && cargo install --path crates/hdash_app
+    @echo "Installed hdash. If the retired dashboards are still on PATH:"
+    @echo "    cargo uninstall hwt_app issues_app"
 
 # `lsps/` vendors four servers that used to be buildable only from the work checkout,
 # which left a hobby-only machine unable to install them at all. They keep their
@@ -377,8 +376,7 @@ test:
     cd mcps/just-mcp && cargo test
     cd mcps/lsp-mcp && cargo test
     cd mcps/tree-extract && cargo test
-    cd tools/hwt-overview && cargo test --workspace
-    cd tools/hgh-issues && cargo test --workspace
+    cd tools/hdash && cargo test --workspace
 
 # ---------------------------------------------------------------------------
 # Uninstall

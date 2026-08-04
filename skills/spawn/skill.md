@@ -7,7 +7,7 @@ Split a focused piece of the current task into its own sibling worktree.
 `/spawn` **only sets up directories and notes** — it creates the worktree, seeds
 the subtask's notes, and records the subtask under the current task's ownership
 meta. It does **not** launch a session: open the subtask later from the
-`hwt-overview` dashboard (the parent's card lists its subtasks), or with
+`hdash` dashboard (the parent's card lists its subtasks), or with
 `hwt go` / `hcdev wt`.
 
 **Arguments:** `$ARGUMENTS` — a short description of the subgoal. This is both
@@ -111,7 +111,7 @@ suffix).
        "blurb": "{blurb}", "goal": "{subgoal}", "created": "{YYYY-MM-DD}" }
      ```
      `project` is recorded even though a subtask always shares its parent's
-     project — it keeps the entry self-describing for `hwt-overview`.
+     project — it keeps the entry self-describing for `hdash`.
    - `Write` the updated array back.
 
 8. **Report to the user** (terse):
@@ -119,7 +119,7 @@ suffix).
    - New task id and worktree path.
    - Child notes path (`.../notes/{project}/{topic}/{new_task}/implementation.md`).
    - That it's recorded in the parent's `subtasks.json` and now appears under
-     the parent task in `hwt-overview`, where the dashboard's open action launches it.
+     the parent task in `hdash`, where the dashboard's open action launches it.
    - Nav reminder: `hwt go {new_task}` / `hcdev wt {new_task}`.
 
 9. **Git:** The notes repo (`hobby-mimisbrunnr`) is git-backed. Do

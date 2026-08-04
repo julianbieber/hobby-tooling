@@ -1,0 +1,23 @@
+[package]
+# `hdash_app`, not `dash_app`: cargo tracks installs by package name in
+# ~/.cargo/.crates2.json, so a generic name risks colliding with a future work crate
+# and evicting its binaries on every `cargo install`.
+name = "hdash_app"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+description = "A Bevy desktop dashboard of hobby work items: GitHub issues and the worktrees, PRs and notes they become."
+
+[[bin]]
+name = "hdash"
+path = "src/main.rs"
+
+[dependencies]
+bevy.workspace = true
+bevy_feathers.workspace = true
+bevy_ui_widgets.workspace = true
+feathers_kit = { path = "../feathers_kit" }
+hwt_core = { path = "../hwt_core" }
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

@@ -1,23 +1,23 @@
-//! Domain layer: the project/issue model, the `gh issue list` read, the `topic:` tag
-//! convention, worktree lookup by issue number, and the shell actions. No Bevy UI here.
+//! The issue half of the model: the project list, the `gh issue list` read, and the
+//! `topic:` tag convention. No Bevy UI here, and — unlike the pre-merge `hgh-issues` —
+//! **no filesystem access**: matching an issue to the worktree it spawned is
+//! [`super::join`]'s job, because the task half already holds that tree.
 //!
-//! The whole app hangs off one convention: **an issue names its topic with a
+//! The launch story hangs off one convention: **an issue names its topic with a
 //! `topic:<name>` label**. Topic is the middle level of
 //! `~/fun_worktrees/PROJECT/TOPIC/TASK`, and it is the one piece of the worktree path
 //! that cannot be derived from the issue itself — the project comes from the repo the
 //! issue lives in and the task name from its number and title. So the label is what
 //! makes "turn this issue into a dev session" a single click.
 
-use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::SystemTime;
 
-use bevy::prelude::*;
+use hwt_core::parse_rfc3339_utc;
 use serde::Deserialize;
 
-pub use hwt_core::{open_url, projects_root, rel_time, worktrees_root};
-use hwt_core::{parse_rfc3339_utc, spawn_detached};
+pub use hwt_core::projects_root;
 
 /// The label prefix that encodes a task topic (`topic:features` → `features`).
 ///
@@ -47,8 +47,8 @@ pub struct Project {
     pub path: PathBuf,
 }
 
-/// Where a project's issue fetch has got to. Mirrors how `hwt-overview` separates
-/// "not queried yet" from "queried and failed" rather than collapsing both to empty.
+/// Where a project's issue fetch has got to. Separating "not queried yet" from
+/// "queried and failed" is what lets the list say *why* a project shows nothing.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub enum FetchState {
     /// Not dispatched yet, or dispatched and still running.
@@ -80,35 +80,12 @@ pub struct Issue {
     pub topic: Option<String>,
     /// Task/branch name this issue would get: `gh-<number>-<slug>`.
     pub task: String,
-    /// An existing worktree for this issue, found by number rather than by the derived
-    /// name — see [`matches_issue`].
-    pub worktree: Option<PathBuf>,
 }
 
 impl Issue {
     /// Labels other than the topic tag, for the card's label line.
     pub fn other_labels(&self) -> impl Iterator<Item = &String> {
         self.labels.iter().filter(|l| !l.starts_with(TOPIC_PREFIX))
-    }
-
-    /// What a launch needs: the three path components. `None` when the issue carries no
-    /// usable topic, which is exactly when there is no launch action to offer.
-    pub fn launch_spec(&self, project: &str) -> Option<LaunchSpec> {
-        Some(LaunchSpec {
-            project: project.to_owned(),
-            topic: self.topic.clone()?,
-            task: self.task.clone(),
-        })
-    }
-
-    /// Sort rank: worktree already there (0) < tagged, no worktree (1) < untagged (2).
-    /// Work in progress first, then what is actionable, then what needs triage.
-    fn rank(&self) -> u8 {
-        match (&self.worktree, &self.topic) {
-            (Some(_), _) => 0,
-            (None, Some(_)) => 1,
-            (None, None) => 2,
-        }
     }
 }
 
@@ -119,62 +96,8 @@ pub struct ProjectIssues {
     pub project: Project,
     /// Fetch progress/outcome.
     pub state: FetchState,
-    /// Open issues, sorted by [`sort_issues`]. Empty while loading or on failure.
+    /// Open issues. Empty while loading or on failure.
     pub issues: Vec<Issue>,
-}
-
-/// The scanned model: every project under `~/fun_repos`, each with its issues.
-#[derive(Resource, Default)]
-pub struct Model {
-    /// Projects, sorted by name.
-    pub projects: Vec<ProjectIssues>,
-}
-
-impl Model {
-    /// Iterate `(project name, issue)` across every project.
-    pub fn all(&self) -> impl Iterator<Item = (&str, &Issue)> {
-        self.projects
-            .iter()
-            .flat_map(|p| p.issues.iter().map(move |i| (p.project.name.as_str(), i)))
-    }
-
-    /// Find a project's entry by name (mutable), for folding a fetch result in.
-    pub fn project_mut(&mut self, name: &str) -> Option<&mut ProjectIssues> {
-        self.projects.iter_mut().find(|p| p.project.name == name)
-    }
-
-    /// Look up one issue by project and number.
-    pub fn issue(&self, project: &str, number: u64) -> Option<&Issue> {
-        self.projects
-            .iter()
-            .find(|p| p.project.name == project)?
-            .issues
-            .iter()
-            .find(|i| i.number == number)
-    }
-}
-
-/// UI selection / filter state.
-#[derive(Resource)]
-pub struct UiState {
-    /// Selected project, or `None` for "All".
-    pub selected_project: Option<String>,
-    /// Whether issues without a `topic:` label are listed. On by default: an untagged
-    /// issue is the one thing this app can't act on, so hiding it by default would hide
-    /// the work item that needs attention most.
-    pub show_untagged: bool,
-    /// Issues hidden for this session only (in-memory; cleared on Refresh).
-    pub hidden: HashSet<(String, u64)>,
-}
-
-impl Default for UiState {
-    fn default() -> Self {
-        Self {
-            selected_project: None,
-            show_untagged: true,
-            hidden: HashSet::new(),
-        }
-    }
 }
 
 /// A fetch result for one project, delivered from the async query over a channel.
@@ -276,27 +199,6 @@ pub fn matches_issue(task: &str, number: u64) -> bool {
             .is_none_or(|c| c == '-' || c == '_')
 }
 
-/// The existing worktree for an issue, if any: a task directory under
-/// `~/fun_worktrees/<project>/*/` whose name [`matches_issue`].
-pub fn find_worktree(project: &str, number: u64) -> Option<PathBuf> {
-    let project_dir = worktrees_root().join(project);
-    for topic in std::fs::read_dir(project_dir).ok()?.flatten() {
-        if !topic.path().is_dir() {
-            continue;
-        }
-        let Ok(tasks) = std::fs::read_dir(topic.path()) else {
-            continue;
-        };
-        for task in tasks.flatten() {
-            let name = task.file_name().to_string_lossy().into_owned();
-            if task.path().is_dir() && matches_issue(&name, number) {
-                return Some(task.path());
-            }
-        }
-    }
-    None
-}
-
 // ---------------------------------------------------------------------------
 // Scan
 // ---------------------------------------------------------------------------
@@ -305,12 +207,12 @@ pub fn find_worktree(project: &str, number: u64) -> Option<PathBuf> {
 ///
 /// Not filtered to GitHub remotes here — that would cost a `git config` call per
 /// project on the main thread, and a non-GitHub project (a codeberg repo, a fork with
-/// issues disabled) already renders correctly as a [`FetchState::Failed`] card once its
+/// issues disabled) already renders correctly as a [`FetchState::Failed`] line once its
 /// `gh` call comes back.
-pub fn scan_projects() -> Vec<Project> {
-    let mut projects = Vec::new();
+pub fn scan_projects() -> Vec<ProjectIssues> {
+    let mut projects: Vec<Project> = Vec::new();
     let Ok(entries) = std::fs::read_dir(projects_root()) else {
-        return projects;
+        return Vec::new();
     };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -324,31 +226,13 @@ pub fn scan_projects() -> Vec<Project> {
     }
     projects.sort_by(|a, b| a.name.cmp(&b.name));
     projects
-}
-
-/// The scanned model with every project [`FetchState::Loading`]. Issues arrive async.
-pub fn scan() -> Model {
-    Model {
-        projects: scan_projects()
-            .into_iter()
-            .map(|project| ProjectIssues {
-                project,
-                state: FetchState::Loading,
-                issues: Vec::new(),
-            })
-            .collect(),
-    }
-}
-
-/// Order issues for display: in-progress (worktree present) first, then tagged and
-/// actionable, then untagged; ties broken by most-recently-updated, then number.
-pub fn sort_issues(issues: &mut [Issue]) {
-    issues.sort_by(|a, b| {
-        a.rank()
-            .cmp(&b.rank())
-            .then(b.updated.cmp(&a.updated))
-            .then(b.number.cmp(&a.number))
-    });
+        .into_iter()
+        .map(|project| ProjectIssues {
+            project,
+            state: FetchState::Loading,
+            issues: Vec::new(),
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -385,7 +269,7 @@ struct RawAuthor {
 /// resolves the repo from its own remote. Blocking; call off the main thread.
 ///
 /// Any failure — `gh` missing, no GitHub remote, issues disabled, not authenticated —
-/// comes back as `Err(reason)` for the project's card. Nothing here can abort the app.
+/// comes back as `Err(reason)` for the project's line. Nothing here can abort the app.
 pub fn fetch_issues(project: &Project) -> Result<Vec<Issue>, String> {
     let out = Command::new("gh")
         .current_dir(&project.path)
@@ -404,7 +288,7 @@ pub fn fetch_issues(project: &Project) -> Result<Vec<Issue>, String> {
     if !out.status.success() {
         return Err(first_line(&String::from_utf8_lossy(&out.stderr)));
     }
-    parse_issues(&out.stdout, &project.name)
+    parse_issues(&out.stdout)
 }
 
 /// The first non-empty line of `gh`'s stderr, capped — enough to say *why* a project has
@@ -433,19 +317,21 @@ fn first_line(stderr: &str) -> String {
     }
 }
 
-/// Map `gh`'s JSON into [`Issue`]s, resolving the topic tag, task name, and any existing
-/// worktree. Split from [`fetch_issues`] so the mapping is testable without `gh`.
-pub fn parse_issues(json: &[u8], project: &str) -> Result<Vec<Issue>, String> {
+/// Map `gh`'s JSON into [`Issue`]s, resolving the topic tag and task name. Split from
+/// [`fetch_issues`] so the mapping is testable without `gh` — and, since the worktree
+/// lookup moved to [`super::join`], without a filesystem fixture either.
+///
+/// The order `gh` returned is preserved; display order is the merged sort's job.
+pub fn parse_issues(json: &[u8]) -> Result<Vec<Issue>, String> {
     let raw: Vec<RawIssue> =
         serde_json::from_slice(json).map_err(|e| format!("unparseable gh output: {e}"))?;
-    let mut issues: Vec<Issue> = raw
+    Ok(raw
         .into_iter()
         .map(|r| {
             let labels: Vec<String> = r.labels.into_iter().map(|l| l.name).collect();
             Issue {
                 topic: topic_of(&labels),
                 task: task_name(r.number, &r.title),
-                worktree: find_worktree(project, r.number),
                 number: r.number,
                 title: r.title,
                 url: r.url,
@@ -454,113 +340,7 @@ pub fn parse_issues(json: &[u8], project: &str) -> Result<Vec<Issue>, String> {
                 author: r.author.and_then(|a| a.login).filter(|l| !l.is_empty()),
             }
         })
-        .collect();
-    sort_issues(&mut issues);
-    Ok(issues)
-}
-
-// ---------------------------------------------------------------------------
-// Actions
-// ---------------------------------------------------------------------------
-
-/// The three path components a launch needs: `~/fun_worktrees/<project>/<topic>/<task>`.
-#[derive(Clone, Debug)]
-pub struct LaunchSpec {
-    /// Project (and the repo under `~/fun_repos` the worktree derives from).
-    pub project: String,
-    /// Topic, from the issue's `topic:` label.
-    pub topic: String,
-    /// Task/branch name, from [`task_name`].
-    pub task: String,
-}
-
-impl LaunchSpec {
-    /// `hcdev wt <task> --project <p> --topic <t>` — project and topic are passed
-    /// explicitly because the same task name can exist under two projects and `hcdev wt`
-    /// errors on an ambiguous name rather than guessing.
-    fn hcdev_cmd(&self) -> String {
-        format!(
-            "hcdev wt '{}' --project '{}' --topic '{}'",
-            self.task, self.project, self.topic
-        )
-    }
-
-    /// `hwt new …` then the `hcdev wt`, as one nushell command line.
-    ///
-    /// `| ignore` discards the path `hwt new` returns: a bare value in a non-final
-    /// `;`-separated nushell statement is not something to rely on.
-    fn start_cmd(&self) -> String {
-        format!(
-            "hwt new '{}' -p '{}' -t '{}' --no-cd | ignore; {}",
-            self.task,
-            self.project,
-            self.topic,
-            self.hcdev_cmd()
-        )
-    }
-
-    /// The terminal title for this task's session, spelled the way `hcdev` spells a
-    /// session name. Cosmetic only — `hcdev` shortens the name it hands zellij when the
-    /// three components overflow the socket path, and a window title has no such limit.
-    fn session_title(&self) -> String {
-        format!("hcdev-{}-{}-{}", self.project, self.topic, self.task)
-    }
-}
-
-/// Open an `hcdev` session (Zellij hobby-dev layout, Claude on the hobby account) in an
-/// existing worktree.
-pub fn launch_hcdev(dir: &Path, spec: &LaunchSpec) {
-    launch_nu(
-        &dir.to_string_lossy(),
-        &spec.session_title(),
-        &spec.hcdev_cmd(),
-    );
-}
-
-/// Create the worktree for an issue and open an `hcdev` session in it, in one terminal.
-///
-/// Runs from the project's main checkout, because the worktree does not exist yet and
-/// `hwt new` derives the project from either `--project` or the current repo. `hwt new`
-/// is idempotent (an existing worktree is reported and reused), so a double click costs
-/// a second session and nothing worse.
-pub fn launch_start(spec: &LaunchSpec) {
-    let dir = projects_root().join(&spec.project);
-    launch_nu(
-        &dir.to_string_lossy(),
-        &spec.session_title(),
-        &spec.start_cmd(),
-    );
-}
-
-/// Open a plain terminal in an issue's worktree.
-pub fn launch_terminal(dir: &Path, title: &str) {
-    let dir = dir.to_string_lossy().into_owned();
-    spawn_detached(&[
-        "-f",
-        "alacritty",
-        "--working-directory",
-        &dir,
-        "--title",
-        title,
-    ]);
-}
-
-/// Run a nushell command in a detached alacritty. `--login` is what loads `hwt.nu` and
-/// `hcdev.nu`, so both are only reachable this way.
-fn launch_nu(dir: &str, title: &str, cmd: &str) {
-    spawn_detached(&[
-        "-f",
-        "alacritty",
-        "--working-directory",
-        dir,
-        "--title",
-        title,
-        "-e",
-        "nu",
-        "--login",
-        "-c",
-        cmd,
-    ]);
+        .collect())
 }
 
 #[cfg(test)]
@@ -640,7 +420,7 @@ mod tests {
         assert_eq!(task_name(5, ""), "gh-5");
     }
 
-    /// A worktree is claimed by issue number, across every naming convention this repo
+    /// A task name is claimed by issue number, across every naming convention this repo
     /// has used — and emphatically not by a number that merely appears in the name.
     #[test]
     fn worktrees_are_matched_by_issue_number() {
@@ -674,24 +454,10 @@ mod tests {
     }
 
     /// `gh`'s JSON maps to the model: labels flatten to names, the topic tag is split out
-    /// of the label list, timestamps parse, and the order is worktree/tagged/untagged.
-    /// Runs against a fixture `HOME` so `find_worktree` has a tree to look at — the one
-    /// filesystem test in this module, since `HOME` is process-global.
+    /// of the label list, and timestamps parse. No filesystem fixture — the worktree
+    /// lookup lives in `join` now, which is what frees this test from `HOME`.
     #[test]
-    fn gh_json_maps_to_sorted_issues() {
-        let home = std::env::temp_dir().join("hgh_issues_parse_fixture");
-        let _ = std::fs::remove_dir_all(&home);
-        // SAFETY: single-threaded test setup; no other test in this module reads HOME.
-        unsafe {
-            std::env::set_var("HOME", &home);
-        }
-        // Only issue 7 has a worktree, and under the pre-convention name.
-        std::fs::create_dir_all(home.join("fun_worktrees/wusel/perf/issue-7_chunk_loading"))
-            .unwrap();
-        // A stray file at task level must not be mistaken for a worktree.
-        std::fs::create_dir_all(home.join("fun_worktrees/wusel/features")).unwrap();
-        std::fs::write(home.join("fun_worktrees/wusel/features/gh-3-notes.md"), "x").unwrap();
-
+    fn gh_json_maps_to_issues() {
         let json = br#"[
           {"number":3,"title":"Untagged thing","url":"https://gh/3",
            "labels":[{"name":"bug"}],"updatedAt":"2026-07-20T10:00:00Z",
@@ -703,47 +469,30 @@ mod tests {
            "labels":[{"name":"topic:perf"}],"updatedAt":"2026-07-01T10:00:00Z","author":null}
         ]"#;
 
-        let issues = parse_issues(json, "wusel").expect("valid gh output");
+        let issues = parse_issues(json).expect("valid gh output");
         let numbers: Vec<u64> = issues.iter().map(|i| i.number).collect();
-        assert_eq!(
-            numbers,
-            vec![7, 5, 3],
-            "worktree first, then tagged, then untagged — regardless of update time"
-        );
-
-        let with_worktree = &issues[0];
-        assert_eq!(with_worktree.topic.as_deref(), Some("perf"));
-        assert_eq!(
-            with_worktree.worktree,
-            Some(home.join("fun_worktrees/wusel/perf/issue-7_chunk_loading")),
-            "found by number, despite the pre-convention name"
-        );
-        assert_eq!(with_worktree.task, "gh-7-chunk-loading");
-        assert_eq!(with_worktree.author, None, "a null author stays None");
+        assert_eq!(numbers, vec![3, 5, 7], "gh's order is preserved");
 
         let tagged = &issues[1];
         assert_eq!(tagged.topic.as_deref(), Some("features"));
-        assert_eq!(tagged.worktree, None);
+        assert_eq!(tagged.task, "gh-5-tagged-no-worktree");
         assert_eq!(
             tagged.other_labels().collect::<Vec<_>>(),
             vec!["enhancement"],
             "the topic tag is not repeated in the label line"
         );
-        assert!(tagged.launch_spec("wusel").is_some());
         assert!(tagged.updated.is_some(), "gh's timestamp parsed");
 
-        let untagged = &issues[2];
-        assert_eq!(untagged.topic, None);
-        assert!(
-            untagged.launch_spec("wusel").is_none(),
-            "no topic means no launch action"
-        );
+        let perf = &issues[2];
+        assert_eq!(perf.topic.as_deref(), Some("perf"));
+        assert_eq!(perf.task, "gh-7-chunk-loading");
+        assert_eq!(perf.author, None, "a null author stays None");
 
-        // Malformed output is an error for one project's card, never a panic.
-        assert!(parse_issues(b"{ not json", "wusel").is_err());
-        assert!(parse_issues(b"[]", "wusel").unwrap().is_empty());
+        assert_eq!(issues[0].topic, None, "a bare `bug` label is not a topic");
 
-        let _ = std::fs::remove_dir_all(&home);
+        // Malformed output is an error for one project's line, never a panic.
+        assert!(parse_issues(b"{ not json").is_err());
+        assert!(parse_issues(b"[]").unwrap().is_empty());
     }
 
     /// `gh`'s stderr becomes one short list line: first line only, `error:` stripped,
@@ -766,29 +515,5 @@ mod tests {
         let long = first_line(&"x".repeat(300));
         assert_eq!(long.chars().count(), 80, "capped, with an ellipsis");
         assert!(long.ends_with('…'));
-    }
-
-    /// The launch commands quote every interpolated component and pass project/topic
-    /// explicitly, so an ambiguous task name cannot make `hcdev` guess.
-    #[test]
-    fn launch_commands_are_explicit() {
-        let spec = LaunchSpec {
-            project: "wusel".into(),
-            topic: "perf".into(),
-            task: "gh-7-chunk-loading".into(),
-        };
-        assert_eq!(
-            spec.hcdev_cmd(),
-            "hcdev wt 'gh-7-chunk-loading' --project 'wusel' --topic 'perf'"
-        );
-        // The one command with a real side effect, and the one that cannot be clicked in a
-        // test: `hwt new` creates the worktree, `| ignore` swallows the path it returns, and
-        // the session opens in it.
-        assert_eq!(
-            spec.start_cmd(),
-            "hwt new 'gh-7-chunk-loading' -p 'wusel' -t 'perf' --no-cd | ignore; \
-             hcdev wt 'gh-7-chunk-loading' --project 'wusel' --topic 'perf'"
-        );
-        assert_eq!(spec.session_title(), "hcdev-wusel-perf-gh-7-chunk-loading");
     }
 }

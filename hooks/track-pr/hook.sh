@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # PostToolUse hook: when the agent opens a PR with `gh pr create`, record it in the
-# task's notes `prs.json` so hwt-overview can show its live status.
+# task's notes `prs.json` so hdash can show its live status.
 #
 # Ported from the work hook. The only real change is the path parse: hobby tasks
 # live at ~/fun_worktrees/PROJECT/TOPIC/TASK, three levels rather than two, and
