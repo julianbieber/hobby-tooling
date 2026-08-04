@@ -1,14 +1,22 @@
-//! Domain layer: the worktree/task model, the filesystem scan, git status reads, and the shell
-//! actions (open cdev / terminal / notes, toggle done). No Bevy UI here.
+//! The task half of the model: the worktree/notes filesystem scan, git status reads, PR
+//! status via `gh`, and the `task.json` done flag. No Bevy UI here.
+//!
+//! A task is a directory under `~/fun_worktrees/PROJECT/TOPIC/TASK`, or a notes directory
+//! carrying a `task.json` for one that was removed but remembered. Unlike the pre-merge
+//! `hwt-overview`, tasks are **not** grouped into topics here: an unstarted issue has a
+//! topic *label* and no topic *directory*, so the merged list groups by project only and
+//! carries the topic as a card label. See [`super::join`].
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bevy::prelude::*;
-use hwt_core::{days_from_civil, parse_ymd};
+use hwt_core::{days_from_civil, git_capture, parse_ymd};
 use serde::{Deserialize, Serialize};
+
+pub use hwt_core::{notes_root, worktrees_root};
 
 /// A git status result for one repo, delivered from the async scan over a channel.
 pub struct GitMsg {
@@ -90,7 +98,7 @@ impl Pr {
 /// owning task's `subtasks.json`. `task` is the only required field; the rest is display metadata.
 #[derive(Clone, Debug, Deserialize)]
 pub struct SubtaskRef {
-    /// The child task's directory/branch name (second path level under its topic).
+    /// The child task's directory/branch name (third path level, under its topic).
     pub task: String,
     /// The child's topic, if it differs from the owner's. Defaults to the owner's topic when absent.
     #[serde(default)]
@@ -150,7 +158,7 @@ pub struct PrMsg {
 
 /// Stable identity for a task: (project, topic, task name) — the three directory
 /// levels under `~/fun_worktrees`.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub struct TaskId {
     /// Project (first level) — a repo in `~/fun_repos`.
     pub project: String,
@@ -181,10 +189,13 @@ pub struct GitInfo {
 }
 
 /// A single git worktree (repo checkout) inside a task directory.
+///
+/// A hobby task is exactly one repo — the task directory itself — so this never holds
+/// more than one entry. It stays a struct in a vector rather than collapsing into `Task`
+/// because the async git-status plumbing addresses repos by index. There is no `name`:
+/// a hobby repo is its project, and the merged card already prints the project.
 #[derive(Clone, Debug)]
 pub struct Repo {
-    /// Repo directory name.
-    pub name: String,
     /// Absolute path to the repo.
     pub path: PathBuf,
     /// Git status (lazily populated).
@@ -193,7 +204,7 @@ pub struct Repo {
 
 /// A block: the task is waiting on an action and/or until a day. Deserialized from the `blocked`
 /// object in `task.json` (`null`/absent means not blocked).
-#[derive(Clone, Debug, Default, serde::Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Block {
     /// `YYYY-MM-DD` the block lifts, if set (`None` = indefinite, waiting on an action).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -242,12 +253,12 @@ impl Task {
             .count()
     }
 
-    /// Whether a `.blocked` marker is present (regardless of its until-date).
+    /// Whether a block is recorded (regardless of its until-date).
     pub fn blocked(&self) -> bool {
         self.block.is_some()
     }
 
-    /// Whether the block has lifted: a `.blocked` marker with an until-date that is today or
+    /// Whether the block has lifted: a block with an until-date that is today or
     /// earlier. Indefinite blocks (no until-date) are never "ready".
     pub fn ready(&self) -> bool {
         let Some(block) = &self.block else {
@@ -265,99 +276,21 @@ impl Task {
             .unwrap_or(0);
         today >= days_from_civil(y, m, d)
     }
-
-    /// State rank for sorting: ready (0) < active (1) < blocked (2) < done (3).
-    fn state_rank(&self) -> u8 {
-        if self.done {
-            3
-        } else if self.ready() {
-            0
-        } else if self.blocked() {
-            2
-        } else {
-            1
-        }
-    }
-}
-
-/// A topic grouping a set of tasks.
-#[derive(Clone, Debug)]
-pub struct Topic {
-    /// Project this topic belongs to. Two projects may use the same topic name, so
-    /// the (project, name) pair is what identifies a group.
-    pub project: String,
-    /// Topic name.
-    pub name: String,
-    /// Tasks within the topic.
-    pub tasks: Vec<Task>,
-}
-
-impl Topic {
-    /// Number of completed (`.done`) tasks.
-    pub fn done_count(&self) -> usize {
-        self.tasks.iter().filter(|t| t.done).count()
-    }
-
-    /// Number of active (not done) tasks.
-    pub fn active_count(&self) -> usize {
-        self.tasks.len() - self.done_count()
-    }
-}
-
-/// The scanned worktree model.
-#[derive(Resource, Default)]
-pub struct Worktrees {
-    /// Topics, sorted by name.
-    pub topics: Vec<Topic>,
-}
-
-impl Worktrees {
-    /// Iterate every task across all topics.
-    pub fn all_tasks(&self) -> impl Iterator<Item = &Task> {
-        self.topics.iter().flat_map(|t| t.tasks.iter())
-    }
-
-    /// Find a task by id.
-    pub fn task(&self, id: &TaskId) -> Option<&Task> {
-        self.all_tasks().find(|t| t.id == *id)
-    }
-
-    /// Find a task by id (mutable).
-    pub fn task_mut(&mut self, id: &TaskId) -> Option<&mut Task> {
-        self.topics
-            .iter_mut()
-            .filter(|t| t.name == id.topic)
-            .flat_map(|t| t.tasks.iter_mut())
-            .find(|t| t.id == *id)
-    }
-}
-
-/// UI selection / filter state.
-#[derive(Resource, Default)]
-pub struct UiState {
-    /// Selected project, or `None` for "All". The sidebar filters by project here,
-    /// where the work dashboard filtered by topic — a hobby task's project is the
-    /// coarsest and most useful axis, and topics are shown as a label on each card.
-    pub selected_project: Option<String>,
-    /// My git identity in the notes repo, for the header line.
-    pub me: Option<String>,
-    /// Whether completed tasks are shown.
-    pub show_done: bool,
-    /// Tasks hidden for this session only (in-memory; cleared on Refresh).
-    pub hidden: HashSet<TaskId>,
-    /// Tasks whose PR list is expanded (in-memory; collapsed by default).
-    pub pr_expanded: HashSet<TaskId>,
 }
 
 // ---------------------------------------------------------------------------
-// Paths
+// PR status cache
 // ---------------------------------------------------------------------------
 
-pub use hwt_core::{notes_root, open_url, rel_time, worktrees_root};
-
-/// `~/.cache/wt-overview/pr-status.json` (honouring `XDG_CACHE_HOME`): the persisted terminal
+/// `~/.cache/hdash/pr-status.json` (honouring `XDG_CACHE_HOME`): the persisted terminal
 /// PR-status cache.
 fn pr_cache_path() -> PathBuf {
+    hwt_core::xdg_cache_path("hdash", "pr-status.json")
+}
+
+/// The pre-merge `hwt-overview` cache location. Read once as a fallback so the rename does
+/// not cost a `gh pr view` for every merged PR on first launch; never written, never deleted.
+fn legacy_pr_cache_path() -> PathBuf {
     hwt_core::xdg_cache_path("hwt-overview", "pr-status.json")
 }
 
@@ -372,13 +305,18 @@ pub struct CachedPr {
     pub title: Option<String>,
 }
 
-/// Load the terminal-PR-status cache (URL → status). A missing or unparseable file is treated as an
-/// empty cache, so a corrupt cache degrades to re-querying rather than breaking the app.
+/// Load the terminal-PR-status cache (URL → status), falling back to `hwt-overview`'s old
+/// path when this app has not written one yet. A missing or unparseable file is treated as
+/// an empty cache, so a corrupt cache degrades to re-querying rather than breaking the app.
 pub fn read_pr_cache() -> std::collections::HashMap<String, CachedPr> {
-    read_pr_cache_at(&pr_cache_path())
+    let cache = read_pr_cache_at(&pr_cache_path());
+    if cache.is_empty() {
+        return read_pr_cache_at(&legacy_pr_cache_path());
+    }
+    cache
 }
 
-/// Persist the terminal-PR-status cache, creating `~/.cache/wt-overview/` if needed. Best-effort:
+/// Persist the terminal-PR-status cache, creating `~/.cache/hdash/` if needed. Best-effort:
 /// a write failure is logged and otherwise ignored (the cache is an optimisation, not a source of
 /// truth).
 pub fn write_pr_cache(cache: &std::collections::HashMap<String, CachedPr>) {
@@ -386,7 +324,8 @@ pub fn write_pr_cache(cache: &std::collections::HashMap<String, CachedPr>) {
 }
 
 /// Delete the on-disk terminal-PR-status cache so the next scan re-queries every PR. Best-effort;
-/// a missing file is success.
+/// a missing file is success. Only this app's file — the legacy one is left alone, but it is not
+/// read once this app has written its own.
 pub fn clear_pr_cache() {
     let path = pr_cache_path();
     match std::fs::remove_file(&path) {
@@ -420,6 +359,10 @@ fn write_pr_cache_at(path: &Path, cache: &std::collections::HashMap<String, Cach
     }
 }
 
+// ---------------------------------------------------------------------------
+// Paths
+// ---------------------------------------------------------------------------
+
 /// Resolve a task's notes location: either `notes/PROJECT/TOPIC/TASK/` (dir) or
 /// `notes/PROJECT/TOPIC/TASK.md`.
 pub fn notes_path(id: &TaskId) -> Option<PathBuf> {
@@ -436,20 +379,6 @@ pub fn notes_path(id: &TaskId) -> Option<PathBuf> {
 }
 
 // ---------------------------------------------------------------------------
-// Ownership (the notes repo is shared across the team)
-// ---------------------------------------------------------------------------
-
-/// The git identity configured in the hobby notes repo (`user.email`).
-///
-/// The work dashboard used this to tell the user's tasks from teammates' on a shared
-/// notes repo. The hobby notes repo has exactly one author, so there is nothing to
-/// disambiguate and no owner filter in the UI; this is kept only so the window title
-/// can show who the checkout belongs to.
-pub fn notes_repo_email() -> Option<String> {
-    git_capture(&notes_root(), &["config", "user.email"])
-}
-
-// ---------------------------------------------------------------------------
 // Scan
 // ---------------------------------------------------------------------------
 
@@ -462,7 +391,7 @@ fn is_visible_dir(entry: &std::fs::DirEntry) -> bool {
 /// Merges into `out` so several roots can be unioned.
 ///
 /// The key is the (project, topic) pair, not the topic alone: two projects can both
-/// have a `features` topic and their tasks must not be merged into one group.
+/// have a `features` topic and their tasks must not be merged.
 fn collect_tasks(
     root: &Path,
     keep: impl Fn(&Path) -> bool,
@@ -500,15 +429,18 @@ fn collect_tasks(
     }
 }
 
-/// Build the task model from the union of two sources: live worktree dirs under `~/fun_worktrees`
+/// Build the task list from the union of two sources: live worktree dirs under `~/fun_worktrees`
 /// and notes dirs carrying a `task.json`. The union keeps live tasks visible (even before
 /// migration) while surfacing removed-but-remembered tasks from their retained metadata. Git
 /// status is left unloaded (filled in async).
 ///
-/// A hobby task is a single repo, so `repos` holds at most one entry: the task
+/// A hobby task is a single repo, so `repos` holds exactly one entry: the task
 /// directory itself, named after its project. Keeping it a vector rather than a
 /// scalar lets the async git-status plumbing and the card rendering stay as they are.
-pub fn scan() -> Worktrees {
+///
+/// The result is in `(project, topic, name)` order — deterministic, but not display order;
+/// [`super::join::Model::items`] applies the merged sort.
+pub fn scan_tasks() -> Vec<Task> {
     let mut by_group: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
     collect_tasks(&worktrees_root(), |_| true, &mut by_group);
     collect_tasks(
@@ -517,9 +449,8 @@ pub fn scan() -> Worktrees {
         &mut by_group,
     );
 
-    let mut topics = Vec::new();
+    let mut tasks = Vec::new();
     for ((project_name, topic_name), task_names) in by_group {
-        let mut tasks = Vec::new();
         for task_name in task_names {
             let id = TaskId {
                 project: project_name.clone(),
@@ -536,7 +467,6 @@ pub fn scan() -> Worktrees {
             // tasks get one Repo pointing at themselves, removed ones get the same
             // entry with the path it would be restored to (git status stays unloaded).
             let repos = vec![Repo {
-                name: id.project.clone(),
                 path: dir.clone(),
                 git: GitInfo::default(),
             }];
@@ -557,33 +487,8 @@ pub fn scan() -> Worktrees {
                 last_active,
             });
         }
-
-        // Ready (block lifted) first, then active, then blocked, then done; ties broken by
-        // most-recent notes activity, then name.
-        tasks.sort_by(|a, b| {
-            a.state_rank()
-                .cmp(&b.state_rank())
-                .then(b.last_active.cmp(&a.last_active))
-                .then(a.id.name.cmp(&b.id.name))
-        });
-
-        if !tasks.is_empty() {
-            topics.push(Topic {
-                project: project_name,
-                name: topic_name,
-                tasks,
-            });
-        }
     }
-
-    // Most open (active) tasks first; topics with all tasks done sink to the bottom. Ties broken
-    // alphabetically.
-    topics.sort_by(|a, b| {
-        b.active_count()
-            .cmp(&a.active_count())
-            .then(a.name.cmp(&b.name))
-    });
-    Worktrees { topics }
+    tasks
 }
 
 /// A task's `task.json` in the notes repo: `{ done, blocked }` and nothing else. Both fields
@@ -594,7 +499,7 @@ pub fn scan() -> Worktrees {
 ///
 /// Written by the `hwt`/`hcdev` commands; this app reads it (and edits `done` via
 /// [`toggle_done`]).
-#[derive(Debug, Default, serde::Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 struct TaskMeta {
     #[serde(default)]
     done: bool,
@@ -691,10 +596,8 @@ fn read_subtasks(id: &TaskId) -> Vec<SubtaskRef> {
 }
 
 // ---------------------------------------------------------------------------
-// Git status (sync helper; called from async tasks)
+// Git status / PR status (sync helpers; called from async tasks)
 // ---------------------------------------------------------------------------
-
-use hwt_core::git_capture;
 
 /// Read branch, short SHA, and dirty count for a single repo. Blocking; run off the main thread.
 pub fn read_git(path: &Path) -> GitInfo {
@@ -774,115 +677,25 @@ fn toggle_done_at(path: &Path) -> std::io::Result<bool> {
     Ok(meta.done)
 }
 
-use hwt_core::spawn_detached;
-
-/// Open a full `hcdev` session (Zellij hobby-dev layout, Claude on the hobby account)
-/// in a new terminal for this task.
-pub fn launch_cdev(task: &Task) {
-    let dir = task.dir.to_string_lossy().into_owned();
-    // Window title only. `hcdev` spells the zellij session name the same way, but shortens
-    // it when the three components overflow the socket path; a title has no such limit.
-    let title = format!(
-        "hcdev-{}-{}-{}",
-        task.id.project, task.id.topic, task.id.name
-    );
-    // Pass project and topic explicitly: the same task name can exist under two
-    // projects, and `hcdev wt` errors on an ambiguous name rather than guessing.
-    let cdev_cmd = format!(
-        "hcdev wt '{}' --project '{}' --topic '{}'",
-        task.id.name, task.id.project, task.id.topic
-    );
-    spawn_detached(&[
-        "-f",
-        "alacritty",
-        "--working-directory",
-        &dir,
-        "--title",
-        &title,
-        "-e",
-        "nu",
-        "--login",
-        "-c",
-        &cdev_cmd,
-    ]);
-}
-
-/// Re-create a removed task's worktree by running `hwt restore` in a new terminal. The
-/// task dir does not exist yet, so the terminal opens in the worktrees root.
-pub fn launch_restore(task: &Task) {
-    let dir = worktrees_root().to_string_lossy().into_owned();
-    let title = format!("restore-{}", task.id.name);
-    let cmd = format!("hwt restore '{}'", task.id.name);
-    spawn_detached(&[
-        "-f",
-        "alacritty",
-        "--working-directory",
-        &dir,
-        "--title",
-        &title,
-        "-e",
-        "nu",
-        "--login",
-        "-c",
-        &cmd,
-    ]);
-}
-
-/// Open a plain terminal in the task directory.
-pub fn launch_terminal(task: &Task) {
-    let dir = task.dir.to_string_lossy().into_owned();
-    let title = format!("term-{}", task.id.name);
-    spawn_detached(&[
-        "-f",
-        "alacritty",
-        "--working-directory",
-        &dir,
-        "--title",
-        &title,
-    ]);
-}
-
-/// Open a terminal in the task's notes directory (falls back to the task directory).
-pub fn open_notes(task: &Task) {
-    let dir = notes_path(&task.id)
-        .map(|p| {
-            if p.is_dir() {
-                p
-            } else {
-                p.parent().map(Path::to_path_buf).unwrap_or(p)
-            }
-        })
-        .unwrap_or_else(|| task.dir.clone());
-    let dir = dir.to_string_lossy().into_owned();
-    spawn_detached(&[
-        "-f",
-        "alacritty",
-        "--working-directory",
-        &dir,
-        "--title",
-        "notes",
-    ]);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// `scan()` enumerates the union of live worktrees and notes tasks across the
+    /// `scan_tasks()` enumerates the union of live worktrees and notes tasks across the
     /// three-level `PROJECT/TOPIC/TASK` layout:
     /// - a present task is one whose worktree dir exists;
     /// - a removed task (task.json, no worktree) still appears, so it can be restored;
     /// - each task carries exactly one repo — itself — named after its project;
-    /// - the same topic name under two projects stays in separate groups.
+    /// - the same topic name under two projects stays distinct.
     ///
-    /// No owner assertions: the hobby notes repo has a single author, so `scan()` does
-    /// not attribute tasks and the UI has no owner filter.
+    /// **This is the only test in the crate that sets `HOME`.** `HOME` is process-global
+    /// and cargo runs tests in threads, so a second one would race this. Anything else
+    /// needing a tree either shares this fixture or takes a root path parameter.
     #[test]
     fn scan_unions_across_projects() {
-        // Isolate HOME to a fixture. Tests in this module share the process, so keep it to one.
-        let home = std::env::temp_dir().join("hwt_overview_scan_fixture");
+        let home = std::env::temp_dir().join("hdash_scan_fixture");
         let _ = std::fs::remove_dir_all(&home);
-        // SAFETY: single-threaded test setup; no other code reads HOME concurrently here.
+        // SAFETY: single-threaded test setup; no other test in this crate reads HOME.
         unsafe {
             std::env::set_var("HOME", &home);
         }
@@ -907,7 +720,7 @@ mod tests {
         )
         .unwrap();
 
-        // A second project reusing the SAME topic name — must not merge with projA's.
+        // A second project reusing the SAME topic name — must stay a separate task.
         std::fs::create_dir_all(wt_root.join("projB/features/other-task/.git")).unwrap();
         std::fs::create_dir_all(notes_root.join("projB/features/other-task")).unwrap();
         std::fs::write(
@@ -916,36 +729,30 @@ mod tests {
         )
         .unwrap();
 
-        let model = scan();
-        let group = |project: &str, topic: &str| {
-            model
-                .topics
+        let tasks = scan_tasks();
+        let find = |project: &str, name: &str| {
+            tasks
                 .iter()
-                .find(|t| t.project == project && t.name == topic)
+                .find(|t| t.id.project == project && t.id.name == name)
+                .unwrap_or_else(|| panic!("{project}/{name} scanned"))
         };
 
-        // Same topic name under two projects → two distinct groups.
-        let a_features = group("projA", "features").expect("projA/features");
-        let b_features = group("projB", "features").expect("projB/features");
-        assert_eq!(a_features.tasks.len(), 1);
-        assert_eq!(b_features.tasks.len(), 1);
-        assert_eq!(a_features.tasks[0].id.name, "live-task");
-        assert_eq!(b_features.tasks[0].id.name, "other-task");
+        assert_eq!(tasks.len(), 3);
 
         // A live worktree is present and carries one repo: itself, named for its project.
-        let live = &a_features.tasks[0];
+        let live = find("projA", "live-task");
         assert!(live.present);
-        assert_eq!(live.id.project, "projA");
         assert_eq!(live.id.topic, "features");
         assert_eq!(live.repos.len(), 1, "a hobby task is exactly one repo");
-        assert_eq!(live.repos[0].name, "projA");
-        assert_eq!(live.repos[0].path, live.dir);
+        assert_eq!(live.repos[0].path, live.dir, "the repo IS the task dir");
         assert_eq!(live.id.rel(), "projA/features/live-task");
 
+        // The same topic name under another project is its own task, not a merge.
+        let other = find("projB", "other-task");
+        assert_eq!(other.id.topic, "features");
+
         // A removed task still shows up, from its retained metadata.
-        let gone_group = group("projA", "bugs").expect("projA/bugs");
-        let gone = &gone_group.tasks[0];
-        assert_eq!(gone.id.name, "gone-task");
+        let gone = find("projA", "gone-task");
         assert!(!gone.present, "removed task has no worktree");
         assert!(gone.done);
         assert!(gone.block.is_some(), "blocked parsed from task.json");
@@ -957,16 +764,28 @@ mod tests {
         let _ = std::fs::remove_dir_all(&home);
     }
 
+    /// Only merged/closed are terminal (safe to cache); open/draft can still change and
+    /// loading/unknown aren't real answers.
+    #[test]
+    fn only_merged_and_closed_are_terminal() {
+        assert!(PrStatus::Merged.is_terminal());
+        assert!(PrStatus::Closed.is_terminal());
+        assert!(!PrStatus::Open.is_terminal());
+        assert!(!PrStatus::Draft.is_terminal());
+        assert!(!PrStatus::Loading.is_terminal());
+        assert!(!PrStatus::Unknown.is_terminal());
+    }
+
     /// `task.json` is tracked in the notes repo and has two writers, so a toggle must produce
     /// the exact bytes `hwt` would have written — otherwise every dashboard click shows up as a
     /// schema diff. Asserted at the byte level so a re-added `repos` field, a dropped
     /// `"blocked": null`, or a changed indent all fail here.
     ///
     /// Goes through `toggle_done_at` rather than `toggle_done` to stay off the process-global
-    /// `HOME` that `scan_unions_across_projects` owns.
+    /// `HOME` that the scan test owns.
     #[test]
     fn toggle_done_round_trips_hwt_nu_bytes() {
-        let dir = std::env::temp_dir().join("hwt_overview_meta_fixture");
+        let dir = std::env::temp_dir().join("hdash_meta_fixture");
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("nested/task.json");
 
@@ -999,7 +818,7 @@ mod tests {
     /// which has to survive the round trip as `{}` and not become `null` or vanish.
     #[test]
     fn toggle_done_preserves_block() {
-        let dir = std::env::temp_dir().join("hwt_overview_meta_block_fixture");
+        let dir = std::env::temp_dir().join("hdash_meta_block_fixture");
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("task.json");
         std::fs::create_dir_all(&dir).unwrap();
@@ -1033,23 +852,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Only merged/closed are terminal (safe to cache); open/draft can still change and
-    /// loading/unknown aren't real answers.
-    #[test]
-    fn only_merged_and_closed_are_terminal() {
-        assert!(PrStatus::Merged.is_terminal());
-        assert!(PrStatus::Closed.is_terminal());
-        assert!(!PrStatus::Open.is_terminal());
-        assert!(!PrStatus::Draft.is_terminal());
-        assert!(!PrStatus::Loading.is_terminal());
-        assert!(!PrStatus::Unknown.is_terminal());
-    }
-
     /// The PR cache round-trips through disk, creates its parent dir on write, and degrades to an
     /// empty map for a missing or corrupt file (so a bad cache means "re-query", never a crash).
     #[test]
     fn pr_cache_round_trips_and_tolerates_bad_files() {
-        let dir = std::env::temp_dir().join("wt_overview_pr_cache_fixture");
+        let dir = std::env::temp_dir().join("hdash_pr_cache_fixture");
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("nested/pr-status.json");
 

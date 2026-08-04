@@ -124,8 +124,7 @@ which are actually installed here. Query files land in the checkout's
 | `hcdev` | Zellij dev sessions with Helix + Claude side by side, on the hobby account |
 | `chobby` | Bare `claude` on the hobby account |
 | `hx-claude` | `$EDITOR` for ctrl-g — Helix on the prompt buffer, conversation in a vsplit |
-| `hwt-overview` | Bevy dashboard over all projects/topics/tasks |
-| `hgh-issues` | Bevy dashboard over open GitHub issues; `topic:<name>` label -> one-click `hcdev` |
+| `hdash` | Bevy dashboard over every work item — GitHub issues, the worktrees they become, PRs, done. One card per piece of work |
 | `hobby-mml-lsp` | HMML language server, routed to `.hmml` specs by file type |
 | 4 vendored LSPs | `claude-lsp`, `claude-skills-lsp`, `treesitter-class-lsp`, `path-lsp` — buildable without the work checkout |
 | 18 skills | Task loop (journal, resume, spawn, subtask, triage, reflect), HMML suite, PR + dev-flow, GitHub issues |

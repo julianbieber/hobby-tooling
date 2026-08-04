@@ -4,7 +4,7 @@
 **Install:** `~/.claude-hobby/hooks/track-pr.sh`
 
 When a `gh pr create` succeeds inside a hobby task, appends the PR to
-`notes/<project>/<topic>/<task>/prs.json` so `hwt-overview` can show live status.
+`notes/<project>/<topic>/<task>/prs.json` so `hdash` can show live status.
 
 Deduplicates by URL. Effect-only: never blocks, never commits the notes repo.
 

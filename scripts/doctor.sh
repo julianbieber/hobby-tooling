@@ -113,8 +113,14 @@ done
 
 echo ""
 echo "Optional extras"
-if command -v hwt-overview >/dev/null 2>&1; then ok "hwt-overview built"; else warn "hwt-overview not built" "just install-overview"; fi
-if command -v hgh-issues >/dev/null 2>&1; then ok "hgh-issues built"; else warn "hgh-issues not built" "just install-issues"; fi
+if command -v hdash >/dev/null 2>&1; then ok "hdash built"; else warn "hdash not built" "just install-dash"; fi
+# The two dashboards hdash replaces. Reported so a machine that installed them before the
+# merge is told to reclaim the names, rather than silently keeping two stale binaries.
+for b in hwt-overview hgh-issues; do
+    if command -v "$b" >/dev/null 2>&1; then
+        warn "$b is retired but still on PATH" "cargo uninstall hwt_app issues_app"
+    fi
+done
 for b in hobby-mml-lsp hobby-mml-parser; do
     if command -v "$b" >/dev/null 2>&1; then ok "$b built"; else warn "$b not built" "just install-mml"; fi
 done

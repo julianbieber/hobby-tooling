@@ -90,7 +90,7 @@ def ensure-notes-dir [project: string, topic: string, task: string] {
 # `hwt restore` re-create the checkout. Tracked in the notes repo, not gitignored.
 #
 # Unlike the work module there is no `repos` field — the project is in the path,
-# and a task is exactly one repo. Because the file is tracked and hwt-overview
+# and a task is exactly one repo. Because the file is tracked and hdash
 # writes it too, both writers must emit the same keys: `blocked` is always
 # present (null when unblocked), and nothing else is ever added.
 

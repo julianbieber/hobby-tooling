@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/feathers_kit", "crates/hwt_app", "crates/hwt_core"]
+members = ["crates/feathers_kit", "crates/hdash_app", "crates/hwt_core"]
 
 [workspace.package]
 edition = "2024"

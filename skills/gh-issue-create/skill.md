@@ -32,7 +32,7 @@ topic:features        ->  ~/fun_worktrees/<project>/features/gh-42-<slug>
 topic:perf, topic:ui  ->  first one wins; don't add two
 ```
 
-`hgh-issues` (the issue dashboard) reads that label and nothing else: with it, an
+`hdash` (the work dashboard) reads that label and nothing else: with it, an
 issue has a one-click **Start task** button that creates the worktree and opens an
 `hcdev` session; without it the issue is listed as *untagged* and cannot be
 launched at all. So the tag is not decoration — it is the thing that makes an issue
@@ -156,7 +156,7 @@ Rules:
 
 10. **Suggest the follow-up**, if a worktree doesn't exist yet — either of:
 
-    - `hgh-issues`, and click **Start task** on the issue: with the `topic:` label in
+    - `hdash`, and click **Start task** on the issue: with the `topic:` label in
       place it runs `hwt new` + `hcdev wt` in one go.
     - by hand: `hwt new gh-{number}-{slug} -p {project} -t {topic}`.
 

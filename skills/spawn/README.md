@@ -24,8 +24,8 @@ sets up its directories — but launches nothing. Given a subgoal it:
 - Records the subtask under the parent's
   `notes/{project}/{topic}/{parent_task}/subtasks.json` ownership meta (deduped by task).
 
-The subtask is surfaced under the parent task in the `hwt-overview`
-dashboard, where the dashboard's open action launches it. `/spawn` never starts a session
+The subtask is surfaced under the parent task in the `hdash` dashboard,
+where the dashboard's open action launches it. `/spawn` never starts a session
 itself.
 
 Sibling to `subtask`: `/subtask` optionally mints a **new** GitHub issue;
@@ -52,5 +52,5 @@ Or: `just install-skills`.
   documented in `~/fun_worktrees/CLAUDE.md`).
 - Must be run from inside a `~/fun_worktrees/PROJECT/TOPIC/TASK` worktree — it
   always creates a worktree and needs the topic, parent task, and project.
-- The `subtasks.json` visualization requires `hwt-overview` built from the
+- The `subtasks.json` visualization requires `hdash` built from the
   version that reads it.

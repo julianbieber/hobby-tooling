@@ -1,0 +1,53 @@
+# hdash — Bevy dashboard of hobby work items (issues, worktrees, PRs)
+
+# List all recipes
+default:
+    @just --list
+
+# Build the dashboard (dev profile; dependencies are optimized so the app is usable)
+build:
+    cargo build -p hdash_app
+
+# Build the optimized release binary
+release:
+    cargo build -p hdash_app --release
+
+# Run the dashboard (dev build)
+run:
+    cargo run -p hdash_app
+
+# Run the optimized release build
+run-release:
+    cargo run -p hdash_app --release
+
+# Install the `hdash` binary to ~/.cargo/bin
+install:
+    cargo install --path crates/hdash_app
+
+# Uninstall the binary
+uninstall:
+    cargo uninstall hdash_app
+
+# Type-check the whole workspace
+check:
+    cargo check --workspace
+
+# Lint with clippy
+lint:
+    cargo clippy --workspace --all-targets
+
+# Format the code
+fmt:
+    cargo fmt
+
+# Run the tests
+test:
+    cargo test --workspace
+
+# Remove build artifacts
+clean:
+    cargo clean
+
+# Launch the app and screenshot its window (dev helper; needs xdotool + imagemagick)
+shot out="/tmp/hdash-shot.png": release
+    ./shot.sh {{out}}
