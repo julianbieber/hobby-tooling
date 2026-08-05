@@ -12,8 +12,15 @@ use feathers_kit::{
 
 use crate::model::join::{Item, Model, Stage, UiState};
 
-/// Sidebar width in logical pixels.
-const SIDEBAR_W: f32 = 250.0;
+use super::Pulls;
+
+/// Sidebar width in logical pixels. Wide enough for the longest project name *plus* the
+/// pull slot and the count badge — the three compete for one row.
+const SIDEBAR_W: f32 = 290.0;
+
+/// Fixed width of the pull control, so a running pull's `…` occupies exactly the space its
+/// button did and the row does not twitch when one starts.
+const PULL_SLOT_W: f32 = 60.0;
 
 // ---------------------------------------------------------------------------
 // Markers
@@ -28,6 +35,12 @@ pub struct ItemListContainer;
 /// A sidebar project button. `None` = the "All" entry.
 #[derive(Component, Clone)]
 pub struct ProjectButton(pub Option<String>);
+
+/// The **Pull** button on a project's sidebar row, carrying that project's name. Nested
+/// inside the row's own [`ProjectButton`]; `bevy_ui_widgets` stops the click from bubbling
+/// once a `Button` has handled it, so pulling a project does not also select it.
+#[derive(Component, Clone)]
+pub struct PullButton(pub String);
 
 #[derive(Component)]
 pub struct ShowDoneToggle;
@@ -180,6 +193,7 @@ pub fn rebuild_sidebar(
     container: Query<Entity, With<SidebarContainer>>,
     model: Res<Model>,
     ui: Res<UiState>,
+    pulls: Res<Pulls>,
     fonts: Res<KitFonts>,
 ) {
     let Ok(c) = container.single() else {
@@ -208,6 +222,7 @@ pub fn rebuild_sidebar(
         "All",
         total,
         ui.selected_project.is_none(),
+        false,
     );
 
     for (project, count) in &per_project {
@@ -220,10 +235,12 @@ pub fn rebuild_sidebar(
             project,
             *count,
             selected,
+            pulls.running(project),
         );
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_project_row(
     commands: &mut Commands,
     parent: Entity,
@@ -232,24 +249,73 @@ fn spawn_project_row(
     label: &str,
     count: usize,
     selected: bool,
+    pulling: bool,
 ) {
     let label_token = if selected { kt::ACCENT } else { ft_text_main() };
     let id = commands
         .spawn(sidebar_item(
-            ProjectButton(project),
+            ProjectButton(project.clone()),
             children![
                 text(fonts, label.to_string(), 13.0, tok(label_token)),
                 spacer_grow(),
-                badge(fonts, count.to_string(), kt::CHIP_BG, tok(ft_text_dim())),
             ],
         ))
         .id();
+
+    // The "All" row gets no pull control: `~/fun_repos` holds upstream clones as well as my
+    // own projects (see the README's known limitations), so one click that pulls every
+    // checkout would fire dozens of network fetches nobody asked for.
+    if let Some(name) = project {
+        let slot = pull_slot(commands, fonts, &name, pulling);
+        commands.entity(id).add_child(slot);
+    }
+
+    let badge_id = commands
+        .spawn(badge(
+            fonts,
+            count.to_string(),
+            kt::CHIP_BG,
+            tok(ft_text_dim()),
+        ))
+        .id();
+    commands.entity(id).add_child(badge_id);
+
     if selected {
         commands
             .entity(id)
             .insert((KitSelected, ThemeBackgroundColor(tok(kt::SIDEBAR_ITEM_SEL))));
     }
     commands.entity(parent).add_child(id);
+}
+
+/// The per-project pull control: a **Pull** button, or a dim `…` while one is in flight. The
+/// button is *replaced* rather than disabled, so there is nothing to click twice — the
+/// outcome itself is reported as a line above the item list, where there is room for a
+/// reason when git refuses.
+fn pull_slot(commands: &mut Commands, fonts: &KitFonts, project: &str, pulling: bool) -> Entity {
+    let inner = if pulling {
+        commands
+            .spawn(text(fonts, "…", 13.0, tok(ft_text_dim())))
+            .id()
+    } else {
+        commands
+            .spawn(icon_button(
+                Variant::Normal,
+                PullButton(project.to_owned()),
+                "Pull",
+            ))
+            .id()
+    };
+    let slot = commands
+        .spawn(Node {
+            width: Val::Px(PULL_SLOT_W),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        })
+        .id();
+    commands.entity(slot).add_child(inner);
+    slot
 }
 
 // ---------------------------------------------------------------------------

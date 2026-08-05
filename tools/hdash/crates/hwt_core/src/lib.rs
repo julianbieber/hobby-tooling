@@ -73,6 +73,39 @@ pub fn git_capture(path: &std::path::Path, args: &[&str]) -> Option<String> {
     if s.is_empty() { None } else { Some(s) }
 }
 
+/// One short line saying *why* a command failed, from its stderr — enough for a list row,
+/// without a paragraph of configuration advice wrapped around it.
+///
+/// A line marked `error:`/`fatal:` wins **wherever it sits**, not just first. `git` narrates
+/// its progress on stderr, so a refused `pull --ff-only` puts the reason under two lines of
+/// `From <remote>`, and taking the first line would report the remote as the problem. Only
+/// when nothing is marked — `gh`'s "none of the git remotes point to a known GitHub host" —
+/// is the first line the reason.
+///
+/// The cap is what keeps a failure to one row at the window's default width; `gh` happily
+/// emits a 200-character sentence telling you how to register a GitHub host, and `git`
+/// follows its reason with a hint block.
+pub fn first_stderr_line(stderr: &str) -> String {
+    const MAX: usize = 80;
+    const MARKERS: [&str; 2] = ["error: ", "fatal: "];
+
+    let lines = || stderr.lines().map(str::trim).filter(|l| !l.is_empty());
+    let line = lines()
+        .find_map(|l| MARKERS.iter().find_map(|m| l.strip_prefix(m)))
+        .or_else(|| lines().next())
+        .unwrap_or("command failed");
+    // Advice sentences follow the actual reason; drop them at the first sentence end.
+    let line = match line.split_once(". ") {
+        Some((first, _)) => first,
+        None => line,
+    };
+    if line.chars().count() > MAX {
+        format!("{}…", line.chars().take(MAX - 1).collect::<String>())
+    } else {
+        line.to_owned()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Detached processes
 // ---------------------------------------------------------------------------
@@ -222,6 +255,37 @@ mod tests {
             "date alone is not a timestamp"
         );
         assert_eq!(parse_rfc3339_utc("1969-01-01T00:00:00Z"), None, "pre-epoch");
+    }
+
+    /// A failed command's stderr becomes one short list line: first line only, `error:`/`fatal:`
+    /// stripped, trailing advice sentence dropped, and hard-capped so it cannot wrap.
+    #[test]
+    fn stderr_shrinks_to_one_line() {
+        assert_eq!(
+            first_stderr_line("\nerror: could not determine base repo\nmore detail\n"),
+            "could not determine base repo"
+        );
+        // The real codeberg case: reason, then two sentences of advice.
+        assert_eq!(
+            first_stderr_line(
+                "none of the git remotes point to a known GitHub host. To tell gh about a \
+                 new GitHub host, please use `gh auth login`"
+            ),
+            "none of the git remotes point to a known GitHub host"
+        );
+        // git's diverged-checkout answer to `pull --ff-only`: two lines of fetch progress
+        // first, then the reason. Taking line one would have blamed the remote.
+        assert_eq!(
+            first_stderr_line(
+                "From /tmp/origin\n * branch  HEAD -> FETCH_HEAD\n\
+                 fatal: Not possible to fast-forward, aborting.\nhint: ...\n"
+            ),
+            "Not possible to fast-forward, aborting."
+        );
+        assert_eq!(first_stderr_line(""), "command failed");
+        let long = first_stderr_line(&"x".repeat(300));
+        assert_eq!(long.chars().count(), 80, "capped, with an ellipsis");
+        assert!(long.ends_with('…'));
     }
 
     /// `rel_time` buckets ages into today / yesterday / days / months / years.

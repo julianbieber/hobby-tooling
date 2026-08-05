@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::SystemTime;
 
-use hwt_core::parse_rfc3339_utc;
+use hwt_core::{first_stderr_line, parse_rfc3339_utc};
 use serde::Deserialize;
 
 pub use hwt_core::projects_root;
@@ -286,35 +286,9 @@ pub fn fetch_issues(project: &Project) -> Result<Vec<Issue>, String> {
         .output()
         .map_err(|e| format!("gh not runnable: {e}"))?;
     if !out.status.success() {
-        return Err(first_line(&String::from_utf8_lossy(&out.stderr)));
+        return Err(first_stderr_line(&String::from_utf8_lossy(&out.stderr)));
     }
     parse_issues(&out.stdout)
-}
-
-/// The first non-empty line of `gh`'s stderr, capped — enough to say *why* a project has
-/// no issues without wrapping the list in a paragraph of remote-configuration advice.
-///
-/// The cap is what keeps the project line to one row at the window's default width; `gh`
-/// happily emits a 200-character sentence telling you how to register a GitHub host.
-fn first_line(stderr: &str) -> String {
-    const MAX: usize = 80;
-
-    let line = stderr
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty())
-        .unwrap_or("gh failed");
-    let line = line.strip_prefix("error: ").unwrap_or(line);
-    // Advice sentences follow the actual reason; drop them at the first sentence end.
-    let line = match line.split_once(". ") {
-        Some((first, _)) => first,
-        None => line,
-    };
-    if line.chars().count() > MAX {
-        format!("{}…", line.chars().take(MAX - 1).collect::<String>())
-    } else {
-        line.to_owned()
-    }
 }
 
 /// Map `gh`'s JSON into [`Issue`]s, resolving the topic tag and task name. Split from
@@ -493,27 +467,5 @@ mod tests {
         // Malformed output is an error for one project's line, never a panic.
         assert!(parse_issues(b"{ not json").is_err());
         assert!(parse_issues(b"[]").unwrap().is_empty());
-    }
-
-    /// `gh`'s stderr becomes one short list line: first line only, `error:` stripped,
-    /// trailing advice sentence dropped, and hard-capped so it cannot wrap.
-    #[test]
-    fn gh_errors_shrink_to_one_line() {
-        assert_eq!(
-            first_line("\nerror: could not determine base repo\nmore detail\n"),
-            "could not determine base repo"
-        );
-        // The real codeberg case: reason, then two sentences of advice.
-        assert_eq!(
-            first_line(
-                "none of the git remotes point to a known GitHub host. To tell gh about a \
-                 new GitHub host, please use `gh auth login`"
-            ),
-            "none of the git remotes point to a known GitHub host"
-        );
-        assert_eq!(first_line(""), "gh failed");
-        let long = first_line(&"x".repeat(300));
-        assert_eq!(long.chars().count(), 80, "capped, with an ellipsis");
-        assert!(long.ends_with('…'));
     }
 }
