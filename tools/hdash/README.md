@@ -97,6 +97,28 @@ Two content toggles, both with load-bearing defaults:
 The sidebar filters by project. Counts ignore the project selection and session hides
 (a dismissal should not make a project's total drop) but do honour both toggles.
 
+## Pull — the one thing here that writes to a repo
+
+Each project's sidebar row carries a **Pull** button that runs `git pull --ff-only` in
+that project's main checkout (`~/fun_repos/<project>`), in the background. Not on the
+"All" row: `~/fun_repos` holds upstream clones too (see the limitations below), so one
+click that pulls every checkout would fire dozens of network fetches nobody asked for.
+
+`--ff-only` is the whole safety story. A diverged or dirty checkout is **refused**, with
+git's own reason on a line above the item list, rather than silently growing a merge
+commit or dropping an editor onto a terminal nobody is watching. Credential prompting is
+turned off (`GIT_TERMINAL_PROMPT=0`, ssh `BatchMode`) for the same reason: a prompt would
+otherwise hang a pool thread for the rest of the session.
+
+While a pull runs the button becomes a `…`, so there is nothing to click twice. The
+outcome — `pulled 3 commits`, `already up to date`, or `pull failed: <reason>` — is a
+line at the top of the item list, shown whichever project is selected, because the button
+that started it is visible from every project. Successes fade after ten seconds;
+failures stay until the next pull or **Refresh**.
+
+Worktrees are untouched. This pulls the checkout a `hwt new` branches *from*, not the
+branch you are working on.
+
 ## Fetching
 
 Three async reads, all through one `Fetch<K, M>` keyed at-most-once fan-out onto the
@@ -107,9 +129,13 @@ Three async reads, all through one `Fetch<K, M>` keyed at-most-once fan-out onto
 | git status | (task, repo) | every present task | none |
 | PR status (`gh pr view`) | (task, PR) | visible items | terminal states, on disk |
 | issues (`gh issue list`) | project | visible projects | none |
+| pull (`git pull --ff-only`) | project | clicked projects only | none |
 
 Git is eager because a local `git status` is cheap and the branch is what makes the
-list readable immediately. The other two are lazy: `gh` is a network call.
+list readable immediately. The other two reads are lazy: `gh` is a network call. The
+pull is neither — it writes, so it happens on a click and never as a side effect of a
+filter change, and its guard is dropped as soon as it answers so the same repo can be
+pulled again.
 
 The PR cache holds only **merged/closed** statuses — the states that can never change
 — in `~/.cache/hdash/pr-status.json`, falling back once to `hwt-overview`'s old path

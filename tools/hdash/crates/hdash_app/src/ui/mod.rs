@@ -17,6 +17,7 @@ use crate::model::join::{ItemKey, Model, UiState, item_visible, scan};
 use crate::model::launch::{
     launch_hcdev, launch_restore, launch_start, launch_terminal, open_notes, open_url,
 };
+use crate::model::pull::{PullMsg, PullOutcome, pull};
 use crate::model::task::{
     CachedPr, GitMsg, PrMsg, TaskId, clear_pr_cache, read_git, read_pr_cache, read_pr_status,
     toggle_done, write_pr_cache,
@@ -26,7 +27,7 @@ use card::{
     CardAction, CardButton, PrButton, SubtaskButton, install_pr_hover_tokens, spawn_item_card,
 };
 use chrome::{
-    ClearCacheButton, ItemListContainer, ProjectButton, RefreshButton, ShowDoneToggle,
+    ClearCacheButton, ItemListContainer, ProjectButton, PullButton, RefreshButton, ShowDoneToggle,
     ShowUntaggedToggle, build_chrome, ft_text_dim, rebuild_sidebar, update_header,
 };
 use fetch::Fetch;
@@ -47,6 +48,54 @@ struct PrFetch(Fetch<(TaskId, usize), PrMsg>);
 #[derive(Resource, Default)]
 struct IssueFetch(Fetch<String, IssueMsg>);
 
+/// A `git pull` per project, keyed by project name. The only fetch here that **writes** to a
+/// repo, so — unlike the other three — it is never dispatched by [`dispatch_all`]; it starts
+/// when the project's sidebar button is clicked and nowhere else.
+#[derive(Resource, Default)]
+struct PullFetch(Fetch<String, PullMsg>);
+
+/// How long a *finished* pull's status line stays on screen, in seconds. A failure has no
+/// expiry — its reason has to stay readable — and clears on the next pull or Refresh.
+const PULL_LINE_LINGER: f32 = 10.0;
+
+/// Where each project's pull has got to, keyed by project name.
+///
+/// UI state rather than model state: a pull is something the dashboard *does*, whereas
+/// [`Model`] is what a scan *found*. Keeping it out of `ProjectIssues` also means a Refresh
+/// (which rebuilds the model wholesale) cannot lose track of a pull still in flight.
+#[derive(Resource, Default)]
+pub(crate) struct Pulls {
+    map: HashMap<String, Pull>,
+}
+
+/// One project's pull.
+pub(crate) struct Pull {
+    state: PullState,
+    /// [`Time::elapsed_secs`] after which the status line disappears. `None` keeps it: a
+    /// running pull has no end time yet, and a failure is kept deliberately.
+    expires: Option<f32>,
+}
+
+pub(crate) enum PullState {
+    /// `git pull` is in flight.
+    Running,
+    /// It finished and did this.
+    Done(PullOutcome),
+    /// git refused, with this one-line reason.
+    Failed(String),
+}
+
+impl Pulls {
+    /// Whether a pull is in flight for this project — what makes the sidebar swap its button
+    /// for a `…`, and therefore the only reason `chrome` needs to see this resource.
+    pub(crate) fn running(&self, project: &str) -> bool {
+        matches!(
+            self.map.get(project).map(|p| &p.state),
+            Some(PullState::Running)
+        )
+    }
+}
+
 /// In-memory mirror of the on-disk terminal-PR-status cache, keyed by PR URL. Merged/closed
 /// statuses land here so they're served without calling `gh` on the next launch. Refresh keeps it
 /// (only re-querying PRs that can still change); Clear cache wipes it (memory + disk).
@@ -65,6 +114,8 @@ impl Plugin for UiPlugin {
             .init_resource::<GitFetch>()
             .init_resource::<PrFetch>()
             .init_resource::<IssueFetch>()
+            .init_resource::<PullFetch>()
+            .init_resource::<Pulls>()
             // Registered up front, not inserted by `load_pr_cache`: `dispatch_all` takes it
             // as a plain `Res`, which panics on a missing resource, and relying on a
             // command flush landing between two `Startup` systems is a needless hazard.
@@ -80,18 +131,27 @@ impl Plugin for UiPlugin {
                     drain_git,
                     drain_pr,
                     drain_issues,
+                    drain_pulls,
+                    expire_pull_lines,
                     dispatch_all
                         .run_if(resource_changed::<Model>.or_else(resource_changed::<UiState>)),
-                    rebuild_sidebar
-                        .run_if(resource_changed::<Model>.or_else(resource_changed::<UiState>)),
-                    rebuild_item_list
-                        .run_if(resource_changed::<Model>.or_else(resource_changed::<UiState>)),
+                    rebuild_sidebar.run_if(
+                        resource_changed::<Model>
+                            .or_else(resource_changed::<UiState>)
+                            .or_else(resource_changed::<Pulls>),
+                    ),
+                    rebuild_item_list.run_if(
+                        resource_changed::<Model>
+                            .or_else(resource_changed::<UiState>)
+                            .or_else(resource_changed::<Pulls>),
+                    ),
                     update_header
                         .run_if(resource_changed::<Model>.or_else(resource_changed::<UiState>)),
                 )
                     .chain(),
             )
-            .add_observer(on_activate);
+            .add_observer(on_chrome_activate)
+            .add_observer(on_card_activate);
     }
 }
 
@@ -193,6 +253,30 @@ fn dispatch_prs(model: &Model, ui: &UiState, prs: &mut PrFetch, cache: &PrCache)
     }
 }
 
+/// Start a `git pull --ff-only` in one project's main checkout, unless one is already in
+/// flight there. Called from a click and from nowhere else — this is the only thing in the
+/// app that writes to a repo, so it never happens as a side effect of a filter change.
+fn start_pull(project: &str, model: &Model, fetch: &mut PullFetch, pulls: &mut Pulls) {
+    let Some(entry) = model.projects.iter().find(|p| p.project.name == project) else {
+        return;
+    };
+    let (name, path) = (entry.project.name.clone(), entry.project.path.clone());
+    let for_msg = name.clone();
+    let started = fetch.0.dispatch(name.clone(), move || PullMsg {
+        project: for_msg,
+        result: pull(&path),
+    });
+    if started {
+        pulls.map.insert(
+            name,
+            Pull {
+                state: PullState::Running,
+                expires: None,
+            },
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Drains
 // ---------------------------------------------------------------------------
@@ -268,6 +352,42 @@ fn drain_issues(issues: Res<IssueFetch>, mut model: ResMut<Model>) {
     }
 }
 
+/// Fold finished pulls in. The dispatch guard is dropped as each result lands, so the repo
+/// can be pulled again — it exists to stop a double click starting two `git pull`s in one
+/// checkout, not to remember the answer the way the read-only fetches do.
+fn drain_pulls(mut fetch: ResMut<PullFetch>, mut pulls: ResMut<Pulls>, time: Res<Time>) {
+    let msgs = fetch.0.drain(64);
+    if msgs.is_empty() {
+        return;
+    }
+    for msg in msgs {
+        fetch.0.forget(&msg.project);
+        let (state, expires) = match msg.result {
+            Ok(outcome) => (
+                PullState::Done(outcome),
+                Some(time.elapsed_secs() + PULL_LINE_LINGER),
+            ),
+            Err(reason) => {
+                warn!("git pull failed for {}: {reason}", msg.project);
+                (PullState::Failed(reason), None)
+            }
+        };
+        pulls.map.insert(msg.project, Pull { state, expires });
+    }
+}
+
+/// Retire a successful pull's line once it has been readable for [`PULL_LINE_LINGER`]. Only
+/// touches the resource when something actually expires, so the item list is not rebuilt on
+/// every idle frame.
+fn expire_pull_lines(time: Res<Time>, mut pulls: ResMut<Pulls>) {
+    let now = time.elapsed_secs();
+    let expired = |p: &Pull| p.expires.is_some_and(|at| now >= at);
+    if !pulls.map.values().any(expired) {
+        return;
+    }
+    pulls.map.retain(|_, p| !expired(p));
+}
+
 // ---------------------------------------------------------------------------
 // Item list
 // ---------------------------------------------------------------------------
@@ -326,11 +446,39 @@ fn status_strip(model: &Model, ui: &UiState) -> Vec<(String, &'static str)> {
     lines
 }
 
+/// What each project's pull is doing, one line each. This is where a pull reports itself:
+/// the sidebar row has no room for git's reason when it refuses, and the strip does.
+///
+/// Deliberately **not** filtered by the project selection, unlike [`status_strip`]. A pull is
+/// an action the user just took, and the button that started it is visible on every project's
+/// row whichever one is selected — so its answer has to be too. There is no aggregation for
+/// the same reason there is no pull button on "All": only clicked projects appear here, and
+/// there are never fifty of them.
+fn pull_strip(model: &Model, pulls: &Pulls) -> Vec<(String, &'static str)> {
+    model
+        .projects
+        .iter()
+        .filter_map(|entry| {
+            let name = &entry.project.name;
+            Some(match &pulls.map.get(name)?.state {
+                PullState::Running => (format!("{name} · pulling…"), ft_text_dim()),
+                PullState::Done(outcome) => {
+                    (format!("{name} · {}", outcome.summary()), kt::DOT_CLEAN)
+                }
+                PullState::Failed(reason) => {
+                    (format!("{name} · pull failed: {reason}"), kt::STATUS_CLOSED)
+                }
+            })
+        })
+        .collect()
+}
+
 fn rebuild_item_list(
     mut commands: Commands,
     container: Query<Entity, With<ItemListContainer>>,
     model: Res<Model>,
     ui: Res<UiState>,
+    pulls: Res<Pulls>,
     fonts: Res<KitFonts>,
 ) {
     let Ok(c) = container.single() else {
@@ -338,7 +486,10 @@ fn rebuild_item_list(
     };
     commands.entity(c).despawn_children();
 
-    for (msg, token) in status_strip(&model, &ui) {
+    let lines = pull_strip(&model, &pulls)
+        .into_iter()
+        .chain(status_strip(&model, &ui));
+    for (msg, token) in lines {
         let id = commands.spawn(text(&fonts, msg, 12.0, tok(token))).id();
         commands.entity(c).add_child(id);
     }
@@ -368,26 +519,38 @@ fn rebuild_item_list(
 // Click handling
 // ---------------------------------------------------------------------------
 
+/// Clicks on the window chrome: the sidebar and the header bar.
+///
+/// Split from [`on_card_activate`] because one observer over every button in the app
+/// outgrew Bevy's system-parameter limit. The seam is the natural one — chrome owns the
+/// fetch resources and the filters, cards own the model lookups and the shell actions — and
+/// each observer simply ignores an entity none of its queries match.
 #[allow(clippy::too_many_arguments)]
-fn on_activate(
+fn on_chrome_activate(
     ev: On<Activate>,
     projects: Query<&ProjectButton>,
+    pull_buttons: Query<&PullButton>,
     show_done: Query<(), With<ShowDoneToggle>>,
     show_untagged: Query<(), With<ShowUntaggedToggle>>,
     refreshes: Query<(), With<RefreshButton>>,
     clears: Query<(), With<ClearCacheButton>>,
-    cards: Query<&CardButton>,
-    pr_buttons: Query<&PrButton>,
-    subtask_buttons: Query<&SubtaskButton>,
     mut ui: ResMut<UiState>,
     mut model: ResMut<Model>,
     mut git: ResMut<GitFetch>,
     mut prs: ResMut<PrFetch>,
     mut issues: ResMut<IssueFetch>,
+    mut pull_fetch: ResMut<PullFetch>,
+    mut pulls: ResMut<Pulls>,
     mut cache: ResMut<PrCache>,
 ) {
     let e = ev.entity;
 
+    // Checked before the row it sits inside, though the two can never both match: a click on
+    // the button stops bubbling there, so the row's `ProjectButton` never sees it.
+    if let Ok(pull_btn) = pull_buttons.get(e) {
+        start_pull(&pull_btn.0, &model, &mut pull_fetch, &mut pulls);
+        return;
+    }
     if let Ok(pb) = projects.get(e) {
         ui.selected_project = pb.0.clone();
         return;
@@ -410,6 +573,11 @@ fn on_activate(
         git.0.reset();
         prs.0.reset();
         issues.0.reset();
+        // Finished pull lines are session chatter and go with the hides. A pull still in
+        // flight keeps both its line and its guard — its result is still coming.
+        pulls
+            .map
+            .retain(|_, p| matches!(p.state, PullState::Running));
         return;
     }
     if clears.contains(e) {
@@ -417,8 +585,20 @@ fn on_activate(
         cache.map.clear();
         prs.0.reset();
         dispatch_prs(&model, &ui, &mut prs, &cache);
-        return;
     }
+}
+
+/// Clicks on an item card: its action row, its PR lines, and its subtask lines.
+fn on_card_activate(
+    ev: On<Activate>,
+    cards: Query<&CardButton>,
+    pr_buttons: Query<&PrButton>,
+    subtask_buttons: Query<&SubtaskButton>,
+    mut ui: ResMut<UiState>,
+    mut model: ResMut<Model>,
+) {
+    let e = ev.entity;
+
     if let Ok(pr) = pr_buttons.get(e) {
         open_url(&pr.url);
         return;

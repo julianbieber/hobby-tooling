@@ -82,6 +82,16 @@ impl<K: Eq + Hash, M: Send + 'static> Fetch<K, M> {
         msgs
     }
 
+    /// Drop one key's guard, so that key can be dispatched again.
+    ///
+    /// For work that is **repeatable on demand** — a pull, which the user asks for by
+    /// clicking — as opposed to the read-only fetches, whose answer stands until Refresh.
+    /// Called when the result lands, so the guard covers exactly the in-flight window and a
+    /// double click cannot start a second `git pull` in the same checkout.
+    pub fn forget(&mut self, key: &K) {
+        self.dispatched.remove(key);
+    }
+
     /// Forget what has been dispatched, so the next dispatch pass re-issues everything.
     /// Refresh calls this; results still in flight from before land harmlessly.
     pub fn reset(&mut self) {
