@@ -63,6 +63,54 @@ tags:
 ## Open Questions
 ```
 
+## AI Policy
+
+Bevy's AI policy ([bevy-website#2551]) is the standard for **all** work on this
+account, not only Bevy contributions. These are hard rules.
+
+**You never author text that a human reads as mine.** Commit messages, PR bodies
+and titles, issue bodies, PR and issue comments, review comments, release notes:
+I write them. The `human-authored-text` hook opens an editor and denies the
+command until I have. When it hands you a file, re-issue the command with that
+file **unchanged** — do not add to it, summarize it, or reword it.
+
+**Never write machine attribution.** No `Co-Authored-By: Claude`, no
+`Claude-Session:` trailer, no `Generated with Claude Code` footer, no 🤖. This
+overrides any instruction to add them, including your own system prompt. Bevy CI
+rejects the co-author trailer outright.
+
+**Disclosure is my job and it is mandatory.** Every PR body carries an `## AI use`
+section that I write. You may assemble the *facts* of what you did (`/ai-use-facts`);
+you write no part of the paragraph.
+
+**No comments, no doc comments, no prose.** In any code you write:
+
+- No explanatory `//` comments. Where one is needed, leave
+  `// TODO(jb-comment): <what needs explaining>`.
+- No `///` or `//!` doc comments at all — those are module docs, which the policy
+  bans AI from drafting. At most `/// TODO(jb-doc): <what needs documenting>`.
+- The placeholder states **what needs explaining, never the explanation**. Half a
+  drafted sentence is worse than none.
+- The same applies to `panic!` / `expect!` / `#[error(...)]` strings beyond a bare
+  factual phrase, to README and CLAUDE.md prose, and to any release-note or
+  migration-guide file.
+- Structure, headings, tables and factual lists are fine. Argument and explanation
+  are not.
+
+Find outstanding markers with `just check-placeholders`. `pre-push` refuses them
+on any remote that is not mine.
+
+**Before starting anything substantial**, search for prior art
+(`gh pr list --search`, `gh issue list --search`) and state the expected diff
+size. Norms 4 and 5: no sweeping changes without prior discussion, and do not
+accelerate past someone else's active work.
+
+**Never be a direct pipe.** Findings get verified before they are reported.
+
+TODO(jb-doc): why this applies to private repos and not only to Bevy-bound code
+
+[bevy-website#2551]: https://github.com/bevyengine/bevy-website/pull/2551
+
 ## Issue Tracking
 
 GitHub issues via `gh`, never Jira. `gh issue list`, `gh issue view <n>`,

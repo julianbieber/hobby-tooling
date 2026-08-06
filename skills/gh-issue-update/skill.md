@@ -1,13 +1,20 @@
 ---
-description: Post a concise, evidence-cited progress comment on the task's GitHub issue — only what's new, link don't duplicate
-allowed-tools: Bash(git branch:*), Bash(git -C:*), Bash(ls:*), Bash(pwd:*), Bash(git log:*), Bash(gh:*), Read
+description: Decide whether the task's GitHub issue warrants a progress comment, gather the evidence for one, and open the authoring buffer so I write it
+allowed-tools: Bash(git branch:*), Bash(git -C:*), Bash(ls:*), Bash(pwd:*), Bash(mkdir:*), Bash(git log:*), Bash(gh:*), Read, Write
 ---
 
-Post a short progress comment on the GitHub issue behind the current task. The
-goal is **low noise**: link to where the detail already lives (PRs, commits)
-instead of restating it, and report only outcomes you can back with evidence.
+Work out whether there is anything worth saying on the GitHub issue behind the
+current task, gather the evidence, and open the authoring gate so **I** write the
+comment.
 
-## Writing Standard (applies to everything this skill writes)
+**You do not write the comment.** A comment on an issue is public writing; Bevy AI
+policy norm 6 asks for text synthesized from scratch rather than generated and
+revised. The judgement about *whether* to comment is yours; the words are mine.
+
+The goal is **low noise**: link to where the detail already lives (PRs, commits)
+instead of restating it, and surface only outcomes backed by evidence.
+
+## Facts standard (applies to everything this skill writes)
 
 - **Evidence-gated:** Only call something done/working when there is evidence —
   a passing test (name it), command output, an open/merged PR (#), a commit SHA.
@@ -63,26 +70,39 @@ instead of restating it, and report only outcomes you can back with evidence.
    clears the bar, tell the user there is nothing worth posting and stop — no
    filler comments.
 
-5. **Compose the comment** with the template below:
+5. **Write the facts** to `${XDG_RUNTIME_DIR:-/tmp}/hobby-authoring-gate/facts.md`
+   (`mkdir -p` first) — the evidence, not the comment:
 
-   - **Link, don't duplicate.** Reference the PR (`#123`) or commit SHA; do not
-     paste diffs, file lists, or code that already lives in the PR.
-   - State only verified outcomes, citing evidence inline.
-   - Keep it to a few bullets. Omit any section with no new info.
+   ```markdown
+   ## New since the last comment
+   - PR #<n> <state> — <url>
+   - <sha> <subject>
+   - passing: <test names>, from `<command>`
+   - blocker: <what>, evidence <where>
 
-6. **Post it:**
+   ## Deliberately not surfaced
+   - <what, and why it does not clear the bar>
 
-   ```bash
-   gh issue comment <n> --body "$(cat <<'BODY'
-   ...
-   BODY
-   )"
+   ## Last comment on the issue
+   <date> — <first line, for me to avoid repeating it>
    ```
 
-   Run it from the project's worktree or main checkout so `gh` resolves the right
-   repo.
+   **Link, don't duplicate.** Reference the PR (`#123`) or commit SHA; never paste
+   diffs, file lists or code that already lives in the PR.
 
-7. **Confirm to the user** what was posted, and what you deliberately skipped.
+6. **Open the gate.** Run exactly:
+
+   ```bash
+   gh issue comment <n>
+   ```
+
+   No `--body`. Run it from the project's worktree or main checkout so `gh`
+   resolves the right repo. The `human-authored-text` hook intercepts, opens the
+   buffer, and denies the call. Re-issue exactly as instructed, with the
+   `--body-file` it names. Change nothing in the file.
+
+7. **Confirm** what was posted, and what you deliberately skipped. If the gate
+   says I wrote nothing, say nothing was posted and stop.
 
 ## Decision Rules — what's worth a comment
 
@@ -104,9 +124,10 @@ instead of restating it, and report only outcomes you can back with evidence.
 - Restating the diff or file list. The PR is the source of truth for *what
   changed*; the issue comment is for *why it matters and where to look*.
 
-## Comment Template
+## Comment shape
 
-Include only sections with new info. Link out; don't duplicate.
+The buffer the gate opens is empty. This is the shape I tend to write, kept here
+so the facts file lines up with it — **not** a template for you to fill in.
 
 ```markdown
 ## Update
@@ -119,7 +140,8 @@ Include only sections with new info. Link out; don't duplicate.
 **Next:** {only if it changed — concrete, not speculative}
 ```
 
-Example (good — links and cites, no restated diff):
+Example of the register (mine, from an earlier task — links and cites, no
+restated diff):
 
 ```markdown
 ## Update

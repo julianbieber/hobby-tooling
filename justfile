@@ -49,7 +49,7 @@ default:
 # ---------------------------------------------------------------------------
 
 # Everything a new machine needs, in dependency order. Safe to re-run.
-bootstrap: preflight clone-notes git-identity bootstrap-config install-chobby install-conversation install-shell wire-nushell install-hooks install-skills install-claude-md local-paths wire-helix
+bootstrap: preflight clone-notes git-identity install-git-hooks bootstrap-config install-chobby install-conversation install-shell wire-nushell install-hooks install-skills install-claude-md local-paths wire-helix
     @echo ""
     @echo "════════════════════════════════════════════════════════════════"
     @echo "Core install done. One manual step remains — the login is"
@@ -116,6 +116,40 @@ git-identity:
         git -C "$r" config user.email "{{GIT_EMAIL}}"
         echo "  $(basename "$r"): $(git -C "$r" config user.email)"
     done
+
+# TODO(jb-comment): why this is set globally rather than per-repo, and what that
+# obliges the hooks themselves to do
+
+# Enforce the AI policy in git itself — attribution, identity, placeholders
+install-git-hooks: _root-notice
+    #!/usr/bin/env bash
+    set -euo pipefail
+    chmod +x "{{REPO_ROOT}}"/githooks/commit-msg "{{REPO_ROOT}}"/githooks/pre-push
+    prev=$(git config --global core.hooksPath 2>/dev/null || true)
+    if [ -n "$prev" ] && [ "$prev" != "{{REPO_ROOT}}/githooks" ]; then
+        echo "  NOTE: core.hooksPath was $prev — replacing it."
+        echo "        If that directory held hooks you want, move them into a repo's"
+        echo "        .git/hooks; both hooks here chain to a local one of the same name."
+    fi
+    git config --global core.hooksPath "{{REPO_ROOT}}/githooks"
+    echo "  core.hooksPath -> {{REPO_ROOT}}/githooks"
+    echo "  active in ~/fun_repos and ~/fun_worktrees; a no-op everywhere else"
+
+# TODO(jb-comment): why the marker names what needs explaining and never drafts
+# the explanation, and why nothing here offers to fill one in
+
+# Find comment placeholders waiting for me to write the actual comment
+check-placeholders *DIR:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    target="{{ if DIR == '' { '.' } else { DIR } }}"
+    if rg -n --color always -e 'TODO\(jb-(comment|doc)\):' "$target"; then
+        echo ""
+        echo "Replace each with your own words before this leaves the machine."
+        echo "pre-push refuses them on any remote that is not mine."
+        exit 1
+    fi
+    echo "  no unfilled comment placeholders in $target"
 
 # ---------------------------------------------------------------------------
 # Claude config dir

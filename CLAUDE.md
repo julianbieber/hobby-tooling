@@ -276,6 +276,49 @@ directory would see no MCPs. `install-mcps` removes before adding, so re-running
 repoints an entry that still names a work binary instead of skipping it as already
 registered.
 
+## The AI policy is enforced in four layers
+
+Bevy's revised AI policy ([bevy-website#2551]) applies to **all** work on this
+account, not only Bevy contributions. Four layers, ordered by how hard they are to
+bypass.
+
+| Layer | Where | Enforces |
+|---|---|---|
+| 1 | `githooks/` — global `core.hooksPath` | no machine attribution, no work identity, no placeholders on a public remote |
+| 2 | `hooks/human-authored-text/` — `PreToolUse` | I write every message, body and comment; a PR carries a filled `## AI use` section |
+| 3 | `skills/pr-facts`, `ai-use-facts`, `explain-back`, `gh-issue-*`, `dev-flow` gates 0 and 2.5 | facts instead of drafts; prior-art and size checks; understanding checked before the PR |
+| 4 | `dotfiles/claude-md/hobby.CLAUDE.md`, `just check-placeholders` | no AI-written comments, doc comments or prose |
+
+`githooks/policy-lib.sh` is the single definition of the banned patterns, the
+placeholder token and the expected commit email. Layer 2 sources it.
+
+The placeholder tokens are `TODO(jb-comment)` (inline) and `TODO(jb-doc)` (doc
+comments and README sections). They name **what needs explaining, never the
+explanation**.
+
+### TODO(jb-doc): why layer 1 is the only one that counts as a guarantee
+
+<!-- What it should cover: where the Co-Authored-By trailer actually comes from,
+     and what a permission rule does to every layer above 1. -->
+
+### TODO(jb-doc): why the gate denies rather than rewriting the command
+
+<!-- What it should cover: updatedInput was verified as available on PreToolUse
+     before this was built, so it is a choice; the shell-quoting problem, and what
+     the .sha registry guarantees. -->
+
+### TODO(jb-doc): why stripping the trailer is only half of it
+
+<!-- What it should cover: norm 1 bans the trailer, norm 2 requires a disclosure,
+     and what the ledger in /ai-use-facts is for. -->
+
+### TODO(jb-doc): why the style rule applies to this private repo too
+
+<!-- What it should cover: the argument for habit over scope, and what the
+     repo's previous comment style was for. -->
+
+[bevy-website#2551]: https://github.com/bevyengine/bevy-website/pull/2551
+
 ## Installing
 
 `just bootstrap` is the fresh-machine entry point; `just doctor` diagnoses an

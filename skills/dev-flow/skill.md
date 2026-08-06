@@ -1,11 +1,11 @@
 ---
 description: Run my default hobby development loop as a predictable, human-gated pipeline — read task, HMML-plan, self-review, (human gate), implement, self-review, test, (human gate) PR, journal
 argument-hint: '[plan|implement|pr|journal] [--no-hmml] [--resume-deep]'
-allowed-tools: Skill, Read, Write, Bash(pwd:*), Bash(ls:*), Bash(git branch:*), Bash(git -C * status:*), Bash(git -C * diff:*), Bash(git -C * log:*), Bash(git -C * rev-parse:*), Bash(git -C * ls-files:*), Bash(git status:*), Bash(git diff:*), Bash(git log:*), Bash(gh pr list:*), Bash(gh pr view:*), Bash(gh issue view:*)
+allowed-tools: Skill, Read, Write, Bash(pwd:*), Bash(ls:*), Bash(git branch:*), Bash(git -C * status:*), Bash(git -C * diff:*), Bash(git -C * log:*), Bash(git -C * rev-parse:*), Bash(git -C * ls-files:*), Bash(git status:*), Bash(git diff:*), Bash(git log:*), Bash(gh pr list:*), Bash(gh pr view:*), Bash(gh issue view:*), Bash(gh issue list:*)
 ---
 
 Run my **default development loop** as one predictable, human-gated pipeline. I
-have the individual skills already (`resume-journal`, the HMML suite, `pr-create`,
+have the individual skills already (`resume-journal`, the HMML suite, `pr-facts`,
 `journal`); this skill is the **thin orchestrator** that runs them in a fixed
 order, stops hard at the two points where I take over, and can resume in a later
 session exactly where it left off.
@@ -27,6 +27,9 @@ except where a sub-skill already does (`resume-journal`).
    `.hmml` baseline lives). Committing the `.hmml` baseline and the code is *my*
    call, same contract as every sub-skill. You may run read-only git,
    `gh pr list`, and `gh issue view`.
+3. **Never author text that goes public** — commit messages, PR bodies, issue
+   bodies, comments. Those go through the `human-authored-text` gate, and every
+   phase below that produces one hands off to it.
 
 ## Step 0 — Resolve task context and current phase
 
@@ -35,7 +38,7 @@ except where a sub-skill already does (`resume-journal`).
    **second** the topic, the **third** the task ID (use it verbatim, blurb suffix
    and all). There is no repo level — the task dir is the worktree. Fall back to
    `git branch --show-current` (skip `master`/`main`/`develop`). This is the same
-   parsing `resume-journal` and `pr-create` use.
+   parsing `resume-journal` and `pr-facts` use.
 2. **State file** lives at
    `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/dev-flow.json`:
    ```json
@@ -63,6 +66,26 @@ transition. Do not `git add`/`commit` it.
 ______________________________________________________________________
 
 ## Phase `plan` (steps 1–3) → GATE 1
+
+**Step 0b — GATE 0: prior art and size.** Before any spec or code. Bevy AI policy
+norms 4 and 5: no sweeping changes without prior discussion, and do not accelerate
+past someone else's active work.
+
+- Search for prior art on the repo this task targets:
+  `gh pr list --search "<keywords>" --state all` and
+  `gh issue list --search "<keywords>" --state all`. Report anything overlapping,
+  with its state and its author.
+- State an expected size: files to be touched, rough lines changed.
+- Print both and **stop** if either of these holds: an open PR or an active issue
+  covers this work, or the expected change exceeds **10 files or 500 lines**. Ask
+  whether to proceed, narrow, or coordinate with the existing effort.
+
+Record `size_budget` and `prior_art` in the state file. If the implementation
+later crosses the stated budget, say so at Gate 2 rather than at the end.
+
+On a repo that is mine alone, prior art is usually empty and this costs one
+command. On an upstream repo it is the difference between a welcome PR and a
+closed one.
 
 **Step 1 — Read the task.** Invoke `resume-journal` (or `resume-deep` if
 `--resume-deep`) to load a focused digest of the notes for this task. If the task
@@ -147,25 +170,40 @@ review treatment, say so and I'll install the review skills.
   report **`CONFORMS`** to the committed spec. Report any residual `SPEC-AHEAD`
   as unfinished work.
 
+**Step 8b — GATE 2.5: explain-back.** Run `explain-back`. It walks the branch diff
+hunk by hunk and grades my explanation of each. Bevy AI policy norm 1 — *you must
+personally understand every line you submit* — is the one rule no hook can check,
+so it is checked here, before the PR exists.
+
+Record the tally in the state file. Any hunk I could not explain is carried into
+GATE 2 by name; it is not a PR blocker on its own, but I decide what happens to it
+(read it properly, cut it, or rewrite it myself) before the PR opens.
+
 **→ GATE 2 (step 9): HARD STOP.** Set `phase: await-pr-review`, write the state
 file, then print:
 
 - the worktree diff summary (files + a one-line-per-file what-changed),
 - the step-7 review outcome (fixed vs deferred),
 - the step-8 evidence (test names/output, validate verdict),
-- a **proposed PR title + body** (why + post-merge behaviour — the shape
-  `pr-create` wants),
+- the step-8b tally, and any hunk I could not explain, by name,
+- the size against the Gate 0 budget, and by how much it was crossed,
 - the instruction: *"Review the above. Say continue to open the draft PR, or tell
   me what to change."*
 
-End your turn. Do **not** run `pr-create` yet.
+**Do not propose a PR title or body.** Norm 8 bans AI-drafted PR descriptions, and
+a proposal at this gate is a draft I would then edit — which is what norm 6 asks
+me not to do. The facts go to `pr-facts`; the words are mine.
+
+End your turn. Do **not** run `pr-facts` yet.
 
 ______________________________________________________________________
 
 ## Phase `pr` (step 9, on my go)
 
-Only after I say continue at GATE 2: run `pr-create`. It opens `$EDITOR` on the
-`gh pr create` command via the edit-before-execute hook so I finalize the body.
+Only after I say continue at GATE 2: run `pr-facts`. It gathers the evidence, runs
+`ai-use-facts` for the disclosure record, and opens `gh pr create` with no title
+or body so the `human-authored-text` gate hands me the buffer. I write the
+description, including the mandatory `## AI use` section.
 The `track-pr` hook records the PR to `prs.json`. If for any reason the hook did
 not fire, append the PR to
 `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/prs.json` (create
