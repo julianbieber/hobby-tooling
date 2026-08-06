@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# Last check before anything leaves the machine: attribution, identity, and
+# unfilled comment placeholders.
+#
+# TODO(jb-doc): why the heaviest checks are here rather than at commit time
+#
+# Args:  $1 = remote name, $2 = remote URL
+# Stdin: <local-ref> <local-sha> <remote-ref> <remote-sha> per ref being pushed
+
+set -uo pipefail
+
+HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+# shellcheck source=./policy-lib.sh
+. "$HERE/policy-lib.sh"
+
+REMOTE_NAME="${1:-origin}"
+REMOTE_URL="${2:-}"
+ZERO='0000000000000000000000000000000000000000'
+
+# TODO(jb-comment): why stdin is read once up front
+REFS=$(cat)
+
+run_local_hook() {
+    local git_dir local_hook
+    git_dir=$(git rev-parse --git-dir 2>/dev/null) || return 0
+    local_hook="$git_dir/hooks/pre-push"
+    [ -x "$local_hook" ] || return 0
+    printf '%s\n' "$REFS" | "$local_hook" "$@" || exit $?
+}
+run_local_hook "$@"
+
+policy_in_scope || exit 0
+
+# TODO(jb-comment): what "mine" means here and why an empty URL counts as mine
+remote_is_mine() {
+    case "$REMOTE_URL" in
+        *github.com[:/]julianbieber/*)   return 0 ;;
+        *codeberg.org[:/]julianbieber/*) return 0 ;;
+        '')                              return 0 ;;
+        *)                               return 1 ;;
+    esac
+}
+
+RANGE_COMMITS=""
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+    [ -n "${local_sha:-}" ] || continue
+    # TODO(jb-comment): what an all-zero local sha means
+    [ "$local_sha" = "$ZERO" ] && continue
+
+    if [ "$remote_sha" = "$ZERO" ]; then
+        # TODO(jb-comment): why a new branch needs --not --remotes
+        commits=$(git rev-list "$local_sha" --not --remotes="$REMOTE_NAME" 2>/dev/null)
+    else
+        commits=$(git rev-list "$remote_sha..$local_sha" 2>/dev/null)
+    fi
+    RANGE_COMMITS="$RANGE_COMMITS $commits"
+done <<< "$REFS"
+
+RANGE_COMMITS=$(printf '%s' "$RANGE_COMMITS" | tr ' ' '\n' | sed '/^$/d' | sort -u)
+[ -n "$RANGE_COMMITS" ] || exit 0
+
+# --- 1. Machine attribution in any outgoing commit ---------------------------
+OFFENDERS=""
+while read -r sha; do
+    [ -n "$sha" ] || continue
+    if git log -1 --format='%B%n%an <%ae>%n%cn <%ce>' "$sha" \
+        | grep -q -i -E "$POLICY_ATTRIBUTION_RE"; then
+        OFFENDERS="$OFFENDERS
+  $(git log -1 --format='%h %s' "$sha")"
+    fi
+done <<< "$RANGE_COMMITS"
+
+if [ -n "$OFFENDERS" ]; then
+    policy_die "Machine attribution in commits about to be pushed." \
+        "$OFFENDERS" \
+        "" \
+        "$POLICY_ATTRIBUTION_DESC" \
+        "" \
+        "Rewrite before pushing:" \
+        "  git rebase -i --exec 'git commit --amend --no-edit' <base>" \
+        "or, for the tip commit only:  git commit --amend"
+fi
+
+# --- 2. Work identity on any outgoing commit ---------------------------------
+WRONG_ID=$(git log --format='%h %an <%ae>' $RANGE_COMMITS 2>/dev/null \
+    | grep -v -F "$POLICY_GIT_EMAIL" || true)
+if [ -n "$WRONG_ID" ]; then
+    policy_die "Commits authored under an identity that is not $POLICY_GIT_EMAIL." \
+        "$WRONG_ID" \
+        "" \
+        "  git config user.email $POLICY_GIT_EMAIL" \
+        "  git rebase -i --exec 'git commit --amend --reset-author --no-edit' <base>"
+fi
+
+# --- 3. Unfilled comment placeholders, public remotes only -------------------
+# TODO(jb-comment): why this one check is conditional on the remote
+if ! remote_is_mine; then
+    FIRST=$(printf '%s\n' "$RANGE_COMMITS" | tail -n1)
+    LAST=$(printf '%s\n' "$RANGE_COMMITS" | head -n1)
+    LEFT=$(git rev-parse "$FIRST^" 2>/dev/null || echo "$FIRST")
+    PLACEHOLDERS=$(git diff "$LEFT..$LAST" -U0 2>/dev/null \
+        | grep -E "^\+.*$POLICY_PLACEHOLDER_RE" || true)
+    if [ -n "$PLACEHOLDERS" ]; then
+        policy_die "Unfilled comment placeholders headed for $REMOTE_URL." \
+            "$PLACEHOLDERS" \
+            "" \
+            "Replace each with your own words." \
+            "Find them all:  just check-placeholders"
+    fi
+fi
+
+exit 0

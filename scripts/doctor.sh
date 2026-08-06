@@ -37,7 +37,7 @@ echo "Skills and hooks"
 n_sk=$(ls "$CFG"/commands/*.md 2>/dev/null | wc -l)
 [ "$n_sk" -gt 0 ] && ok "$n_sk skills installed" || bad "no skills installed" "just install-skills"
 n_hk=$(ls "$CFG"/hooks/*.sh 2>/dev/null | wc -l)
-[ "$n_hk" -eq 6 ] && ok "6 hooks installed" || bad "$n_hk/6 hooks installed" "just install-hooks"
+[ "$n_hk" -eq 7 ] && ok "7 hooks installed" || bad "$n_hk/7 hooks installed" "just install-hooks"
 # Named separately from the count because settings.json registers this one on
 # PostToolUse with an empty matcher: unlinked, it fails after EVERY tool call, and
 # a bare count would report the gap as "5/6" without saying which hook is loud.
@@ -110,6 +110,34 @@ for r in "$MAIN_CHECKOUT" "$NOTES"; do
     fi
 done
 [ -d "$HOME/fun_worktrees" ] && ok "~/fun_worktrees exists" || bad "~/fun_worktrees missing" "just clone-notes"
+
+echo ""
+echo "AI policy gates"
+# TODO(jb-comment): why a gap in this section is worse than a gap in the others
+HOOKS_PATH=$(git config --global core.hooksPath 2>/dev/null || true)
+WANT_HOOKS="$MAIN_CHECKOUT/githooks"
+if [ "$HOOKS_PATH" = "$WANT_HOOKS" ]; then
+    ok "core.hooksPath -> githooks/"
+elif [ -n "$HOOKS_PATH" ]; then
+    bad "core.hooksPath is $HOOKS_PATH" "just install-git-hooks"
+else
+    bad "core.hooksPath unset — nothing enforces the trailer ban" "just install-git-hooks"
+fi
+for h in commit-msg pre-push; do
+    if [ -x "$WANT_HOOKS/$h" ]; then ok "$h executable"; else bad "$h not executable" "just install-git-hooks"; fi
+done
+if [ -e "$CFG/hooks/human-authored-text.sh" ]; then
+    ok "authoring gate hook linked"
+else
+    bad "authoring gate hook missing" "just install-hooks"
+fi
+# TODO(jb-comment): why the event it is registered on is checked separately from
+# whether the hook exists
+if grep -q 'human-authored-text' "$CFG/settings.json" 2>/dev/null; then
+    ok "authoring gate registered in settings.json"
+else
+    bad "authoring gate not registered" "just bootstrap-config"
+fi
 
 echo ""
 echo "Optional extras"

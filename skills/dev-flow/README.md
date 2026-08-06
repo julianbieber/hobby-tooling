@@ -5,7 +5,7 @@
 | Type         | skill                                  |
 | Install path | `~/.claude-hobby/commands/dev-flow.md` |
 | Owner        | @julianbieber                          |
-| Dependencies | `resume-journal`, HMML suite, `pr-create`, `journal`; notes repo |
+| Dependencies | `resume-journal`, HMML suite, `pr-facts`, `journal`; notes repo |
 | Status       | experimental                           |
 
 ## Description

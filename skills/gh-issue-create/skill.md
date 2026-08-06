@@ -1,15 +1,20 @@
 ---
-description: Draft or refresh a GitHub issue body from the current conversation, then create or edit it with gh (with confirmation), tagging it with its topic
-allowed-tools: Bash(git branch:*), Bash(git remote:*), Bash(pwd:*), Bash(ls:*), Bash(gh:*), Read
+description: Gather the facts a GitHub issue needs, resolve its topic label, and open the authoring buffer so I write the issue myself
+allowed-tools: Bash(git branch:*), Bash(git remote:*), Bash(pwd:*), Bash(ls:*), Bash(mkdir:*), Bash(gh:*), Read, Write
 ---
 
-Write a proper GitHub issue **body**, derived from the **current conversation**,
-and tag the issue with the **topic** its work belongs under. Issues are usually
-opened before any notes exist, so this skill does NOT read the notes directory —
-the conversation is the source. It confirms with you before writing and preserves
-any meaningful existing body rather than overwriting blindly.
+Resolve which repo and topic an issue belongs to, gather what has been established
+about the problem, and open the authoring gate so **I** write the title and body.
 
-## Writing Standard (applies to everything this skill writes)
+**You do not write the issue body or title.** An issue is a public problem
+statement, and Bevy AI policy norm 9 requires those to be personally authored. Not
+a draft, not an outline, not a suggested title. If asked to write it, say what
+this skill does instead and run it.
+
+Issues are usually opened before any notes exist, so this skill does not read the
+notes directory — the conversation is the source.
+
+## Facts standard (applies to everything this skill writes)
 
 - **Evidence-gated:** Only call something done/working when there is evidence —
   a passing test (name it), command output, an open/merged PR (#), a commit SHA.
@@ -83,18 +88,18 @@ Rules:
    A refresh normally leaves labels alone — the one exception is a **missing topic
    tag**, which step 6b adds, since an untagged issue cannot be launched.
 
-4. **Assess the existing body**:
+4. **Capture the existing body verbatim** on a refresh. Quote it into the facts
+   file whole — links, issue references and notes-to-self included. I decide what
+   to keep. Do not fold, merge or condense it.
 
-   - If empty or boilerplate, draft fresh.
-   - If it has meaningful content (a real problem statement, acceptance criteria,
-     links), **preserve and incorporate it** — fold it into the template rather
-     than discarding. Do not drop links, issue references, or notes-to-self.
+5. **Gather the facts from the conversation** — what was established this session,
+   with citations, under the layout below. Facts only: the command that failed and
+   its output, the file and line, the issue numbers mentioned. No problem
+   statement, no goal, no acceptance criteria — those are the issue, and the issue
+   is mine to write.
 
-5. **Synthesize the body FROM THE CONVERSATION** (not from notes — they typically
-   don't exist yet). Pull the problem, goal, scope, acceptance criteria, and
-   out-of-scope from what has been discussed this session. Apply the Writing
-   Standard. Where something is genuinely unknown, write a clearly-marked `TODO`
-   rather than guessing.
+   Write them to `${XDG_RUNTIME_DIR:-/tmp}/hobby-authoring-gate/facts.md`
+   (`mkdir -p` first).
 
 6. **Resolve the topic and make sure its label exists** (see *The topic tag* above):
 
@@ -121,38 +126,35 @@ Rules:
       `gh label create` on an existing label is an error, not a no-op — check first.
       One shared colour for every topic label keeps them visually one family.
 
-7. **Show the proposed body AND the topic label to the user, and CONFIRM before
-   writing.** Present the full draft plus the `topic:<topic>` you resolved (say so
-   when the label or the topic itself would be new). For a refresh, state explicitly
-   that you are about to replace the existing body. Do not run `gh` until the user
-   approves. Incorporate any edits they give.
+7. **Report the topic label you resolved** — say when the label or the topic
+   itself would be new, and when a refresh would replace an existing body.
 
-8. **Write it:**
+8. **Open the gate.** Run exactly:
 
    a. **New issue:**
       ```bash
-      gh issue create --title "<title>" --label "topic:{topic}" --body "$(cat <<'BODY'
-      ...
-      BODY
-      )"
+      gh issue create --label "topic:{topic}"
       ```
-      Ask for a title first if the conversation doesn't imply an obvious one. Add
-      further labels only if the repo already uses them (`gh label list`).
+      No `--title`, no `--body`. Add further labels only if the repo already uses
+      them (`gh label list`).
 
-   b. **Existing issue:** body only — leave title, assignees, and state alone unless
-      asked:
+   b. **Existing issue:**
       ```bash
-      gh issue edit <n> --body "$(cat <<'BODY'
-      ...
-      BODY
-      )"
+      gh issue edit <n>
       ```
-      The single label exception: if the issue carries no `topic:` label, add one in
-      the same command (`--add-label "topic:{topic}"`), because an untagged issue
-      cannot be started from the dashboard. Never remove or replace other labels.
+      Add `--add-label "topic:{topic}"` when the issue carries no topic label —
+      an untagged issue cannot be started from the dashboard. Never remove or
+      replace other labels, and leave title, assignees and state alone unless
+      asked.
 
-9. **Confirm to the user** what was written and report the issue URL and the topic
-   label it carries.
+   The `human-authored-text` hook intercepts, opens the buffer with the facts
+   attached, and denies the call. **Re-issue exactly as it instructs**, with the
+   `--title` and `--body-file` it names and every other flag you had. Change
+   nothing in the file.
+
+9. **Report** the issue URL and the topic label it carries. If the gate says I
+   wrote nothing, say the issue was not filed and stop — do not retry, do not
+   offer to draft it.
 
 10. **Suggest the follow-up**, if a worktree doesn't exist yet — either of:
 
@@ -163,30 +165,26 @@ Rules:
     Both keep the task, the branch, and the issue traceable to each other, and
     `gh-{number}-{slug}` is exactly the task name the dashboard derives.
 
-## Issue-Body Template
+## Facts file layout
+
+Facts, with citations. The buffer the gate opens carries the issue's own headings
+— Problem, Goal, Scope, Out of scope, Context — and those are mine to fill.
 
 ```markdown
-## Problem
+## Observed
+- `<command run>` → <output, quoted>
+- <file>:<line> — <what is there>
 
-{What's wrong, missing, or wanted — grounded in the conversation. Cite evidence
-where the problem is observable (command output, a log line, a failing test). No
-speculation.}
+## Referenced this session
+- #<n> <title>
+- <url>
 
-## Goal
+## Existing body (refresh only)
+<the current body, verbatim, in full>
 
-{The intended outcome — what "solved" looks like. One or two sentences.}
+## Topic
+topic:<topic> — <existing | new>, label <exists | to be created>
 
-## Scope / acceptance criteria
-
-- [ ] {concrete, checkable criterion}
-- [ ] {concrete, checkable criterion}
-
-## Out of scope
-
-- {explicitly excluded work or follow-ups}
-
-## Context / links
-
-- {related issues (#n), PRs, docs, commands surfaced in the conversation. TODO
-  any unknowns rather than guessing.}
+## Unknown
+- <what was discussed but not established>
 ```

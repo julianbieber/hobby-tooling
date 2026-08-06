@@ -4,8 +4,10 @@
 # would actually be prompted — auto-allowed tools skip this entirely.
 #
 # Triggers:
-#   - Bash commands containing "gh pr create" or "git commit"
 #   - Write tool calls where content exceeds a size threshold
+#
+# TODO(jb-comment): why the Bash triggers were removed, and what treating an
+# unchanged buffer as approval did that made this unusable as a policy gate
 #
 # Behavior:
 #   - Content unchanged → exit 0 (normal accept/reject flow)
@@ -23,13 +25,8 @@ TOOL=$(echo "$INPUT" | jaq -r '.tool_name // "unknown"')
 
 case "$TOOL" in
   Bash)
-    COMMAND=$(echo "$INPUT" | jaq -r '.tool_input.command // empty')
-    # Only intercept commands that produce large authored text
-    if ! echo "$COMMAND" | grep -qP '(gh\s+pr\s+create|git\s+commit)'; then
-      exit 0
-    fi
-    EDITABLE="$COMMAND"
-    MODE="bash"
+    # Message-bearing commands now go through hooks/human-authored-text.
+    exit 0
     ;;
   Write)
     CONTENT=$(echo "$INPUT" | jaq -r '.tool_input.content // empty')
