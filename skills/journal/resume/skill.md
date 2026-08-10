@@ -9,7 +9,7 @@ settle on the next step, and returns a **focused** package: the goal narrowed to
 that step plus only the context that bears on it. This session stays lean.
 
 **Optional argument (`$ARGUMENTS`)**: a next-step bias hint describing what the
-user wants to work on (e.g. `/resume-journal continue the proxy pool work`). Use
+user wants to work on (e.g. `/journal:resume continue the proxy pool work`). Use
 it to pre-select / shortcut the "pick" step below. If empty, run the full survey
 → pick → focus flow.
 

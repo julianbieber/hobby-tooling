@@ -5,7 +5,7 @@
 | Type         | skill                                  |
 | Install path | `~/.claude-hobby/commands/dev-flow.md` |
 | Owner        | @julianbieber                          |
-| Dependencies | `resume-journal`, HMML suite, `pr-facts`, `journal`; notes repo |
+| Dependencies | `journal:resume`, HMML suite, `pr-facts`, `journal:write`; notes repo |
 | Status       | experimental                           |
 
 ## Description
@@ -31,7 +31,7 @@ Installed by `just install-skills` from `~/fun_repos/hobby-tooling`.
 /dev-flow                    # resume at the recorded/inferred phase
 /dev-flow plan               # force a phase
 /dev-flow --no-hmml           # skip the HMML steps, plan inline
-/dev-flow --resume-deep      # use resume-deep instead of resume-journal
+/dev-flow --resume-deep      # use journal:resume-deep instead of journal:resume
 ```
 
 ## Known Limitations

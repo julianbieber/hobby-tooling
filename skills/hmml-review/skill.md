@@ -27,7 +27,7 @@ in the plan.
    `<unit>` resolves to `<unit>.hmml` in the current task's spec directory
    `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/` (topic =
    first dir under `~/fun_worktrees`, task = second, from the worktree path — the
-   same detection `resume-journal` uses). With no argument, if the task
+   same detection `journal:resume` uses). With no argument, if the task
    dir holds exactly one `.hmml`, use it; if several, list them and ask which.
 2. **Read the spec** in full. Note the `source:` block and the sections the
    `kind` actually uses — `data` (role-less shapes for a Bevy kind, the whole

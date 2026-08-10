@@ -214,16 +214,21 @@ install-hooks: _root-notice
 # command pointing at nothing. `-xtype l` matches exactly the dangling links, so
 # live commands are never touched.
 
+# TODO(jb-comment): why a nested skill dir is how a `namespace:command` slash
+# command is spelled, and why the empty-dir sweep has to follow the link prune
+
 # Skills as slash commands in the hobby config dir
 install-skills: _root-notice
     @mkdir -p "{{CONFIG_DIR}}/commands"
-    @find "{{CONFIG_DIR}}/commands" -maxdepth 1 -xtype l -print -delete \
-        | sed 's|^.*/|  pruned stale skill: /|; s|\.md$||'
-    @for d in "{{REPO_ROOT}}"/skills/*/; do \
-        n=$(basename "$d"); \
+    @find "{{CONFIG_DIR}}/commands" -mindepth 1 -maxdepth 2 -xtype l -print -delete \
+        | sed 's|^{{CONFIG_DIR}}/commands/||; s|\.md$||; s|/|:|g; s|^|  pruned stale skill: /|'
+    @find "{{CONFIG_DIR}}/commands" -mindepth 1 -maxdepth 1 -type d -empty -delete
+    @for d in "{{REPO_ROOT}}"/skills/*/ "{{REPO_ROOT}}"/skills/*/*/; do \
         [ -f "$d/skill.md" ] || continue; \
-        ln -sf "$d/skill.md" "{{CONFIG_DIR}}/commands/$n.md"; \
-        echo "  skill: /$n"; \
+        rel=${d%/}; rel=${rel##*/skills/}; \
+        mkdir -p "$(dirname "{{CONFIG_DIR}}/commands/$rel.md")"; \
+        ln -sf "$d/skill.md" "{{CONFIG_DIR}}/commands/$rel.md"; \
+        echo "  skill: /$(printf '%s' "$rel" | tr / :)"; \
     done
 
 # CLAUDE.md for the worktree tree

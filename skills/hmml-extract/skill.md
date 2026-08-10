@@ -292,7 +292,7 @@ four sections, and **the derive decides which**.
    `~/fun_worktrees/{project}/{topic}/{task}` — the task dir is the worktree
    itself, there is no repo level below it; use `{task}` verbatim, including any
    blurb suffix, and fall back to the git branch if the path doesn't match — the
-   same detection `resume-journal` uses). The
+   same detection `journal:resume` uses). The
    filename is the `unit:` header + `.hmml`, placed **directly** in the task dir
    (no `<system>` subdirectory). The `system:` header is now an optional label,
    not a path component. Fill the `source` block:
