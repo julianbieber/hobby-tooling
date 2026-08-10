@@ -1,9 +1,9 @@
-# Journal
+# Journal: Write
 
 | Field        | Value                                                      |
 | ------------ | ---------------------------------------------------------- |
 | Type         | skill                                                      |
-| Install path | `~/.claude-hobby/commands/journal.md`                                        |
+| Install path | `~/.claude-hobby/commands/journal/write.md`                                        |
 | Owner        | @julianbieber                                              |
 | Dependencies | Notes repo at `~/fun_repos/hobby-mimisbrunnr/` |
 | Status       | experimental                                               |
@@ -37,15 +37,15 @@ a fresh session that isn't written down yet?"
 Installed by `just install-skills` from `~/fun_repos/hobby-tooling`, or manually:
 
 ```bash
-mkdir -p ~/.claude-hobby/commands/
-ln -s ~/fun_repos/hobby-tooling/skills/journal/skill.md \
-  ~/.claude-hobby/commands/journal.md
+mkdir -p ~/.claude-hobby/commands/journal/
+ln -s ~/fun_repos/hobby-tooling/skills/journal/write/skill.md \
+  ~/.claude-hobby/commands/journal/write.md
 ```
 
 ## Usage
 
 ```
-/journal
+/journal:write
 ```
 
 Runs against the current worktree / branch. Will ask for a task ID if it can't

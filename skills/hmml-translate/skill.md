@@ -32,7 +32,7 @@ end of this file are the reference.
    where `{topic}` is the first dir under `~/fun_worktrees` and `{task}` is the
    second (from `~/fun_worktrees/{project}/{topic}/{task}`; `{task}` verbatim including
    any blurb, falling back to the git branch) — the same detection
-   `resume-journal` uses. The filename is the `unit:` header plus `.hmml`,
+   `journal:resume` uses. The filename is the `unit:` header plus `.hmml`,
    **directly in the task dir** — there is no `<system>` subdirectory (the
    `system:` header is now an optional label). The human points at one `.hmml` (a
    path, or a `unit` name). Resolve it to the task dir and confirm the file

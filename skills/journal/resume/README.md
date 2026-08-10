@@ -1,9 +1,9 @@
-# Resume Journal
+# Journal: Resume
 
 | Field        | Value                                               |
 | ------------ | --------------------------------------------------- |
 | Type         | skill                                               |
-| Install path | `~/.claude-hobby/commands/resume-journal.md`                          |
+| Install path | `~/.claude-hobby/commands/journal/resume.md`                          |
 | Owner        | @julianbieber                                       |
 | Dependencies | Notes repo; `gh` CLI (optional, fallback only) |
 | Status       | experimental                                        |
@@ -26,9 +26,9 @@ plain issue summary and a "how do you want to proceed?" prompt.
 ## Installation
 
 ```bash
-mkdir -p ~/.claude-hobby/commands/
-ln -s ~/fun_repos/hobby-tooling/skills/resume-journal/skill.md \
-  ~/.claude-hobby/commands/resume-journal.md
+mkdir -p ~/.claude-hobby/commands/journal/
+ln -s ~/fun_repos/hobby-tooling/skills/journal/resume/skill.md \
+  ~/.claude-hobby/commands/journal/resume.md
 ```
 
 Or: `just install-skills`.
@@ -36,8 +36,8 @@ Or: `just install-skills`.
 ## Usage
 
 ```
-/resume-journal
-/resume-journal <what you want to work on next>
+/journal:resume
+/journal:resume <what you want to work on next>
 ```
 
 The optional argument biases the shortlist toward a specific next step and can

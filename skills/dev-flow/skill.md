@@ -5,8 +5,8 @@ allowed-tools: Skill, Read, Write, Bash(pwd:*), Bash(ls:*), Bash(git branch:*), 
 ---
 
 Run my **default development loop** as one predictable, human-gated pipeline. I
-have the individual skills already (`resume-journal`, the HMML suite, `pr-facts`,
-`journal`); this skill is the **thin orchestrator** that runs them in a fixed
+have the individual skills already (`journal:resume`, the HMML suite, `pr-facts`,
+`journal:write`); this skill is the **thin orchestrator** that runs them in a fixed
 order, stops hard at the two points where I take over, and can resume in a later
 session exactly where it left off.
 
@@ -14,7 +14,7 @@ session exactly where it left off.
 grammar, delta-vs-full-generation, PR body). Invoke the sub-skill and trust its
 contract. Keep the sequential "spine" in *this* main-loop context so each step
 reuses the last step's understanding — do **not** fan work out to subagents
-except where a sub-skill already does (`resume-journal`).
+except where a sub-skill already does (`journal:resume`).
 
 ## Two rules that override everything else
 
@@ -38,7 +38,7 @@ except where a sub-skill already does (`resume-journal`).
    **second** the topic, the **third** the task ID (use it verbatim, blurb suffix
    and all). There is no repo level — the task dir is the worktree. Fall back to
    `git branch --show-current` (skip `master`/`main`/`develop`). This is the same
-   parsing `resume-journal` and `pr-facts` use.
+   parsing `journal:resume` and `pr-facts` use.
 2. **State file** lives at
    `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/dev-flow.json`:
    ```json
@@ -55,7 +55,7 @@ except where a sub-skill already does (`resume-journal`).
    → `implement`; `gh pr list` shows an open PR for the branch → `done`.
 4. **Flags:** `--no-hmml` sets `no_hmml: true` (skip steps 2–5 entirely — plan the
    change inline in a sentence or two, then go straight to `implement`).
-   `--resume-deep` uses `resume-deep` instead of `resume-journal` in step 1.
+   `--resume-deep` uses `journal:resume-deep` instead of `journal:resume` in step 1.
 5. Announce the resolved `{project, topic, task, phase}` in one line, then run
    from that phase. Only run the phases from the current one onward — never redo
    an earlier phase.
@@ -87,7 +87,7 @@ On a repo that is mine alone, prior art is usually empty and this costs one
 command. On an upstream repo it is the difference between a welcome PR and a
 closed one.
 
-**Step 1 — Read the task.** Invoke `resume-journal` (or `resume-deep` if
+**Step 1 — Read the task.** Invoke `journal:resume` (or `journal:resume-deep` if
 `--resume-deep`) to load a focused digest of the notes for this task. If the task
 carries a `gh-<number>` prefix, also run `gh issue view <number>` for the
 acceptance criteria. Many hobby tasks have no issue at all — that is fine, the
@@ -217,7 +217,7 @@ ______________________________________________________________________
 
 ## Phase `journal` (step 10)
 
-Run `journal` to log progress for this task (goal, what changed, evidence, open
+Run `journal:write` to log progress for this task (goal, what changed, evidence, open
 items). Set `phase: done` in the state file. Print a one-line wrap-up: task, PR
 link (if any), and anything still open. End.
 

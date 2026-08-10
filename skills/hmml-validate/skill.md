@@ -64,7 +64,7 @@ for you. Map each finding to a verdict:
 
 1. **Identify the spec and fix the reference version.** Specs live **per task**
    in the team notes repo, directly in the task's notes directory (no `<system>`
-   subdirectory). Detect `{topic}`/`{task}` the same way `resume-journal`
+   subdirectory). Detect `{topic}`/`{task}` the same way `journal:resume`
    does: from the worktree path `~/fun_worktrees/{project}/{topic}/{task}`, `{topic}`
    is the first dir and `{task}` the second (verbatim, including any blurb
    suffix); fall back to the git branch name if the path is not under

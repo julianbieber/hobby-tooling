@@ -1,9 +1,9 @@
-# Resume Deep
+# Journal: Resume Deep
 
 | Field        | Value                                                                         |
 | ------------ | ----------------------------------------------------------------------------- |
 | Type         | skill                                                                         |
-| Install path | `~/.claude-hobby/commands/resume-deep.md`                                                       |
+| Install path | `~/.claude-hobby/commands/journal/resume-deep.md`                                                       |
 | Owner        | @julianbieber                                                                 |
 | Dependencies | Notes repo; cached schemas at `~/.claude/context/schemas/`; `known-issues.md` |
 | Status       | experimental                                                                  |
@@ -15,16 +15,16 @@ cached database schemas, recent git commits per repo in the worktree, and
 relevant entries from `known-issues.md`. Prints the `## Current State` section
 first so you see status before the rest of the context loads.
 
-Use this instead of `/julian:resume-journal` when you want everything a cold
+Use this instead of `/journal:resume` when you want everything a cold
 session would need before you start coding — schema context, git history, and
 open action items included.
 
 ## Installation
 
 ```bash
-mkdir -p ~/.claude-hobby/commands/
-ln -s ~/fun_repos/hobby-tooling/skills/resume-deep/skill.md \
-  ~/.claude-hobby/commands/resume-deep.md
+mkdir -p ~/.claude-hobby/commands/journal/
+ln -s ~/fun_repos/hobby-tooling/skills/journal/resume-deep/skill.md \
+  ~/.claude-hobby/commands/journal/resume-deep.md
 ```
 
 Or: `just install-skills`.
@@ -32,7 +32,7 @@ Or: `just install-skills`.
 ## Usage
 
 ```
-/resume-deep
+/journal:resume-deep
 ```
 
 ## Known Limitations

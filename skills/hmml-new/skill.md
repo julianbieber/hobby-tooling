@@ -63,7 +63,7 @@ that is where the shapes with **no** ECS role go (grammar §4.6).
    where `{topic}` and `{task}` are the first and second directories under
    `~/fun_worktrees` on the current worktree path
    (`~/fun_worktrees/{project}/{topic}/{task}`) — the same task/topic detection
-   `resume-journal` uses. Use `{task}` verbatim (including any blurb
+   `journal:resume` uses. Use `{task}` verbatim (including any blurb
    suffix); fall back to the git branch name if not under `~/fun_worktrees`. There
    is no `<system>` directory — the file sits directly in the task dir and its
    name is the `unit:` header value + `.hmml`.

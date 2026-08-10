@@ -34,7 +34,7 @@ if command -v chobby >/dev/null 2>&1; then ok "chobby on PATH"; else bad "chobby
 
 echo ""
 echo "Skills and hooks"
-n_sk=$(ls "$CFG"/commands/*.md 2>/dev/null | wc -l)
+n_sk=$(find "$CFG/commands" -mindepth 1 -maxdepth 2 -name '*.md' 2>/dev/null | wc -l)
 [ "$n_sk" -gt 0 ] && ok "$n_sk skills installed" || bad "no skills installed" "just install-skills"
 n_hk=$(ls "$CFG"/hooks/*.sh 2>/dev/null | wc -l)
 [ "$n_hk" -eq 7 ] && ok "7 hooks installed" || bad "$n_hk/7 hooks installed" "just install-hooks"
