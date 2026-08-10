@@ -82,7 +82,9 @@ if [ -n "$OFFENDERS" ]; then
 fi
 
 # --- 2. Work identity on any outgoing commit ---------------------------------
-WRONG_ID=$(git log --format='%h %an <%ae>' $RANGE_COMMITS 2>/dev/null \
+# TODO(jb-comment): why this needs --no-walk where check 1 gets the same effect from -1,
+# and what a repo whose history predates the policy sees without it.
+WRONG_ID=$(git log --no-walk --format='%h %an <%ae>' $RANGE_COMMITS 2>/dev/null \
     | grep -v -F "$POLICY_GIT_EMAIL" || true)
 if [ -n "$WRONG_ID" ]; then
     policy_die "Commits authored under an identity that is not $POLICY_GIT_EMAIL." \
