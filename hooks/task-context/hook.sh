@@ -52,6 +52,9 @@ if [ -f "$META" ]; then
   done_v=$(jaq -r '.done // false' "$META" 2>/dev/null || echo false)
   blocked_v=$(jaq -r 'if (.blocked // null) == null then "no" else ((.blocked.reason // "yes") + (if .blocked.until then " (until " + .blocked.until + ")" else "" end)) end' "$META" 2>/dev/null || echo "no")
   CTX="${CTX}Task status: done=${done_v}, blocked=${blocked_v}"$'\n'
+else
+  # No task.json: this worktree is an orphan. `hwt orphans` lists them, hdash offers Adopt.
+  CTX="${CTX}This worktree has no \`task.json\` in the notes repo, so it is not a recorded task (an orphan). \`hwt orphans\` lists them; hdash offers **Adopt**."$'\n'
 fi
 
 # --- notes ------------------------------------------------------------------

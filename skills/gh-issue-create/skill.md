@@ -51,10 +51,11 @@ Rules:
 - **Directory-shaped values only**: `[A-Za-z0-9._-]+`, no leading dot, no spaces.
   `topic: features` (stray space) and `topic:a/b` are rejected by the dashboard as
   untagged. When in doubt, lowercase with `-` or `_` separators.
-- **Reuse an existing topic** where one fits. Existing topics are the second path
-  level: `ls ~/fun_worktrees/<project>/`. A new topic is fine when the work
-  genuinely doesn't belong to any of them — the label may name a topic whose
-  directory doesn't exist yet.
+- **Reuse an existing topic** where one fits. `hwt topics -p <project>` lists them
+  from the notes tree, which — unlike `ls ~/fun_worktrees/<project>/` — still shows a
+  topic whose last worktree was removed. A new topic is fine when the work genuinely
+  doesn't belong to any of them; the label may name a topic whose directory doesn't
+  exist yet.
 - **One topic per issue.**
 
 ## Instructions

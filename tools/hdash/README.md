@@ -22,6 +22,7 @@ one list.
 
 | Stage | Condition | Primary button |
 | --- | --- | --- |
+| orphan | a worktree with no `task.json` in the notes repo | **Adopt** — writes the `task.json` |
 | untagged | an issue with no usable `topic:` label | *(none — a line names the missing label)* |
 | startable | a tagged issue with no worktree | **Start task** — `hwt new` then `hcdev wt` |
 | active | a live worktree | **Open hcdev** |
@@ -30,6 +31,29 @@ one list.
 
 Plus, as they apply: **Done**/**Reopen**, **Terminal**, **Notes**, **Browser** (any
 card with an issue half — something neither predecessor could offer), **Hide**.
+
+## A task exists because the notes repo says so
+
+`notes/<project>/<topic>/<task>/task.json` is what makes a task, and the only thing that
+does. `~/fun_worktrees` is not enumerated: it answers `present`, and nothing else.
+
+| | source | answers |
+| --- | --- | --- |
+| a task exists | `notes/P/T/TASK/task.json` | which tasks there are |
+| a task is checked out | `~/fun_worktrees/P/T/TASK` | `present` — Active vs Removed |
+| a task is done / blocked | `task.json` | the badges and the sort rank |
+| what the work *is* | the GitHub issue | title, labels, author, `topic:` |
+
+A worktree with no `task.json` behind it is an **orphan**: on disk, recorded nowhere. It
+gets a card at the top of the list with an **Adopt** button that writes the file, byte for
+byte what `hwt new` writes. `hwt orphans` lists the same set from the CLI.
+
+`hwt` applies the identical rule (`known-tasks` reads the notes tree), so `hwt list | length`
+and the dashboard's task count agree.
+
+TODO(jb-doc): why the notes repo, and not the worktree tree, is the thing that decides
+
+TODO(jb-doc): why an orphan is surfaced for a click rather than adopted during the scan
 
 ## The join is what makes it one list
 
@@ -79,10 +103,11 @@ issue has a topic *label* and no topic *directory* to group under. Rank, then mo
 recent activity, then name:
 
 ```
-0  task, block lifted ("ready")     4  issue tagged, no worktree
-1  task active, PR awaiting review  5  task removed-but-remembered
-2  task active                      6  issue untagged
-3  task blocked                     7  task done
+0  orphan worktree                  5  issue tagged, no worktree
+1  task, block lifted ("ready")     6  task removed-but-remembered
+2  task active, PR awaiting review  7  issue untagged
+3  task active                      8  task done
+4  task blocked
 ```
 
 This keeps both predecessors' orders: `hwt-overview`'s ready < active < blocked <
@@ -94,8 +119,22 @@ Two content toggles, both with load-bearing defaults:
 - **Show untagged** — on. An untagged issue is the one item the app cannot act on, so
   it is the one that most needs to be seen.
 
-The sidebar filters by project. Counts ignore the project selection and session hides
-(a dismissal should not make a project's total drop) but do honour both toggles.
+Neither toggle can hide an orphan.
+
+**"All" is a task list.** Issues are queried for the selected project only (see *Fetching*),
+so with no project selected there is nothing to show but tasks — an issue-only card under
+"All" would report whichever projects happened to be visited this session and no others.
+Select a project to see its issues.
+
+The sidebar filters by project, and leads with the projects that have a `notes/<project>/`
+directory; the rest of `~/fun_repos` follows after a divider. Every project keeps a row —
+with issues fetched per selection, a missing row would mean unreachable issues. Counts
+ignore the project selection and session hides (a dismissal should not make a project's
+total drop) but do honour both toggles, so a project's badge can exceed the number of its
+cards visible under "All".
+
+TODO(jb-doc): why selection, rather than a denylist or an ownership filter, is what scopes
+the issue query
 
 ## Pull — the one thing here that writes to a repo
 
@@ -128,7 +167,7 @@ Three async reads, all through one `Fetch<K, M>` keyed at-most-once fan-out onto
 | --- | --- | --- | --- |
 | git status | (task, repo) | every present task | none |
 | PR status (`gh pr view`) | (task, PR) | visible items | terminal states, on disk |
-| issues (`gh issue list`) | project | visible projects | none |
+| issues (`gh issue list`) | project | the **selected** project only | none |
 | pull (`git pull --ff-only`) | project | clicked projects only | none |
 
 Git is eager because a local `git status` is cheap and the branch is what makes the
@@ -136,6 +175,10 @@ list readable immediately. The other two reads are lazy: `gh` is a network call.
 pull is neither — it writes, so it happens on a click and never as a side effect of a
 filter change, and its guard is dropped as soon as it answers so the same repo can be
 pulled again.
+
+Issues go one step further than lazy: under "All" **no** issue query is made at all.
+`~/fun_repos` holds ~50 checkouts, and querying every one of them on startup is what the
+Known Limitations below used to describe.
 
 The PR cache holds only **merged/closed** statuses — the states that can never change
 — in `~/.cache/hdash/pr-status.json`, falling back once to `hwt-overview`'s old path
@@ -178,13 +221,16 @@ crates/hdash_app     — model/{task,issue,join,launch} and ui/{chrome,card,fetc
 
 ## Known Limitations
 
-- **`~/fun_repos` holds upstream clones, not just my projects**, and every one of them
-  is asked for issues — a `bevy` or `helix` checkout contributes 200 (the fetch cap)
-  that are nobody's work here. `hgh-issues` had the same gap; the merged list makes it
-  louder, because those issues now share a list with tasks. There is no denylist or
-  ownership filter yet.
+- **`~/fun_repos` holds upstream clones, not just my projects.** Selecting `bevy` or
+  `helix` still fetches its 200 open issues (the fetch cap), none of which is work here.
+  There is no denylist or ownership filter — only the selection gate, which keeps them out
+  of the default view.
 - A **closed** issue whose task still exists shows as an unjoined task:
-  `gh issue list --state open` never returns it.
+  `gh issue list --state open` never returns it. Closing an issue therefore does not mark
+  its task done, and marking a task done does not close its issue — `task.json` is the only
+  authority on `done`.
+- **The issue ↔ task link is parsed from the directory name** (`matches_issue`), not
+  recorded, so a task named for no issue can never join one.
 - Projects with no GitHub remote (`bevy_asset_lsp` is on codeberg) and forks with
   issues disabled report a red line. Aggregated to one line while "All" is selected;
   select the project to see the reason.

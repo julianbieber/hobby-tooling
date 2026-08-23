@@ -21,6 +21,8 @@ use crate::model::task::{Pr, PrStatus, Repo, SubtaskRef, Task, TaskId};
 pub enum CardAction {
     /// Flip the `done` flag in the task's `task.json`.
     ToggleDone,
+    /// Write the missing `task.json` for an orphan worktree, making it a task.
+    Adopt,
     /// Open an `hcdev` session in an existing worktree.
     Hcdev,
     /// `hwt new` the worktree, then open an `hcdev` session in it.
@@ -94,7 +96,6 @@ pub fn spawn_item_card(
     card_id
 }
 
-/// `dot · #N · title · topic badge · state badge`.
 fn header_row(commands: &mut Commands, fonts: &KitFonts, item: &Item<'_>, stage: Stage) -> Entity {
     let header = commands.spawn(row(feathers_kit::sp::S, ())).id();
 
@@ -103,6 +104,7 @@ fn header_row(commands: &mut Commands, fonts: &KitFonts, item: &Item<'_>, stage:
         // Green means "a live worktree with nothing uncommitted". Everything else — an
         // unstarted issue, a removed worktree, uncommitted work — is amber.
         Stage::Active if item.task.is_some_and(|t| t.dirty_total() == 0) => DotState::Clean,
+        Stage::Orphan => DotState::Dirty,
         _ => DotState::Dirty,
     };
     let dot_id = commands.spawn(status_dot(dot)).id();
@@ -200,7 +202,12 @@ fn header_row(commands: &mut Commands, fonts: &KitFonts, item: &Item<'_>, stage:
                 .id();
             commands.entity(header).add_child(b);
         }
-        if !task.present {
+        if !task.adopted {
+            let b = commands
+                .spawn(badge(fonts, "orphan", kt::DOT_DIRTY, tok(ft_text_main())))
+                .id();
+            commands.entity(header).add_child(b);
+        } else if !task.present {
             let b = commands
                 .spawn(badge(fonts, "removed", kt::CHIP_BG, tok(ft_text_dim())))
                 .id();
@@ -210,8 +217,6 @@ fn header_row(commands: &mut Commands, fonts: &KitFonts, item: &Item<'_>, stage:
     header
 }
 
-/// `project · topic · when · @author`, the repo chip, the task/branch name, and — for an
-/// issue with no worktree — its other labels.
 fn meta_row(commands: &mut Commands, fonts: &KitFonts, item: &Item<'_>, stage: Stage) -> Entity {
     let meta = commands
         .spawn(Node {
@@ -299,8 +304,6 @@ fn meta_row(commands: &mut Commands, fonts: &KitFonts, item: &Item<'_>, stage: S
     meta
 }
 
-/// The action row. The primary button is always the item's next step; an untagged issue
-/// gets a line naming the missing label where that button would be.
 fn action_row(
     commands: &mut Commands,
     fonts: &KitFonts,
@@ -332,12 +335,15 @@ fn action_row(
 
     let mut buttons = Vec::new();
     if let Some(task) = item.task {
-        buttons.push(button(
-            commands,
-            Variant::Normal,
-            CardAction::ToggleDone,
-            if task.done { "Reopen" } else { "Done" },
-        ));
+        // An orphan has no `task.json` to flip, and Adopt is the only thing to do with it.
+        if task.adopted {
+            buttons.push(button(
+                commands,
+                Variant::Normal,
+                CardAction::ToggleDone,
+                if task.done { "Reopen" } else { "Done" },
+            ));
+        }
         if task.present {
             buttons.push(button(
                 commands,
@@ -393,6 +399,23 @@ fn action_row(
                 .id();
             buttons.push(hint);
         }
+        Stage::Orphan => {
+            let hint = commands
+                .spawn(text(
+                    fonts,
+                    "no task.json in the notes repo",
+                    12.0,
+                    tok(ft_text_dim()),
+                ))
+                .id();
+            buttons.push(hint);
+            buttons.push(button(
+                commands,
+                Variant::Primary,
+                CardAction::Adopt,
+                "Adopt",
+            ));
+        }
     }
 
     commands.entity(actions).add_children(&buttons);
@@ -446,8 +469,6 @@ fn repo_chip(commands: &mut Commands, fonts: &KitFonts, repo: &Repo) -> Entity {
 // PR section
 // ---------------------------------------------------------------------------
 
-/// The (label, color token) for a PR status. `Open` ("review") and the awaiting-review count both
-/// use the amber attention hue so work waiting for approval stands out.
 fn pr_status_style(status: PrStatus) -> (&'static str, &'static str) {
     match status {
         PrStatus::Loading => ("…", ft_text_dim()),
@@ -459,8 +480,6 @@ fn pr_status_style(status: PrStatus) -> (&'static str, &'static str) {
     }
 }
 
-/// Brighter "hover" twins of the PR-state fill colors, registered by [`install_pr_hover_tokens`] so
-/// a PR button lightens on mouseover (the affordance the feathers buttons get for free).
 mod pr_hover {
     pub const DIM: &str = "hdash.pr.hover.dim";
     pub const DIRTY: &str = "hdash.pr.hover.dirty";
@@ -468,7 +487,6 @@ mod pr_hover {
     pub const CLOSED: &str = "hdash.pr.hover.closed";
 }
 
-/// The hover-color token paired with a PR status's normal fill (see [`pr_status_style`]).
 fn pr_hover_token(status: PrStatus) -> &'static str {
     match status {
         PrStatus::Open => pr_hover::DIRTY,
@@ -487,8 +505,6 @@ pub fn install_pr_hover_tokens(mut theme: ResMut<Theme>) {
     theme.set_color(pr_hover::CLOSED, c(0xee, 0x85, 0x85)); // STATUS_CLOSED red → lighter
 }
 
-/// The collapsible PR section: a clickable header (`▸/▾ PRs (N)` + an amber awaiting-review count)
-/// and, when expanded, one `- #N title (state)` line per PR.
 fn pr_section(commands: &mut Commands, fonts: &KitFonts, task: &Task, expanded: bool) -> Entity {
     let section = commands
         .spawn(Node {
@@ -543,9 +559,6 @@ fn pr_section(commands: &mut Commands, fonts: &KitFonts, task: &Task, expanded: 
     section
 }
 
-/// One PR rendered as a clickable button whose fill is colored by PR state (amber = awaiting
-/// review, purple = merged, red = closed, dim = draft/loading/unknown). The label reads
-/// `#N title (state) · repo · opened date`. Clicking opens the PR's GitHub URL in the browser.
 fn pr_line(commands: &mut Commands, fonts: &KitFonts, pr: &Pr) -> Entity {
     let num = pr
         .number
@@ -605,8 +618,6 @@ fn pr_line(commands: &mut Commands, fonts: &KitFonts, pr: &Pr) -> Entity {
 // Subtask section
 // ---------------------------------------------------------------------------
 
-/// The Subtasks block: a dim `Subtasks (N)` label and one clickable line per owned subtask,
-/// always shown and indented to nest it under the parent task.
 fn subtask_section(commands: &mut Commands, fonts: &KitFonts, task: &Task) -> Entity {
     let section = commands
         .spawn(Node {
@@ -635,8 +646,6 @@ fn subtask_section(commands: &mut Commands, fonts: &KitFonts, task: &Task) -> En
     section
 }
 
-/// One owned subtask as a clickable chip-filled button. The label reads `task · blurb-or-goal`.
-/// Clicking filters the dashboard to the child's project so its card comes into view.
 fn subtask_line(
     commands: &mut Commands,
     fonts: &KitFonts,

@@ -37,9 +37,6 @@ impl LaunchSpec {
         }
     }
 
-    /// `hcdev wt <task> --project <p> --topic <t>` — project and topic are passed
-    /// explicitly because the same task name can exist under two projects and `hcdev wt`
-    /// errors on an ambiguous name rather than guessing.
     fn hcdev_cmd(&self) -> String {
         format!(
             "hcdev wt '{}' --project '{}' --topic '{}'",
@@ -47,10 +44,6 @@ impl LaunchSpec {
         )
     }
 
-    /// `hwt new …` then the `hcdev wt`, as one nushell command line.
-    ///
-    /// `| ignore` discards the path `hwt new` returns: a bare value in a non-final
-    /// `;`-separated nushell statement is not something to rely on.
     fn start_cmd(&self) -> String {
         format!(
             "hwt new '{}' -p '{}' -t '{}' --no-cd | ignore; {}",
@@ -61,16 +54,11 @@ impl LaunchSpec {
         )
     }
 
-    /// The terminal title for this task's session, spelled the way `hcdev` spells a
-    /// session name. Cosmetic only — `hcdev` shortens the name it hands zellij when the
-    /// three components overflow the socket path, and a window title has no such limit.
     fn session_title(&self) -> String {
         format!("hcdev-{}-{}-{}", self.project, self.topic, self.task)
     }
 }
 
-/// Run a nushell command in a detached alacritty. `--login` is what loads `hwt.nu` and
-/// `hcdev.nu`, so both are only reachable this way.
 fn launch_nu(dir: &str, title: &str, cmd: &str) {
     spawn_detached(&[
         "-f",
@@ -152,8 +140,6 @@ pub fn open_notes(task: &Task) {
 mod tests {
     use super::*;
 
-    /// The launch commands quote every interpolated component and pass project/topic
-    /// explicitly, so an ambiguous task name cannot make `hcdev` guess.
     #[test]
     fn launch_commands_are_explicit() {
         let spec = LaunchSpec {
@@ -176,8 +162,6 @@ mod tests {
         assert_eq!(spec.session_title(), "hcdev-wusel-perf-gh-7-chunk-loading");
     }
 
-    /// A task's spec comes from its path components, so a relabelled issue cannot send
-    /// `hcdev wt` to a topic directory that does not exist.
     #[test]
     fn task_specs_come_from_the_worktree_path() {
         let id = TaskId {

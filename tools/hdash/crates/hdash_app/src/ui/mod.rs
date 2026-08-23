@@ -19,8 +19,8 @@ use crate::model::launch::{
 };
 use crate::model::pull::{PullMsg, PullOutcome, pull};
 use crate::model::task::{
-    CachedPr, GitMsg, PrMsg, TaskId, clear_pr_cache, read_git, read_pr_cache, read_pr_status,
-    toggle_done, write_pr_cache,
+    CachedPr, GitMsg, PrMsg, TaskId, adopt, clear_pr_cache, read_git, read_pr_cache,
+    read_pr_status, toggle_done, write_pr_cache,
 };
 
 use card::{
@@ -32,25 +32,15 @@ use chrome::{
 };
 use fetch::Fetch;
 
-/// Git status per repo. Dispatched for every present task rather than only visible ones:
-/// a local `git status` is cheap, and having the branch already there is what makes the
-/// list readable the moment it appears.
 #[derive(Resource, Default)]
 struct GitFetch(Fetch<(TaskId, usize), GitMsg>);
 
-/// PR status per PR, dispatched only for visible items — `gh pr view` is a network call.
 #[derive(Resource, Default)]
 struct PrFetch(Fetch<(TaskId, usize), PrMsg>);
 
-/// Open issues per project, keyed by project name, dispatched only for visible projects.
-/// `~/fun_repos` holds repos that are not on GitHub at all, so querying every checkout up
-/// front would spend several seconds failing.
 #[derive(Resource, Default)]
 struct IssueFetch(Fetch<String, IssueMsg>);
 
-/// A `git pull` per project, keyed by project name. The only fetch here that **writes** to a
-/// repo, so — unlike the other three — it is never dispatched by [`dispatch_all`]; it starts
-/// when the project's sidebar button is clicked and nowhere else.
 #[derive(Resource, Default)]
 struct PullFetch(Fetch<String, PullMsg>);
 
@@ -71,8 +61,6 @@ pub(crate) struct Pulls {
 /// One project's pull.
 pub(crate) struct Pull {
     state: PullState,
-    /// [`Time::elapsed_secs`] after which the status line disappears. `None` keeps it: a
-    /// running pull has no end time yet, and a failure is kept deliberately.
     expires: Option<f32>,
 }
 
@@ -96,9 +84,6 @@ impl Pulls {
     }
 }
 
-/// In-memory mirror of the on-disk terminal-PR-status cache, keyed by PR URL. Merged/closed
-/// statuses land here so they're served without calling `gh` on the next launch. Refresh keeps it
-/// (only re-querying PRs that can still change); Clear cache wipes it (memory + disk).
 #[derive(Resource, Default)]
 struct PrCache {
     map: HashMap<String, CachedPr>,
@@ -167,9 +152,6 @@ fn load_pr_cache(mut cache: ResMut<PrCache>) {
 // Dispatch
 // ---------------------------------------------------------------------------
 
-/// Start whatever async work the current model and filters call for. Idempotent: each
-/// [`Fetch`]'s guard makes this at most one job per key, so it is safe to run on every
-/// model/filter change. Refresh resets the guards, which is what makes it re-query.
 fn dispatch_all(
     model: Res<Model>,
     ui: Res<UiState>,
@@ -193,15 +175,10 @@ fn dispatch_all(
         }
     }
 
-    // Issues: visible projects only.
-    for entry in &model.projects {
-        if ui
-            .selected_project
-            .as_deref()
-            .is_some_and(|sel| sel != entry.project.name)
-        {
-            continue;
-        }
+    // Issues: the selected project only. Nothing is fetched under "All".
+    if let Some(sel) = ui.selected_project.as_deref()
+        && let Some(entry) = model.projects.iter().find(|e| e.project.name == sel)
+    {
         let project = entry.project.clone();
         issues
             .0
@@ -214,9 +191,6 @@ fn dispatch_all(
     dispatch_prs(&model, &ui, &mut prs, &cache);
 }
 
-/// Resolve the status of every not-yet-queried PR of a currently-visible item. A PR whose
-/// terminal status is already cached is delivered straight from the cache with no `gh` call
-/// at all; everything else goes to the pool.
 fn dispatch_prs(model: &Model, ui: &UiState, prs: &mut PrFetch, cache: &PrCache) {
     for item in model.items() {
         if !item_visible(&item, ui) {
@@ -253,9 +227,6 @@ fn dispatch_prs(model: &Model, ui: &UiState, prs: &mut PrFetch, cache: &PrCache)
     }
 }
 
-/// Start a `git pull --ff-only` in one project's main checkout, unless one is already in
-/// flight there. Called from a click and from nowhere else — this is the only thing in the
-/// app that writes to a repo, so it never happens as a side effect of a filter change.
 fn start_pull(project: &str, model: &Model, fetch: &mut PullFetch, pulls: &mut Pulls) {
     let Some(entry) = model.projects.iter().find(|p| p.project.name == project) else {
         return;
@@ -281,8 +252,6 @@ fn start_pull(project: &str, model: &Model, fetch: &mut PullFetch, pulls: &mut P
 // Drains
 // ---------------------------------------------------------------------------
 
-/// Each drain touches `Model` mutably only when a message actually arrived, so idle frames
-/// don't trip change detection and rebuild the whole list.
 fn drain_git(git: Res<GitFetch>, mut model: ResMut<Model>) {
     let msgs = git.0.drain(256);
     if msgs.is_empty() {
@@ -297,8 +266,6 @@ fn drain_git(git: Res<GitFetch>, mut model: ResMut<Model>) {
     }
 }
 
-/// Folds PR results in, and records newly-learned terminal statuses (merged/closed) in the
-/// cache so future launches skip their `gh` query.
 fn drain_pr(prs: Res<PrFetch>, mut model: ResMut<Model>, mut cache: ResMut<PrCache>) {
     let msgs = prs.0.drain(256);
     if msgs.is_empty() {
@@ -352,9 +319,6 @@ fn drain_issues(issues: Res<IssueFetch>, mut model: ResMut<Model>) {
     }
 }
 
-/// Fold finished pulls in. The dispatch guard is dropped as each result lands, so the repo
-/// can be pulled again — it exists to stop a double click starting two `git pull`s in one
-/// checkout, not to remember the answer the way the read-only fetches do.
 fn drain_pulls(mut fetch: ResMut<PullFetch>, mut pulls: ResMut<Pulls>, time: Res<Time>) {
     let msgs = fetch.0.drain(64);
     if msgs.is_empty() {
@@ -376,9 +340,6 @@ fn drain_pulls(mut fetch: ResMut<PullFetch>, mut pulls: ResMut<Pulls>, time: Res
     }
 }
 
-/// Retire a successful pull's line once it has been readable for [`PULL_LINE_LINGER`]. Only
-/// touches the resource when something actually expires, so the item list is not rebuilt on
-/// every idle frame.
 fn expire_pull_lines(time: Res<Time>, mut pulls: ResMut<Pulls>) {
     let now = time.elapsed_secs();
     let expired = |p: &Pull| p.expires.is_some_and(|at| now >= at);
@@ -392,68 +353,28 @@ fn expire_pull_lines(time: Res<Time>, mut pulls: ResMut<Pulls>) {
 // Item list
 // ---------------------------------------------------------------------------
 
-/// The status lines above the list: which projects are not (yet) fully reported.
-///
-/// **Aggregated while "All" is selected.** `~/fun_repos` holds ~50 checkouts, most of them
-/// clones with no GitHub remote, so a line per project buried every actual card below the
-/// fold — the pre-merge issue dashboard could get away with per-project lines only because
-/// it printed them interleaved with that project's own cards. Selecting a project restores
-/// the full reason, which is the only time the reason is worth a line of its own.
 fn status_strip(model: &Model, ui: &UiState) -> Vec<(String, &'static str)> {
-    let visible = model.projects.iter().filter(|e| {
-        ui.selected_project
-            .as_deref()
-            .is_none_or(|sel| sel == e.project.name)
-    });
-
-    if ui.selected_project.is_some() {
-        return visible
-            .filter_map(|e| match &e.state {
-                FetchState::Loading => Some((
-                    format!("{} · loading issues…", e.project.name),
-                    ft_text_dim(),
-                )),
-                FetchState::Failed(reason) => Some((
-                    format!("{} · no issues from gh: {reason}", e.project.name),
-                    kt::STATUS_CLOSED,
-                )),
-                FetchState::Ready => None,
-            })
-            .collect();
-    }
-
-    let (mut loading, mut failed) = (0usize, 0usize);
-    for entry in visible {
-        match entry.state {
-            FetchState::Loading => loading += 1,
-            FetchState::Failed(_) => failed += 1,
-            FetchState::Ready => {}
-        }
-    }
-    let mut lines = Vec::new();
-    if loading > 0 {
-        lines.push((
-            format!("loading issues for {loading} projects…"),
-            ft_text_dim(),
-        ));
-    }
-    if failed > 0 {
-        lines.push((
-            format!("{failed} projects report no issues from gh — select one to see why"),
-            kt::STATUS_CLOSED,
-        ));
-    }
-    lines
+    let Some(sel) = ui.selected_project.as_deref() else {
+        return Vec::new();
+    };
+    model
+        .projects
+        .iter()
+        .filter(|e| e.project.name == sel)
+        .filter_map(|e| match &e.state {
+            FetchState::Loading => Some((
+                format!("{} · loading issues…", e.project.name),
+                ft_text_dim(),
+            )),
+            FetchState::Failed(reason) => Some((
+                format!("{} · no issues from gh: {reason}", e.project.name),
+                kt::STATUS_CLOSED,
+            )),
+            FetchState::Ready => None,
+        })
+        .collect()
 }
 
-/// What each project's pull is doing, one line each. This is where a pull reports itself:
-/// the sidebar row has no room for git's reason when it refuses, and the strip does.
-///
-/// Deliberately **not** filtered by the project selection, unlike [`status_strip`]. A pull is
-/// an action the user just took, and the button that started it is visible on every project's
-/// row whichever one is selected — so its answer has to be too. There is no aggregation for
-/// the same reason there is no pull button on "All": only clicked projects appear here, and
-/// there are never fifty of them.
 fn pull_strip(model: &Model, pulls: &Pulls) -> Vec<(String, &'static str)> {
     model
         .projects
@@ -505,7 +426,7 @@ fn rebuild_item_list(
 
     if shown == 0 {
         let msg = if model.projects.is_empty() && model.tasks.is_empty() {
-            "No projects under ~/fun_repos and no worktrees under ~/fun_worktrees."
+            "No projects under ~/fun_repos and no tasks in the notes repo."
         } else {
             "Nothing here. Toggle \"show done\"/\"show untagged\", or pick another project."
         };
@@ -519,12 +440,6 @@ fn rebuild_item_list(
 // Click handling
 // ---------------------------------------------------------------------------
 
-/// Clicks on the window chrome: the sidebar and the header bar.
-///
-/// Split from [`on_card_activate`] because one observer over every button in the app
-/// outgrew Bevy's system-parameter limit. The seam is the natural one — chrome owns the
-/// fetch resources and the filters, cards own the model lookups and the shell actions — and
-/// each observer simply ignores an entity none of its queries match.
 #[allow(clippy::too_many_arguments)]
 fn on_chrome_activate(
     ev: On<Activate>,
@@ -588,7 +503,6 @@ fn on_chrome_activate(
     }
 }
 
-/// Clicks on an item card: its action row, its PR lines, and its subtask lines.
 fn on_card_activate(
     ev: On<Activate>,
     cards: Query<&CardButton>,
@@ -640,6 +554,22 @@ fn on_card_activate(
             }
             return;
         }
+        CardAction::Adopt => {
+            let ItemKey::Task(id) = &btn.key else {
+                return;
+            };
+            match adopt(id) {
+                // The file is now on disk, so flipping the flag in place is the whole
+                // update: everything else about the task was already read from the worktree.
+                Ok(()) => {
+                    if let Some(task) = model.task_mut(id) {
+                        task.adopted = true;
+                    }
+                }
+                Err(err) => warn!("adopt failed for {id:?}: {err}"),
+            }
+            return;
+        }
         _ => {}
     }
 
@@ -678,6 +608,8 @@ fn on_card_activate(
                 open_url(&issue.url);
             }
         }
-        CardAction::Hide | CardAction::TogglePrs | CardAction::ToggleDone => unreachable!(),
+        CardAction::Hide | CardAction::TogglePrs | CardAction::ToggleDone | CardAction::Adopt => {
+            unreachable!()
+        }
     }
 }
