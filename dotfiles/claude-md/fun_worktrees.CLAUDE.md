@@ -36,6 +36,15 @@ task, and the main checkout it derives from is `~/fun_repos/<project>`.
 Derive topic and task from the path: they are the **second and third** components
 under `~/fun_worktrees`, with the project first.
 
+**`task.json` is what makes a task exist**, not the worktree directory. `hwt` and `hdash`
+both enumerate the notes tree; `~/fun_worktrees` only answers whether a task is currently
+checked out. A worktree with no `task.json` behind it is an *orphan* — `hwt orphans` lists
+them, and `hdash` offers **Adopt**.
+
+The notes dir outlives the worktree: `hwt rm` is routine, and the notes are committed
+and shared across machines while the worktree is scratch on one disk. A record that
+vanished with the checkout would lose the task every time.
+
 ## Commands
 
 ```
@@ -43,6 +52,7 @@ hwt new <task> -p <project> -t <topic>   create a task worktree + notes dir
 hwt go <task>                            cd to it (fuzzy, searches all projects)
 hwt tree                                 project -> topic -> task overview
 hwt done | block | unblock               task state
+hwt orphans                              worktrees with no task.json
 hwt rm <task>                            remove the worktree, keep the notes
 hwt restore <task>                       re-create a removed worktree
 hcdev wt <task>                          zellij session: Helix + Claude (hobby account)

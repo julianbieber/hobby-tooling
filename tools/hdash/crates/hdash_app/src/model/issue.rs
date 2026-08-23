@@ -1,6 +1,6 @@
 //! The issue half of the model: the project list, the `gh issue list` read, and the
 //! `topic:` tag convention. No Bevy UI here, and — unlike the pre-merge `hgh-issues` —
-//! **no filesystem access**: matching an issue to the worktree it spawned is
+//! **no walk of the worktree tree**: matching an issue to the worktree it spawned is
 //! [`super::join`]'s job, because the task half already holds that tree.
 //!
 //! The launch story hangs off one convention: **an issue names its topic with a
@@ -45,6 +45,12 @@ pub struct Project {
     pub name: String,
     /// Absolute path to the main checkout (`~/fun_repos/<name>`).
     pub path: PathBuf,
+    /// Whether `notes/<name>/` exists — i.e. whether a task has ever been done here.
+    ///
+    /// The sidebar orders on this rather than filtering on it: issues are fetched for the
+    /// selected project only, so a project with no row could never be selected and its issues
+    /// would be unreachable.
+    pub has_notes: bool,
 }
 
 /// Where a project's issue fetch has got to. Separating "not queried yet" from
@@ -126,7 +132,6 @@ pub fn topic_of<'a>(labels: impl IntoIterator<Item = &'a String>) -> Option<Stri
     })
 }
 
-/// Whether a topic value is usable as a directory name and as a shell argument.
 fn is_safe_topic(topic: &str) -> bool {
     !topic.is_empty()
         && !topic.starts_with('.')
@@ -219,9 +224,11 @@ pub fn scan_projects() -> Vec<ProjectIssues> {
         if name.starts_with('.') || !entry.path().is_dir() || !entry.path().join(".git").exists() {
             continue;
         }
+        let has_notes = hwt_core::notes_root().join(&name).is_dir();
         projects.push(Project {
             name,
             path: entry.path(),
+            has_notes,
         });
     }
     projects.sort_by(|a, b| a.name.cmp(&b.name));
@@ -239,7 +246,6 @@ pub fn scan_projects() -> Vec<ProjectIssues> {
 // gh
 // ---------------------------------------------------------------------------
 
-/// One issue as `gh issue list --json` emits it.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RawIssue {
@@ -321,8 +327,6 @@ pub fn parse_issues(json: &[u8]) -> Result<Vec<Issue>, String> {
 mod tests {
     use super::*;
 
-    /// The topic tag: prefixed labels only, first one wins, and a value that could not be
-    /// a directory name (or would need shell escaping) is rejected rather than sanitized.
     #[test]
     fn topic_comes_only_from_a_prefixed_label() {
         let labels = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
@@ -363,8 +367,6 @@ mod tests {
         );
     }
 
-    /// Task names match what `/gh-issue-create` suggests: `gh-<n>-<slug>`, truncated at a
-    /// dash boundary, and degrading to `gh-<n>` when a title has nothing sluggable.
     #[test]
     fn task_names_are_slugged_and_bounded() {
         assert_eq!(
@@ -394,8 +396,6 @@ mod tests {
         assert_eq!(task_name(5, ""), "gh-5");
     }
 
-    /// A task name is claimed by issue number, across every naming convention this repo
-    /// has used — and emphatically not by a number that merely appears in the name.
     #[test]
     fn worktrees_are_matched_by_issue_number() {
         // The current convention, plus the pre-convention spellings.
@@ -427,9 +427,6 @@ mod tests {
         }
     }
 
-    /// `gh`'s JSON maps to the model: labels flatten to names, the topic tag is split out
-    /// of the label list, and timestamps parse. No filesystem fixture — the worktree
-    /// lookup lives in `join` now, which is what frees this test from `HOME`.
     #[test]
     fn gh_json_maps_to_issues() {
         let json = br#"[

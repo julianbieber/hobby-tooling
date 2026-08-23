@@ -45,6 +45,7 @@ export def main [] {
     print "  hwt tree                                       Tree view: project / topic / task"
     print "  hwt go <task> [-p <proj>]                      Navigate to a worktree"
     print "  hwt status                                     Git status of all worktrees"
+    print "  hwt orphans                                    Worktrees with no task.json"
     print "  hwt rm <task> [-p <proj>] [-f]                 Remove worktree (keeps notes)"
     print "  hwt restore <task>                             Re-create a removed worktree"
     print "  hwt forget <task> [-a]                         Purge task metadata (-a: whole notes dir)"
@@ -61,6 +62,9 @@ export def main [] {
     print $"  ($PROJECTS_BASE)/<project>                       Main repositories"
     print $"  ($WORKTREE_BASE)/<project>/<topic>/<task>        The worktree itself"
     print $"  ($NOTES_BASE)/<project>/<topic>/<task>           Task notes"
+    print ""
+    print "A task exists because its notes dir holds a task.json. The worktree is a"
+    print "checkout it may or may not currently have."
 }
 
 # Ensure the worktree base directory exists
@@ -186,18 +190,12 @@ def task-state [task_path: path] {
     if $b.ready { "ready" } else { "blocked" }
 }
 
-# A topic is done iff it has at least one task and every task is done.
-def is-topic-done [topic_path: path] {
-    let tasks = try { ls $topic_path | where type == dir | get name } catch { return false }
+# A group of tasks (a topic, or a whole project) is done iff it holds at least
+# one task and every one of them is done. Takes `known-tasks` rows rather than a
+# worktree directory: a topic whose last worktree was removed still has tasks.
+def tasks-all-done [tasks: list] {
     if ($tasks | is-empty) { return false }
-    ($tasks | all { is-task-done $in })
-}
-
-# A project is done iff it has at least one topic and every topic is done.
-def is-project-done [project_path: path] {
-    let topics = try { ls $project_path | where type == dir | get name } catch { return false }
-    if ($topics | is-empty) { return false }
-    ($topics | all { is-topic-done $in })
+    ($tasks | all {|t| $t.done })
 }
 
 # Is a named zellij session currently running (exists and not EXITED)?
@@ -217,25 +215,26 @@ def flag-from-context [context: string, names: list<string>] {
 }
 
 # --- notes-tree inventory ---------------------------------------------------
-# The notes repo — not ~/fun_worktrees — is the durable record of which projects,
-# topics and tasks exist. `hwt rm` deletes the worktree and keeps the notes (and
-# prunes the now-empty topic and project dirs on the worktree side), so the
-# worktree tree is only ever a subset: completing from it hides every task
-# between `hwt rm` and `hwt forget`, and hides a topic entirely once its last
-# task is removed. Completions therefore read the notes tree, with the worktrees
-# as an additive source for the window where a checkout exists before its notes
-# dir does.
+# The notes repo — not ~/fun_worktrees — is what makes a task exist. `hwt rm`
+# deletes the worktree and keeps the notes (and prunes the now-empty topic and
+# project dirs on the worktree side), so the worktree tree is only ever a subset:
+# enumerating from it hides every task between `hwt rm` and `hwt forget`, and
+# hides a topic entirely once its last task is removed. Every command that asks
+# "what work exists" therefore reads the notes tree; the worktree tree answers
+# only "is it checked out".
+#
+# TODO(jb-comment): why hdash and hwt have to agree on this rule, not merely overlap
 
 # Every task directory under the notes tree, as [{project, topic, task}].
-# Directory-based rather than task.json-based on purpose: `hwt forget` (without
-# -a) drops task.json but keeps the journals, and older notes dirs predate the
-# file. The directory is what makes it a task.
+# A `task.json` is what marks the directory as a task — the same rule hdash
+# applies, and what makes `hwt forget` (which removes exactly that file) do what
+# it says. A notes dir without one is notes, not a task.
 def notes-task-dirs [] {
     if not ($NOTES_BASE | path exists) { return [] }
     try {
-        glob $"($NOTES_BASE)/*/*/*" --no-file --no-symlink
-        | each {|d|
-            let rel = ($d | path relative-to $NOTES_BASE | path split)
+        glob $"($NOTES_BASE)/*/*/*/task.json" --no-dir --no-symlink
+        | each {|f|
+            let rel = ($f | path dirname | path relative-to $NOTES_BASE | path split)
             { project: ($rel | get 0), topic: ($rel | get 1), task: ($rel | get 2) }
         }
     } catch { [] }
@@ -254,14 +253,15 @@ def notes-topic-dirs [] {
     } catch { [] }
 }
 
-# Every task either tree knows about, as
+# Every task the notes repo records, as
 # [{project, topic, task, path, present, done}], where `path` is the worktree
 # directory the task would occupy and `present` says whether it is checked out.
+#
+# The worktree tree is deliberately *not* unioned in: a directory under
+# ~/fun_worktrees with no task.json behind it is an orphan (see
+# `orphan-worktrees`), not a task.
 def known-tasks [] {
-    let live = (all-tasks | each {|t| { project: $t.project, topic: $t.topic, task: $t.task } })
     notes-task-dirs
-    | append $live
-    | uniq-by project topic task
     | each {|t|
         let path = ($WORKTREE_BASE | path join $t.project $t.topic $t.task)
         {
@@ -273,6 +273,14 @@ def known-tasks [] {
             done: (read-task-meta $t.project $t.topic $t.task).done
         }
     }
+}
+
+# Every worktree with no task.json in the notes repo, as
+# [{project, topic, task, path}]. The inverse of `known-tasks`: what is on disk
+# but not recorded.
+def orphan-worktrees [] {
+    all-tasks
+    | where {|t| not ((task-meta-path $t.project $t.topic $t.task) | path exists) }
 }
 
 # "2/5 open" / "all done" / "no tasks" for a group of known-tasks rows. Shown in
@@ -369,8 +377,9 @@ def task-completions [context?: string] {
     task-completion-rows false $context
 }
 
-# Only tasks with a checkout on disk — for `go`, `rm` and `claude`, where
-# offering a removed task could only ever produce "not found".
+# Only tasks with a checkout on disk — for `go`, `rm` and `claude`, which act on
+# the worktree. A removed task typed out in full still resolves, and `find-task`
+# then names `hwt restore` rather than claiming the task does not exist.
 def live-task-completions [context?: string] {
     task-completion-rows true $context
 }
@@ -401,7 +410,9 @@ def base-branch-completions [context: string] {
 
 # --- task lookup ------------------------------------------------------------
 
-# Every live task on disk, as [{project, topic, task, path}].
+# Every worktree directory on disk, as [{project, topic, task, path}]. Not the
+# task list: a directory here with no task.json behind it is an orphan. Used only
+# by `orphan-worktrees`.
 def all-tasks [] {
     if not ($WORKTREE_BASE | path exists) { return [] }
     try {
@@ -441,11 +452,20 @@ def match-task [pool: list, task_name: string, hint: string] {
     error make { msg: $"Task '($task_name)' is ambiguous — ($hint)" }
 }
 
-# Find a checked-out task across all projects and topics, as
-# {project, topic, task, path}. For the commands that need the worktree itself.
+# Find a task that is checked out, as {project, topic, task, path, present, done}.
+# For the commands that need the worktree itself.
+#
+# Resolves against the notes tree, not the worktree tree, so a task that exists
+# but has been `hwt rm`'d is reported as removed rather than as missing — the
+# fix is `hwt restore`, and "not found" sends you looking for the wrong thing.
 def find-task [task_name: string, project?: string] {
-    let pool = if $project != null { all-tasks | where project == $project } else { all-tasks }
-    match-task $pool $task_name "narrow it with -p <project>, or give the full task name"
+    let pool = if $project != null { known-tasks | where project == $project } else { known-tasks }
+    let found = (match-task $pool $task_name "narrow it with -p <project>, or give the full task name")
+    if $found == null { return null }
+    if not $found.present {
+        error make { msg: $"Task '($found.project)/($found.topic)/($found.task)' is not checked out — run 'hwt restore ($found.task)'" }
+    }
+    $found
 }
 
 # Find a task among everything the notes tree records, checked out or not. For
@@ -457,31 +477,17 @@ def find-known-task [task_name: string, project?: string] {
     match-task $pool $task_name "narrow it with -p <project>, or give the full task name"
 }
 
-# Every task the notes repo records, as
-# [{project, topic, task, path (intended worktree dir), present}].
-# This sees removed tasks (worktree gone) that all-tasks cannot.
-#
-# The work module filters these by git-commit author, because its notes repo is
-# shared with the team. Here there is exactly one author, so every notes task is
-# mine and no ownership check is needed.
-def notes-tasks [] {
-    notes-task-dirs | each {|t|
-        let wt = ($WORKTREE_BASE | path join $t.project $t.topic $t.task)
-        { project: $t.project, topic: $t.topic, task: $t.task, path: $wt, present: ($wt | path exists) }
-    }
-}
-
 # Find a task by name among notes tasks. `restore` and `forget` take no -p, so
 # the only way to narrow an ambiguous name there is to spell it out.
 def find-task-in-notes [task_name: string] {
-    match-task (notes-tasks) $task_name "give the full task name"
+    match-task (known-tasks) $task_name "give the full task name"
 }
 
 # Completion over notes tasks (includes removed ones). For restore / forget,
 # where a removed task is the normal argument, so those sort first.
 def notes-task-completions [] {
-    notes-tasks | each {|t|
-        let done = (read-task-meta $t.project $t.topic $t.task).done
+    known-tasks | each {|t|
+        let done = $t.done
         let suffix = if $t.present { (if $done { " [done]" } else { "" }) } else { " [removed]" }
         {
             value: $t.task
@@ -589,7 +595,7 @@ export def --env "hwt new" [
     let resolved_topic = if $topic != null {
         $topic
     } else {
-        let found = find-task $task $proj.name
+        let found = find-known-task $task $proj.name
         if $found != null {
             $found.topic
         } else {
@@ -601,6 +607,12 @@ export def --env "hwt new" [
 
     if ($worktree_dir | path exists) {
         ensure-notes-dir $proj.name $resolved_topic $task | ignore
+        # An existing worktree with no task.json is an orphan; recording it here is
+        # the same write hdash's Adopt makes.
+        if not ((task-meta-path $proj.name $resolved_topic $task) | path exists) {
+            write-task-meta $proj.name $resolved_topic $task { done: false, blocked: null }
+            print $"Recorded task.json for existing worktree: ($proj.name)/($resolved_topic)/($task)"
+        }
         if $no_cd {
             print $"Worktree already exists: ($worktree_dir)"
         } else {
@@ -702,7 +714,7 @@ export def --env "hwt pr" [
         $owners | each {|o| print $"  ($o.project)/($o.topic)/($o.task)" }
         error make { msg: "Ambiguous: pass --topic (-t) to choose where the worktree lands." }
     } else {
-        let found = find-task $sanitized_task $repo_name
+        let found = find-known-task $sanitized_task $repo_name
         if $found != null {
             { topic: $found.topic, task: $found.task }
         } else {
@@ -779,27 +791,33 @@ export def "hwt list" [
 
     # One `where` per filter: a multi-line boolean expression needs an enclosing
     # paren in nushell, and chained filters read better than that anyway.
-    all-tasks
+    known-tasks
     | where {|t| ($project == null) or ($t.project == $project) }
     | where {|t| ($topic == null) or ($t.topic == $topic) }
     | where {|t| ($task == null) or ($t.task == $task) }
     | each {|t|
-        let info = try {
-            {
-                head: (^git -C $t.path rev-parse --short HEAD | str trim)
-                branch: (try { ^git -C $t.path symbolic-ref --short HEAD | str trim } catch { "(detached)" })
+        # A removed task has no checkout to read, so git is not asked.
+        let info = if not $t.present {
+            { head: null, branch: null }
+        } else {
+            try {
+                {
+                    head: (^git -C $t.path rev-parse --short HEAD | str trim)
+                    branch: (try { ^git -C $t.path symbolic-ref --short HEAD | str trim } catch { "(detached)" })
+                }
+            } catch {
+                { head: "???", branch: "???" }
             }
-        } catch {
-            { head: "???", branch: "???" }
         }
         let block = (task-block-info $t.path)
         {
             project: $t.project
             topic: $t.topic
             task: $t.task
+            present: $t.present
             branch: $info.branch
             head: $info.head
-            done: (is-task-done $t.path)
+            done: $t.done
             blocked: ($block != null)
             ready: (if $block == null { false } else { $block.ready })
             until: (if $block == null { null } else { $block.until })
@@ -983,9 +1001,9 @@ export def "hwt unblock" [] {
 # "what's waiting on me / what just freed up" view.
 export def "hwt blocked" [] {
     ensure-worktree-dir
-    all-tasks
+    known-tasks
     | each {|t|
-        if (is-task-done $t.path) { return null }
+        if $t.done { return null }
         let block = (task-block-info $t.path)
         if $block == null { return null }
         {
@@ -1004,20 +1022,23 @@ export def "hwt blocked" [] {
 # List projects with task counts
 export def "hwt projects" [] {
     ensure-worktree-dir
-    try {
-        ls $WORKTREE_BASE | where type == dir | get name | each {|project_path|
-            let project = ($project_path | path basename)
-            let tasks = (all-tasks | where project == $project)
-            {
-                project: $project
-                topics: ($tasks | get topic | uniq | length)
-                tasks: ($tasks | length)
-                open: ($tasks | where { not (is-task-done $in.path) } | length)
-                done: (is-project-done $project_path)
-                has_repo: (($PROJECTS_BASE | path join $project) | path exists)
-            }
-        } | sort-by done project
-    } catch { [] }
+    let all = (known-tasks)
+    $all
+    | get project
+    | uniq
+    | each {|project|
+        let tasks = ($all | where project == $project)
+        {
+            project: $project
+            topics: ($tasks | get topic | uniq | length)
+            tasks: ($tasks | length)
+            open: ($tasks | where { not $in.done } | length)
+            checked_out: ($tasks | where present | length)
+            done: (tasks-all-done $tasks)
+            has_repo: (($PROJECTS_BASE | path join $project) | path exists)
+        }
+    }
+    | sort-by done project
 }
 
 # List topics with task counts
@@ -1025,7 +1046,7 @@ export def "hwt topics" [
     --project (-p): string@project-completions  # Filter by project
 ] {
     ensure-worktree-dir
-    all-tasks
+    known-tasks
     | where {|t| ($project == null) or ($t.project == $project) }
     | group-by { |t| $"($t.project)/($t.topic)" }
     | items {|key, rows|
@@ -1034,8 +1055,8 @@ export def "hwt topics" [
             project: $first.project
             topic: $first.topic
             tasks: ($rows | length)
-            open: ($rows | where { not (is-task-done $in.path) } | length)
-            done: (is-topic-done ($WORKTREE_BASE | path join $first.project $first.topic))
+            open: ($rows | where { not $in.done } | length)
+            done: (tasks-all-done $rows)
             task_list: ($rows | get task | str join ", ")
         }
     }
@@ -1045,12 +1066,13 @@ export def "hwt topics" [
 # List all tasks
 export def "hwt tasks" [] {
     ensure-worktree-dir
-    all-tasks | each {|t|
+    known-tasks | each {|t|
         let block = (task-block-info $t.path)
         {
             project: $t.project
             topic: $t.topic
             task: $t.task
+            present: $t.present
             state: (task-state $t.path)
             until: (if $block == null { null } else { $block.until })
             reason: (if $block == null { null } else { $block.reason })
@@ -1077,13 +1099,12 @@ def last-active [project: string, topic: string, task: string] {
 export def "hwt tree" [] {
     ensure-worktree-dir
 
-    let projects = try {
-        ls $WORKTREE_BASE | where type == dir | get name | sort
-    } catch { return }
+    let all = (known-tasks)
+    let projects = ($all | get project | uniq | sort)
 
-    for project_path in $projects {
-        let project = ($project_path | path basename)
-        let project_done = (is-project-done $project_path)
+    for project in $projects {
+        let project_tasks = ($all | where project == $project)
+        let project_done = (tasks-all-done $project_tasks)
 
         if $project_done {
             print $"(ansi dark_gray)($project)  \(done\)(ansi reset)"
@@ -1091,16 +1112,16 @@ export def "hwt tree" [] {
             print $"(ansi cyan_bold)($project)(ansi reset)"
         }
 
-        let topics = try { ls $project_path | where type == dir | get name | sort } catch { continue }
+        let topics = ($project_tasks | get topic | uniq | sort)
         let last_topic_idx = (($topics | length) - 1)
 
         for t_idx in 0..$last_topic_idx {
-            let topic_path = ($topics | get $t_idx)
-            let topic = ($topic_path | path basename)
+            let topic = ($topics | get $t_idx)
+            let topic_tasks = ($project_tasks | where topic == $topic)
             let topic_last = ($t_idx == $last_topic_idx)
             let topic_prefix = if $topic_last { "└── " } else { "├── " }
             let child_indent = if $topic_last { "    " } else { "│   " }
-            let topic_done = (is-topic-done $topic_path)
+            let topic_done = (tasks-all-done $topic_tasks)
 
             if $topic_done {
                 print $"($topic_prefix)(ansi dark_gray)($topic)  \(done\)(ansi reset)"
@@ -1108,27 +1129,25 @@ export def "hwt tree" [] {
                 print $"($topic_prefix)(ansi blue_bold)($topic)(ansi reset)"
             }
 
-            let tasks = try {
-                ls $topic_path | where type == dir | get name
-                | sort
+            let tasks = ($topic_tasks
+                | sort-by task
                 | sort-by { |x|
                     # ready floats up, blocked sinks below active, done last
-                    match (task-state $x) {
+                    match (task-state $x.path) {
                         "ready" => 0
                         "active" => 1
                         "blocked" => 2
                         _ => 3
                     }
-                  }
-            } catch { continue }
+                  })
 
             let last_task_idx = (($tasks | length) - 1)
             for k_idx in 0..$last_task_idx {
-                let task_path = ($tasks | get $k_idx)
-                let task = ($task_path | path basename)
+                let row = ($tasks | get $k_idx)
+                let task = $row.task
                 let prefix = if ($k_idx == $last_task_idx) { "└── " } else { "├── " }
-                let done = (is-task-done $task_path)
-                let block = (task-block-info $task_path)
+                let done = $row.done
+                let block = (task-block-info $row.path)
                 let active = (last-active $project $topic $task)
 
                 let color = if $done {
@@ -1137,6 +1156,8 @@ export def "hwt tree" [] {
                     (ansi magenta_bold)
                 } else if ($block != null) {
                     (ansi yellow)
+                } else if not $row.present {
+                    (ansi dark_gray)
                 } else {
                     (ansi green)
                 }
@@ -1149,6 +1170,8 @@ export def "hwt tree" [] {
                     let u = if ($block.until | is-not-empty) { $" until ($block.until)" } else { "" }
                     let r = if ($block.reason | is-not-empty) { $": ($block.reason)" } else { "" }
                     $"  ⏸ blocked($u)($r)"
+                } else if not $row.present {
+                    "  (removed)"
                 } else {
                     ""
                 }
@@ -1156,11 +1179,20 @@ export def "hwt tree" [] {
             }
         }
     }
+
+    let orphans = (orphan-worktrees)
+    if ($orphans | is-not-empty) {
+        print ""
+        print $"(ansi yellow)orphan worktrees \(no task.json\)(ansi reset)"
+        for o in $orphans {
+            print $"  (ansi yellow)($o.project)/($o.topic)/($o.task)(ansi reset)"
+        }
+    }
 }
 
 # Git status of all worktrees
 export def "hwt status" [] {
-    hwt list | each {|tree|
+    hwt list | where present | each {|tree|
         let dirty = try { ^git -C $tree.path status --porcelain | lines | length } catch { 0 }
         # A fresh task branch has no upstream, which is normal and not worth
         # printing. `complete` captures git's stderr instead of letting it leak.
@@ -1185,6 +1217,12 @@ export def "hwt status" [] {
         $tree | merge { dirty: $dirty, ahead: $ahead_behind.ahead, behind: $ahead_behind.behind }
     }
     | select project topic task branch done blocked ready dirty ahead behind path
+}
+
+# List worktrees with no task.json in the notes repo. These are what hdash offers
+# to Adopt: on disk, and recorded nowhere.
+export def "hwt orphans" [] {
+    orphan-worktrees | select project topic task path
 }
 
 # Prune stale worktree references across all projects
@@ -1288,8 +1326,11 @@ export def "hwt sessions" [
 ] {
     ensure-worktree-dir
 
-    let tasks = (all-tasks
-        | where { not (is-task-done $in.path) }
+    # A session needs a checkout to open in, so removed tasks are skipped here even
+    # though they are tasks everywhere else.
+    let tasks = (known-tasks
+        | where present
+        | where { not $in.done }
         | each {|t| $t | merge { session: (hcdev-session-name $t.project $t.topic $t.task) } })
 
     let running = (try { zellij list-sessions --no-formatting | lines } catch { [] })

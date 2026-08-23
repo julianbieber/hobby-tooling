@@ -35,6 +35,12 @@ pub enum ItemKey {
 /// primary button, and nothing else needs to ask "is this an issue or a task?".
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Stage {
+    /// A worktree with no `task.json` in the notes repo: **Adopt**.
+    ///
+    /// The notes repo is what records a task, so an orphan is a worktree nothing has recorded:
+    /// a state to resolve before the work can be tracked, not work to pick up. **Adopt** writes
+    /// the missing file; a scan never does.
+    Orphan,
     /// An issue with no usable `topic:` label. Nothing to launch — the card says so.
     Untagged,
     /// A tagged issue with no worktree: **Start task**.
@@ -77,6 +83,7 @@ impl<'a> Item<'a> {
     /// Lifecycle stage — what the primary button will be.
     pub fn stage(&self) -> Stage {
         match self.task {
+            Some(task) if !task.adopted => Stage::Orphan,
             Some(task) if task.done => Stage::Done,
             Some(task) if !task.present => Stage::Removed,
             Some(_) => Stage::Active,
@@ -130,38 +137,34 @@ impl<'a> Item<'a> {
         }
     }
 
-    /// Sort rank. Preserves both pre-merge orders: `hwt-overview`'s
-    /// ready < active < blocked < done, and `hgh-issues`' worktree < tagged < untagged
-    /// (a worktree makes it a task, so its items land in 0–3).
-    ///
-    /// Work already in flight comes first, then what is actionable, then what needs
-    /// triage, and done sinks to the bottom.
     fn rank(&self) -> u8 {
         if let Some(task) = self.task {
+            if !task.adopted {
+                return 0;
+            }
             if task.done {
-                return 7;
+                return 8;
             }
             if !task.present {
-                return 5; // removed: restore it before it is actionable again
+                return 6; // removed: restore it before it is actionable again
             }
             if task.ready() {
-                return 0; // a block that has lifted is the loudest signal there is
+                return 1; // a block that has lifted is the loudest signal there is
             }
             if task.blocked() {
-                return 3;
+                return 4;
             }
             if task.awaiting_review() > 0 {
-                return 1;
+                return 2;
             }
-            return 2;
+            return 3;
         }
         match self.stage() {
-            Stage::Startable => 4,
-            _ => 6, // untagged
+            Stage::Startable => 5,
+            _ => 7, // untagged
         }
     }
 
-    /// Most recent signal from either half, for tie-breaking. `None` sorts last.
     fn activity(&self) -> Option<SystemTime> {
         let task = self.task.and_then(|t| t.last_active);
         let issue = self.issue.and_then(|i| i.updated);
@@ -316,13 +319,28 @@ impl Model {
 /// Whether an item is currently rendered — and therefore whether its `gh`/git calls are
 /// worth making. Shared by the list rebuild and the async dispatchers so fetches track
 /// exactly what the user can see.
+///
+/// With **no project selected** the list is tasks only: issues are fetched per selected
+/// project, so an issue-only item under "All" would show whichever projects happened to be
+/// visited this session and nothing else.
+///
+/// An orphan is never hidden by a content toggle — it is the one item the app is asking the
+/// user to resolve.
+///
+/// Under "All" the list is tasks only: `Startable` and `Untagged` are the issue-only stages,
+/// and `gh` is queried per selected project, so showing them here would report whichever
+/// projects happened to be visited this session rather than a whole list.
 pub fn item_visible(item: &Item<'_>, ui: &UiState) -> bool {
     if let Some(sel) = &ui.selected_project
         && item.project != sel
     {
         return false;
     }
-    match item.stage() {
+    let stage = item.stage();
+    if ui.selected_project.is_none() && matches!(stage, Stage::Startable | Stage::Untagged) {
+        return false;
+    }
+    match stage {
         Stage::Done if !ui.show_done => return false,
         Stage::Untagged if !ui.show_untagged => return false,
         _ => {}
@@ -352,6 +370,7 @@ mod tests {
             }],
             id,
             dir,
+            adopted: true,
             present: true,
             done: false,
             block: None,
@@ -385,6 +404,7 @@ mod tests {
                     project: Project {
                         name: name.into(),
                         path: PathBuf::from("/nowhere").join(name),
+                        has_notes: true,
                     },
                     state: FetchState::Ready,
                     issues,
@@ -393,9 +413,6 @@ mod tests {
         }
     }
 
-    /// The join: an issue and the worktree it spawned become **one** item, matched by
-    /// number across naming conventions; everything unmatched keeps its own item; and the
-    /// match never crosses a project boundary.
     #[test]
     fn join_pairs_issues_with_their_worktrees() {
         let m = model(
@@ -460,8 +477,6 @@ mod tests {
         assert_eq!(unstarted.stage(), Stage::Startable);
     }
 
-    /// Two tasks matching one issue: the first in `(project, topic, name)` order wins and
-    /// the other keeps an unjoined card. Deterministic, and nothing disappears.
     #[test]
     fn a_second_matching_task_keeps_its_own_card() {
         let m = model(
@@ -480,7 +495,6 @@ mod tests {
         assert!(b.issue.is_none(), "the second is not silently dropped");
     }
 
-    /// The stage table, and the rule that only an untagged issue has no launch spec.
     #[test]
     fn stages_follow_the_lifecycle() {
         let mut removed = task("p", "t", "gone");
@@ -528,8 +542,6 @@ mod tests {
         assert_eq!(live.launch_spec().unwrap().topic, "t");
     }
 
-    /// The merged order: in-flight work first, then what is actionable, then triage, then
-    /// done. This is the one thing that decides whether the merged list is usable.
     #[test]
     fn merged_sort_order() {
         let day = |n: u64| UNIX_EPOCH + Duration::from_secs(n * 86_400);
@@ -601,8 +613,6 @@ mod tests {
         );
     }
 
-    /// The filters: project selection, the two toggles and their defaults, and the
-    /// session-hide set.
     #[test]
     fn visibility_honours_filters_and_defaults() {
         let mut done = task("p", "t", "finished");
@@ -630,17 +640,24 @@ mod tests {
                 .collect()
         };
 
-        // Defaults: done hidden, untagged shown. The sort is global, not per project —
-        // two rank-2 tasks from different projects interleave and break the tie by name.
+        // Defaults: no project selected, so the list is tasks only — done hidden, and no
+        // issue at all. The sort is global, not per project, so two active tasks from
+        // different projects interleave and break the tie by name.
         let mut ui = UiState::default();
         assert_eq!(
             visible(&ui),
-            vec!["elsewhere", "live", "gh-1-tagged", "gh-2-untagged"]
+            vec!["elsewhere", "live"],
+            "\"All\" is a task list: issues are fetched per selected project"
         );
 
         ui.show_done = true;
         assert!(visible(&ui).contains(&"finished"));
         ui.show_done = false;
+
+        // Selecting the project is what brings its issues into the list.
+        ui.selected_project = Some("p".into());
+        assert_eq!(visible(&ui), vec!["live", "gh-1-tagged", "gh-2-untagged"]);
+        assert!(!visible(&ui).contains(&"elsewhere"));
 
         ui.show_untagged = false;
         assert!(!visible(&ui).contains(&"gh-2-untagged"));
@@ -649,11 +666,6 @@ mod tests {
             "the toggle only hides untagged ones"
         );
         ui.show_untagged = true;
-
-        // Project filter.
-        ui.selected_project = Some("p".into());
-        assert!(!visible(&ui).contains(&"elsewhere"));
-        ui.selected_project = None;
 
         // Session hide, by key — an issue-only item is keyed by (project, number).
         ui.hidden.insert(ItemKey::Issue {
@@ -667,5 +679,54 @@ mod tests {
             name: "live".into(),
         }));
         assert!(!visible(&ui).contains(&"live"));
+    }
+
+    #[test]
+    fn an_orphan_worktree_is_its_own_stage() {
+        let mut orphan = task("p", "t", "gh-3-stray");
+        orphan.adopted = false;
+        let mut ready = task("p", "t", "a-ready");
+        ready.block = Some(Block {
+            until: Some("2020-01-01".into()),
+            reason: None,
+        });
+
+        let m = model(
+            vec![ready, orphan],
+            vec![("p", vec![issue(3, "Stray", Some("features"))])],
+        );
+        let items = m.items();
+        let order: Vec<&str> = items.iter().map(|i| i.task_name()).collect();
+        assert_eq!(
+            order,
+            vec!["gh-3-stray", "a-ready"],
+            "an orphan outranks even a lifted block"
+        );
+
+        let stray = items
+            .iter()
+            .find(|i| i.task_name() == "gh-3-stray")
+            .unwrap();
+        assert_eq!(stray.stage(), Stage::Orphan);
+        assert!(stray.issue.is_some(), "an orphan still joins its issue");
+        assert!(
+            stray.launch_spec().is_some(),
+            "the worktree path is a launch spec whether or not it is recorded"
+        );
+
+        // Neither content toggle can hide it, and it shows under "All" — where the
+        // issue-only items do not.
+        let mut ui = UiState::default();
+        for (done, untagged) in [(false, false), (false, true), (true, false), (true, true)] {
+            ui.show_done = done;
+            ui.show_untagged = untagged;
+            assert!(
+                items
+                    .iter()
+                    .filter(|i| item_visible(i, &ui))
+                    .any(|i| i.stage() == Stage::Orphan),
+                "orphan visible with show_done={done} show_untagged={untagged}"
+            );
+        }
     }
 }

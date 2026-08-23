@@ -484,7 +484,6 @@ impl Plugin for KitPlugin {
     }
 }
 
-/// Swap background color on hover for [`KitHoverable`] nodes that are not selected.
 fn hover_restyle(
     theme: Res<UiTheme>,
     mut q: Query<
@@ -498,7 +497,6 @@ fn hover_restyle(
     }
 }
 
-/// Apply mouse-wheel deltas to whichever [`KitScrollable`] is currently hovered.
 fn scroll_system(
     mut wheel: MessageReader<MouseWheel>,
     mut q: Query<(&Hovered, &mut ScrollPosition), With<KitScrollable>>,

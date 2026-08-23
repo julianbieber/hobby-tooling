@@ -77,6 +77,52 @@ and a slug changes whenever the title is edited, so the derived name is what a
 path — not the label — supplies the topic for `hcdev wt`, since the path is what
 `hcdev` has to find.
 
+## The notes repo is what makes a task exist
+
+A task exists because `notes/<project>/<topic>/<task>/task.json` exists. Not because a
+directory under `~/fun_worktrees` does — that tree answers one question only, *is it
+checked out*, and is never enumerated to find out what work there is.
+
+| | source | answers |
+|---|---|---|
+| a task exists | `notes/P/T/TASK/task.json` | which tasks there are |
+| a task is checked out | `~/fun_worktrees/P/T/TASK` | Active vs Removed |
+| done / blocked | `task.json` | state, and nothing on GitHub |
+| what the work *is* | the GitHub issue | title, labels, author, `topic:` |
+
+`hdash` and `hwt` apply the same rule from the same file — `scan_tasks` reads the notes
+tree, `known-tasks` reads the notes tree — so `hwt list | length` and the dashboard's task
+count agree. They did not before: `hwt` treated the *directory* as the marker and `hdash`
+the `task.json`, which is why `hwt forget` (whose whole job is removing that file) dropped
+a task from one tool and not the other.
+
+A worktree with no `task.json` behind it is an **orphan**: on disk, recorded nowhere.
+`hwt orphans` lists them; `hdash` gives each one a card at the top of the list with an
+**Adopt** button that writes the file. Nothing adopts silently — a scan never writes.
+
+Two things this rule deliberately does **not** buy:
+
+- **Issue-less tasks stay first-class.** `hwt new` does not touch GitHub, and a notes dir
+  alone is a complete task. GitHub is the source of truth for the tasks that have an issue.
+- **`done` is local.** `task.json` is the only authority; closing an issue does not mark
+  its task done and marking a task done does not close its issue. `hdash` asks `gh` for
+  open issues only, so a closed issue's task shows unjoined.
+
+The notes repo decides because it is the only one of the two that survives everything.
+A worktree is deleted the moment the work pauses — `hwt rm` is routine — so a tree that
+recorded existence would lose a task every time one was checked out somewhere else, or
+on a second machine. The notes dir is committed and shared; the worktree is scratch.
+Enumerating the worktree tree would also answer a different question than the one asked:
+it lists what is on this disk, not what work there is.
+
+`done` stayed local because the two flags do not mean the same thing. An issue closes
+when the change ships; a task is done when I stop working on it, which happens on
+abandonment and on splitting the work in two as well as on shipping. Mirroring would
+either close issues that are still open questions or reopen tasks that are finished
+here, and it would put a network call behind a keystroke that currently writes one
+local file. `hdash` asks `gh` for open issues only, so a closed issue's task simply
+shows unjoined — which is the honest rendering of the two being independent.
+
 ## One dashboard, because there was only ever one list
 
 `tools/hdash` replaces `hwt-overview` (the worktrees that exist) and `hgh-issues`
@@ -95,8 +141,10 @@ the next step: **Start task** → **Open hcdev** → (**Restore** if the worktre
 removed). The filesystem walk `find_worktree` did is gone: the task half already
 holds that tree, so the match is pure and in-memory.
 
-Three consequences worth knowing:
+Four consequences worth knowing:
 
+- **An orphan outranks everything.** A worktree the notes repo has never heard of sorts
+  above even a lifted block, and no content toggle can hide it.
 - **Topic is no longer a grouping level.** An unstarted issue has a topic *label*
   and no topic *directory*, so there is nothing to group it under. The list is
   flat and globally sorted by how much attention an item wants; project and topic
@@ -105,11 +153,13 @@ Three consequences worth knowing:
   ~25× more done tasks than open ones) and `show_untagged` on (an untagged issue
   is the one item the app cannot act on, so it is the one that most needs to be
   seen).
-- **`~/fun_repos` holds upstream clones**, not just my projects, and `hdash` asks
-  `gh` for every one of them — a `bevy` or `helix` checkout contributes 200 open
-  issues that are nobody's work here. `hgh-issues` had the same gap ("no denylist
-  yet"); the merged list makes it louder because those issues now share a list
-  with tasks.
+- **`~/fun_repos` holds upstream clones**, not just my projects — a `bevy` or `helix`
+  checkout has 200 open issues that are nobody's work here. `hdash` therefore asks `gh`
+  for the **selected** project and no other, which makes "All" a task list: an issue-only
+  card there would report whichever projects happened to be visited this session. There is
+  still no denylist or ownership filter; the selection is the gate. The sidebar leads with
+  the projects that have a notes directory, and every project keeps a row, because a row is
+  now the only way to reach a project's issues.
 
 `feathers_kit` stays a deliberate fork of the work copy so the *work* dashboard
 cannot regress, and this is the repo's only copy. With one workspace there is no

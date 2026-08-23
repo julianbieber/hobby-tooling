@@ -125,12 +125,7 @@ pub fn build_chrome(mut commands: Commands, fonts: Res<KitFonts>) {
     ));
 }
 
-/// The header's buttons are **static**: their labels never change, and the current state of
-/// the two toggles is reported in the summary line instead. That keeps the whole header out
-/// of the rebuild path — only [`update_header`]'s one text node is ever rewritten.
 fn header_bar(fonts: &KitFonts) -> impl Bundle {
-    /// A fixed-width box around a button. The label must fit on one line; a narrower box
-    /// wraps it and the text spills out of the button.
     fn slot(width: f32, button: impl Bundle) -> impl Bundle {
         (
             Node {
@@ -175,12 +170,6 @@ fn header_bar(fonts: &KitFonts) -> impl Bundle {
 // Sidebar
 // ---------------------------------------------------------------------------
 
-/// Whether an item counts toward the sidebar and header totals.
-///
-/// Deliberately **not** applying the project selection (each project reports its own total,
-/// not zero) and **not** applying `hidden` (a hide is a per-session dismissal that should
-/// not make a project's count drop — the header reports hides separately). The two
-/// content toggles do apply, so the number matches what selecting the project would show.
 fn counts(item: &Item<'_>, ui: &UiState) -> bool {
     !matches!(
         (item.stage(), ui.show_done, ui.show_untagged),
@@ -202,7 +191,8 @@ pub fn rebuild_sidebar(
     commands.entity(c).despawn_children();
 
     // Every project gets a row, even one whose issue fetch failed and which has no
-    // worktrees — otherwise a project silently disappears from the sidebar.
+    // worktrees — otherwise a project silently disappears from the sidebar. Since issues
+    // are fetched only for the selected project, a row is also the only way to reach them.
     let mut per_project: BTreeMap<&str, usize> = model
         .projects
         .iter()
@@ -225,19 +215,49 @@ pub fn rebuild_sidebar(
         false,
     );
 
-    for (project, count) in &per_project {
+    let mut worked_in = 0usize;
+    for (project, count, has_notes) in project_order(&model, &per_project) {
+        // One divider where the worked-in projects end and the rest of `~/fun_repos` begins.
+        if !has_notes && worked_in > 0 {
+            let d = commands.spawn(divider()).id();
+            commands.entity(c).add_child(d);
+            worked_in = 0;
+        }
+        if has_notes {
+            worked_in += 1;
+        }
         let selected = ui.selected_project.as_deref() == Some(project);
         spawn_project_row(
             &mut commands,
             c,
             &fonts,
-            Some((*project).to_owned()),
+            Some(project.to_owned()),
             project,
-            *count,
+            count,
             selected,
             pulls.running(project),
         );
     }
+}
+
+fn project_order<'a>(
+    model: &'a Model,
+    per_project: &BTreeMap<&'a str, usize>,
+) -> Vec<(&'a str, usize, bool)> {
+    let mut rows: Vec<(&str, usize, bool)> = model
+        .projects
+        .iter()
+        .map(|p| {
+            let name = p.project.name.as_str();
+            (
+                name,
+                per_project.get(name).copied().unwrap_or(0),
+                p.project.has_notes,
+            )
+        })
+        .collect();
+    rows.sort_by(|a, b| b.2.cmp(&a.2).then(a.0.cmp(b.0)));
+    rows
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -288,10 +308,6 @@ fn spawn_project_row(
     commands.entity(parent).add_child(id);
 }
 
-/// The per-project pull control: a **Pull** button, or a dim `…` while one is in flight. The
-/// button is *replaced* rather than disabled, so there is nothing to click twice — the
-/// outcome itself is reported as a line above the item list, where there is room for a
-/// reason when git refuses.
 fn pull_slot(commands: &mut Commands, fonts: &KitFonts, project: &str, pulling: bool) -> Entity {
     let inner = if pulling {
         commands
@@ -329,7 +345,8 @@ pub fn update_header(
     ui: Res<UiState>,
     mut q: Query<&mut Text, With<HeaderSummary>>,
 ) {
-    let (mut active, mut issues, mut done, mut untagged) = (0usize, 0usize, 0usize, 0usize);
+    let (mut active, mut issues, mut done, mut untagged, mut orphans) =
+        (0usize, 0usize, 0usize, 0usize, 0usize);
     for item in model.items() {
         if let Some(sel) = &ui.selected_project
             && item.project != sel
@@ -344,11 +361,20 @@ pub fn update_header(
             }
             Stage::Startable => issues += 1,
             Stage::Active | Stage::Removed => active += 1,
+            Stage::Orphan => orphans += 1,
         }
     }
 
     let scope = ui.selected_project.as_deref().unwrap_or("all projects");
-    let mut summary = format!("{scope}  ·  {active} active · {issues} open issues");
+    let mut summary = format!("{scope}  ·  {active} active");
+    // Issues are fetched for the selected project only, so under "All" the count is not a
+    // fact about the projects — it is a fact about which ones happened to be visited.
+    if ui.selected_project.is_some() {
+        summary.push_str(&format!(" · {issues} open issues"));
+    }
+    if orphans > 0 {
+        summary.push_str(&format!(" · {orphans} orphan worktrees"));
+    }
     if ui.show_done {
         summary.push_str(&format!(" · {done} done"));
     } else if done > 0 {
@@ -362,5 +388,54 @@ pub fn update_header(
     }
     for mut text in &mut q {
         text.0 = summary.clone();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::issue::{FetchState, Project, ProjectIssues};
+    use std::path::PathBuf;
+
+    fn model_of(projects: &[(&str, bool)]) -> Model {
+        Model {
+            tasks: Vec::new(),
+            projects: projects
+                .iter()
+                .map(|(name, has_notes)| ProjectIssues {
+                    project: Project {
+                        name: (*name).to_owned(),
+                        path: PathBuf::from("/nowhere").join(name),
+                        has_notes: *has_notes,
+                    },
+                    state: FetchState::Loading,
+                    issues: Vec::new(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn worked_in_projects_lead_the_sidebar() {
+        let model = model_of(&[
+            ("bevy", false),
+            ("wusel", true),
+            ("helix", false),
+            ("hobby-tooling", true),
+        ]);
+        let mut counts = BTreeMap::new();
+        counts.insert("wusel", 3);
+
+        let rows = project_order(&model, &counts);
+        let names: Vec<&str> = rows.iter().map(|r| r.0).collect();
+        assert_eq!(names, vec!["hobby-tooling", "wusel", "bevy", "helix"]);
+
+        assert!(rows[0].2, "worked-in projects first");
+        assert!(!rows[2].2, "the clones follow");
+        assert_eq!(rows[1].1, 3, "the count rides along");
+        assert_eq!(
+            rows[0].1, 0,
+            "a project with no counted items still gets a row"
+        );
     }
 }

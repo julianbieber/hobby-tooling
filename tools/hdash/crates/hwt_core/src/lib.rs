@@ -219,8 +219,6 @@ pub fn rel_time(t: SystemTime) -> String {
 mod tests {
     use super::*;
 
-    /// The date helpers agree with known epoch-day landmarks, and the timestamp parser
-    /// tolerates the tails `gh` and other tools attach (fraction, offset, bare `Z`).
     #[test]
     fn dates_parse_and_convert() {
         assert_eq!(parse_ymd("2026-07-26"), Some((2026, 7, 26)));
@@ -257,8 +255,6 @@ mod tests {
         assert_eq!(parse_rfc3339_utc("1969-01-01T00:00:00Z"), None, "pre-epoch");
     }
 
-    /// A failed command's stderr becomes one short list line: first line only, `error:`/`fatal:`
-    /// stripped, trailing advice sentence dropped, and hard-capped so it cannot wrap.
     #[test]
     fn stderr_shrinks_to_one_line() {
         assert_eq!(
@@ -288,7 +284,6 @@ mod tests {
         assert!(long.ends_with('…'));
     }
 
-    /// `rel_time` buckets ages into today / yesterday / days / months / years.
     #[test]
     fn rel_time_buckets() {
         let now = SystemTime::now();
@@ -302,8 +297,6 @@ mod tests {
         assert_eq!(rel_time(now + Duration::from_secs(3600)), "today");
     }
 
-    /// The XDG helpers honor the override env vars and fall back to `~/.cache` / `~/.config`.
-    /// One test because env vars are process-global.
     #[test]
     fn xdg_paths_honor_env() {
         // SAFETY: no other test in this crate reads these vars concurrently.

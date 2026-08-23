@@ -37,12 +37,6 @@ def hcdev-read-task-meta [project: string, topic: string, task: string] {
     { done: ($parsed.done? | default false), blocked: ($parsed.blocked? | default null) }
 }
 
-def hcdev-is-task-done [task_path: path] {
-    let parts = (hcdev-task-parts $task_path)
-    if $parts == null { return false }
-    (hcdev-read-task-meta $parts.project $parts.topic $parts.task).done
-}
-
 # --- helpers ----------------------------------------------------------------
 
 # Pull the value of a flag out of a completion context line.
@@ -53,29 +47,39 @@ def hcdev-flag [context: string, names: list<string>] {
     try { $hit | first | get 1 } catch { null }
 }
 
-# Every live task on disk, as [{project, topic, task, path}].
-def hcdev-all-tasks [] {
-    if not ($WORKTREE_BASE | path exists) { return [] }
+# Every task the notes repo records, as
+# [{project, topic, task, path, present, done}]. Mirrors `hwt.nu`'s known-tasks:
+# a task.json is what makes a task, and the worktree tree only answers `present`.
+def hcdev-known-tasks [] {
+    if not ($NOTES_BASE | path exists) { return [] }
     try {
-        ls $WORKTREE_BASE | where type == dir | get name | each {|project_path|
-            let project = ($project_path | path basename)
-            try {
-                ls $project_path | where type == dir | get name | each {|topic_path|
-                    let topic = ($topic_path | path basename)
-                    try {
-                        ls $topic_path | where type == dir | get name | each {|task_path|
-                            { project: $project, topic: $topic, task: ($task_path | path basename), path: $task_path }
-                        }
-                    } catch { [] }
-                } | flatten
-            } catch { [] }
-        } | flatten
+        glob $"($NOTES_BASE)/*/*/*/task.json" --no-dir --no-symlink
+        | each {|f|
+            let rel = ($f | path dirname | path relative-to $NOTES_BASE | path split)
+            let project = ($rel | get 0)
+            let topic = ($rel | get 1)
+            let task = ($rel | get 2)
+            let wt = ($WORKTREE_BASE | path join $project $topic $task)
+            {
+                project: $project
+                topic: $topic
+                task: $task
+                path: $wt
+                present: ($wt | path exists)
+                done: (hcdev-read-task-meta $project $topic $task).done
+            }
+        }
     } catch { [] }
 }
 
-# Find a task, optionally narrowed by project and/or topic. Ambiguity raises.
+# Find a task that is checked out, optionally narrowed by project and/or topic.
+# Ambiguity raises.
+#
+# Resolves against the notes tree so a task that exists but was `hwt rm`'d is
+# reported as removed and not as missing — `hcdev` opens an editor and a Claude
+# pane in the worktree, so `hwt restore` is the step in between.
 def hcdev-find-task [task_name: string, project?: string, topic?: string] {
-    mut pool = (hcdev-all-tasks)
+    mut pool = (hcdev-known-tasks)
     if $project != null { $pool = ($pool | where project == $project) }
     if $topic != null { $pool = ($pool | where topic == $topic) }
     if ($pool | is-empty) { return null }
@@ -85,11 +89,17 @@ def hcdev-find-task [task_name: string, project?: string, topic?: string] {
         $pool | where { $in.task | str contains $task_name }
     }
     if ($matches | is-empty) { return null }
-    if ($matches | length) == 1 { return ($matches | first) }
+    if ($matches | length) > 1 {
+        print "Multiple matching tasks:"
+        $matches | each {|m| print $"  ($m.project)/($m.topic)/($m.task)" }
+        error make { msg: $"Task '($task_name)' is ambiguous — narrow it with -p <project> or -t <topic>" }
+    }
 
-    print "Multiple matching tasks:"
-    $matches | each {|m| print $"  ($m.project)/($m.topic)/($m.task)" }
-    error make { msg: $"Task '($task_name)' is ambiguous — narrow it with -p <project> or -t <topic>" }
+    let found = ($matches | first)
+    if not $found.present {
+        error make { msg: $"Task '($found.project)/($found.topic)/($found.task)' is not checked out — run 'hwt restore ($found.task)'" }
+    }
+    $found
 }
 
 # Extract {project, topic, task} from cwd (works under ~/fun_worktrees/ or the notes tree).
@@ -251,7 +261,7 @@ def hcdev-topic-completions [context?: string] {
         } catch { [] }
     } else { [] }
 
-    let live = (hcdev-all-tasks)
+    let live = (hcdev-known-tasks)
 
     $notes_topics
     | append ($live | each {|t| { project: $t.project, topic: $t.topic } })
@@ -260,7 +270,7 @@ def hcdev-topic-completions [context?: string] {
     | group-by topic
     | items {|topic, rows|
         let projects = ($rows | get project | uniq | sort | str join ", ")
-        let open = ($live | where topic == $topic | where {|t| not (hcdev-is-task-done $t.path) } | length)
+        let open = ($live | where topic == $topic | where {|t| not $t.done } | length)
         {
             value: $topic
             description: (if $open > 0 { $"($projects) — ($open) open" } else { $projects })
@@ -271,23 +281,22 @@ def hcdev-topic-completions [context?: string] {
     | each {|r| { value: $r.value, description: $r.description } }
 }
 
-# Tasks with a checkout on disk. Unlike topics this stays worktree-based: the one
+# Tasks with a checkout on disk. Unlike topics this filters on `present`: the one
 # task argument on this module (`hcdev wt`) opens an editor and a Claude pane in
-# the worktree, so a task from the notes tree with no checkout is not a session
-# `hcdev` could start. `hwt restore <task>` is the step in between.
+# the worktree, so a task with no checkout is not a session `hcdev` could start.
+# `hwt restore <task>` is the step in between — and `hcdev-find-task` names it,
+# so a removed task typed out in full still gets the right error.
 def hcdev-task-completions [context?: string] {
-    if not ($WORKTREE_BASE | path exists) { return [] }
     let proj_filter = if $context != null { hcdev-flag $context ["--project" "-p"] } else { null }
     let topic_filter = if $context != null { hcdev-flag $context ["--topic" "-t"] } else { null }
 
-    mut pool = (hcdev-all-tasks)
+    mut pool = (hcdev-known-tasks | where present)
     if $proj_filter != null { $pool = ($pool | where project == $proj_filter) }
     if $topic_filter != null { $pool = ($pool | where topic == $topic_filter) }
 
     $pool | each {|t|
-        let done = (hcdev-is-task-done $t.path)
         let tag = $"($t.project)/($t.topic)"
-        { value: $t.task, description: (if $done { $"($tag) [done]" } else { $tag }), done: $done }
+        { value: $t.task, description: (if $t.done { $"($tag) [done]" } else { $tag }), done: $t.done }
     }
     | sort-by done value
     | each {|r| { value: $r.value, description: $r.description } }

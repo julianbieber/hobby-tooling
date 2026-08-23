@@ -88,8 +88,6 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    /// The wording every outcome gets in the status strip, including the two shapes that are
-    /// not a plain count: nothing fetched, and a moved HEAD with no readable count.
     #[test]
     fn outcomes_read_as_sentences() {
         assert_eq!(PullOutcome::UpToDate.summary(), "already up to date");
@@ -98,8 +96,6 @@ mod tests {
         assert_eq!(PullOutcome::Advanced(3).summary(), "pulled 3 commits");
     }
 
-    /// Run git in `dir` with an identity of our own, so the test does not depend on (or
-    /// disturb) whatever the machine's global config says.
     fn git(dir: &Path, args: &[&str]) {
         let out = Command::new("git")
             .arg("-C")
@@ -130,11 +126,6 @@ mod tests {
         git(dir, &["commit", "-m", file]);
     }
 
-    /// The whole pull path against a real local remote: a fast-forward reports how many
-    /// commits arrived, a second pull reports nothing moved, and a diverged checkout is
-    /// **refused** with git's own one-line reason rather than merged behind the user's back.
-    ///
-    /// Uses a `file://`-style local path, so it needs git but no network.
     #[test]
     fn pull_fast_forwards_and_refuses_to_merge() {
         let root: PathBuf = std::env::temp_dir().join("hdash_pull_fixture");
