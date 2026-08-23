@@ -48,7 +48,7 @@ ln -s ~/fun_repos/hobby-tooling/skills/hmml-review/skill.md \
 /hmml-review --min-priority high   # only high/critical concerns in the plan
 ```
 
-It is invoked automatically by `/julian:dev-flow` at step 3 (self-review of the
+It is invoked automatically by `/build:task` in the `plan` phase (self-review of the
 adjusted spec); the plan it writes is what the human reviews at GATE 1 alongside
 the `.hmml`.
 

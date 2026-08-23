@@ -107,7 +107,8 @@ N files, +A / -B
 .github/pull_request_template.md — <present | absent>
 ```
 
-## TODO(jb-doc): why this skill stops at facts
+## Why this stops at facts
 
-<!-- What it should cover: which norm bans the drafted body, and why leaving the
-     gate to enforce it would not be enough on its own. -->
+Norm 6 asks for my words, not an edit of the AI's. The gate cannot enforce that
+alone: its paste check compares the buffer against the command it intercepted, so
+a draft offered in conversation is invisible to it.

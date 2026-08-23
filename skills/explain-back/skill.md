@@ -1,6 +1,6 @@
 ---
-description: Walk me through the branch diff hunk by hunk and make me say what each one does, flagging where I am wrong — the check that I actually understand what I am about to submit
-allowed-tools: Bash(git diff:*), Bash(git log:*), Bash(git -C:*), Bash(git rev-parse:*), Bash(pwd:*), Read, Grep, Glob
+description: Walk me through the branch diff hunk by hunk and make me say what each one does, flagging where I am wrong — the check that I actually understand what I am about to submit — then check every comment in the diff against the code and correct it
+allowed-tools: Bash(git diff:*), Bash(git log:*), Bash(git -C:*), Bash(git rev-parse:*), Bash(pwd:*), Bash(*/ai-policy-tier.sh:*), Read, Grep, Glob, Edit
 ---
 
 Bevy AI policy norm 1: *"You must personally understand every line of code and
@@ -45,14 +45,51 @@ asks for** (norm 8 permits AI as critic), so do not soften.
    to re-explain until it sounds fine — it is code that should not go out under my
    name yet.
 
+## The comment pass
+
+Runs **only after** the tally in step 4 is printed. Not before, not interleaved
+with the quiz: rule 5 above says a hunk I cannot explain is not yours to
+re-explain, and that rule is about *code*. This pass is about *comments*, and it
+is the one thing in this skill you are allowed to change.
+
+**You may edit comment lines. You may not edit anything else.** If a comment is
+wrong because the code is wrong, say so and leave both alone — that is a finding
+for me, not an edit for you.
+
+1. **Resolve the tier** with `scripts/ai-policy-tier.sh` from the hobby-tooling
+   checkout, and say in one line which tier this ran under.
+2. **Collect every comment** in `git diff <base>...HEAD` — added and modified
+   lines both, plus any comment attached to an item the diff touched even when the
+   comment line itself is unchanged. A doc comment that now describes the old
+   behaviour is the whole reason this pass exists.
+3. **For each comment, decide:**
+   - **Drifted** — it describes something the code no longer does.
+   - **Missing** — a public item in the diff has no doc comment.
+   - **Misplaced** — it sits on a private item or inside a body.
+   - **Fine** — accurate, on a public item, and says something the code does not.
+4. **Act, per tier:**
+
+   | | `private` | `upstream` |
+   |---|---|---|
+   | drifted | rewrite it to match the code | replace with `TODO(jb-doc)` / `TODO(jb-comment)` naming the drift |
+   | missing on a public item | write it | insert `/// TODO(jb-doc): <what needs documenting>` |
+   | misplaced | delete it, or reduce it to `TODO(jb-comment)` if the point is genuinely non-obvious | same |
+   | fine | leave it | leave it |
+
+5. **Report** every comment you touched as a list: file, item, and which of the
+   four verdicts it got. Say plainly if you changed nothing.
+
+What you write here is a first pass, not the final text — `/comment-review` runs
+next and cuts every clause that is not required.
+
 ## When it fails
 
 If I get a hunk wrong, that is the skill working. Say so plainly, record it, and
 carry on to the next hunk. Do not stop the walkthrough and do not re-teach the
 hunk at length — a paragraph of correction, then move.
 
-## TODO(jb-doc): why understanding is checked by conversation and not by a hook
+## Why understanding is checked by conversation
 
-<!-- What it should cover: what norm 1 asks for that is not mechanically
-     checkable, and why the check has to happen before the PR gate rather than
-     after. -->
+Norm 1 is a claim about what I know, and no hook can read that — every other layer
+checks bytes. It runs before the PR exists because the point is to stop code I
+cannot explain from being submitted, not to find it afterwards.

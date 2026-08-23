@@ -113,7 +113,6 @@ done
 
 echo ""
 echo "AI policy gates"
-# TODO(jb-comment): why a gap in this section is worse than a gap in the others
 HOOKS_PATH=$(git config --global core.hooksPath 2>/dev/null || true)
 WANT_HOOKS="$MAIN_CHECKOUT/githooks"
 if [ "$HOOKS_PATH" = "$WANT_HOOKS" ]; then
@@ -131,8 +130,6 @@ if [ -e "$CFG/hooks/human-authored-text.sh" ]; then
 else
     bad "authoring gate hook missing" "just install-hooks"
 fi
-# TODO(jb-comment): why the event it is registered on is checked separately from
-# whether the hook exists
 if grep -q 'human-authored-text' "$CFG/settings.json" 2>/dev/null; then
     ok "authoring gate registered in settings.json"
 else

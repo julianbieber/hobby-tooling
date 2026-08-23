@@ -127,7 +127,7 @@ which are actually installed here. Query files land in the checkout's
 | `hdash` | Bevy dashboard over every work item — GitHub issues, the worktrees they become, PRs, done. One card per piece of work |
 | `hobby-mml-lsp` | HMML language server, routed to `.hmml` specs by file type |
 | 4 vendored LSPs | `claude-lsp`, `claude-skills-lsp`, `treesitter-class-lsp`, `path-lsp` — buildable without the work checkout |
-| 18 skills | Task loop (journal, resume, spawn, subtask, triage, reflect), HMML suite, PR + dev-flow, GitHub issues |
+| 21 skills | Task loop (journal, resume, spawn, subtask, triage, reflect), HMML suite, comment review, PR + build:task, GitHub issues |
 
 ## Account Separation
 

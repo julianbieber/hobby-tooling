@@ -117,9 +117,6 @@ git-identity:
         echo "  $(basename "$r"): $(git -C "$r" config user.email)"
     done
 
-# TODO(jb-comment): why this is set globally rather than per-repo, and what that
-# obliges the hooks themselves to do
-
 # Enforce the AI policy in git itself — attribution, identity, placeholders
 install-git-hooks: _root-notice
     #!/usr/bin/env bash
@@ -135,9 +132,6 @@ install-git-hooks: _root-notice
     echo "  core.hooksPath -> {{REPO_ROOT}}/githooks"
     echo "  active in ~/fun_repos and ~/fun_worktrees; a no-op everywhere else"
 
-# TODO(jb-comment): why the marker names what needs explaining and never drafts
-# the explanation, and why nothing here offers to fill one in
-
 # Find comment placeholders waiting for me to write the actual comment
 check-placeholders *DIR:
     #!/usr/bin/env bash
@@ -146,10 +140,29 @@ check-placeholders *DIR:
     if rg -n --color always -e 'TODO\(jb-(comment|doc)\):' "$target"; then
         echo ""
         echo "Replace each with your own words before this leaves the machine."
-        echo "pre-push refuses them on any remote that is not mine."
+        echo "pre-push refuses them on a push from an upstream-tier repo."
         exit 1
     fi
     echo "  no unfilled comment placeholders in $target"
+
+# Which AI-policy tier each repo resolves to, and why
+ai-policy *DIR:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    resolver="{{justfile_directory()}}/scripts/ai-policy-tier.sh"
+    if [ -n "{{DIR}}" ]; then
+        targets="{{DIR}}"
+    else
+        targets=$(find "{{FUN_REPOS}}" -mindepth 1 -maxdepth 1 -type d | sort)
+    fi
+    why_file=$(mktemp)
+    trap 'rm -f "$why_file"' EXIT
+    printf '  %-30s %-9s %s\n' REPO TIER WHY
+    for d in $targets; do
+        [ -d "$d" ] || continue
+        tier=$("$resolver" "$d" --why 2>"$why_file")
+        printf '  %-30s %-9s %s\n' "$(basename "$d")" "$tier" "$(sed 's/^ *//' "$why_file")"
+    done
 
 # ---------------------------------------------------------------------------
 # Claude config dir
@@ -213,9 +226,6 @@ install-hooks: _root-notice
 # Renaming a skill dir orphans its old symlink, which then lingers as a slash
 # command pointing at nothing. `-xtype l` matches exactly the dangling links, so
 # live commands are never touched.
-
-# TODO(jb-comment): why a nested skill dir is how a `namespace:command` slash
-# command is spelled, and why the empty-dir sweep has to follow the link prune
 
 # Skills as slash commands in the hobby config dir
 install-skills: _root-notice

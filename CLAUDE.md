@@ -1,5 +1,7 @@
 # Hobby Tooling
 
+ai-policy: private
+
 ## What This Repo Is
 
 Personal Claude Code tooling for hobby projects, running under a **separate Claude
@@ -284,38 +286,87 @@ bypass.
 
 | Layer | Where | Enforces |
 |---|---|---|
-| 1 | `githooks/` — global `core.hooksPath` | no machine attribution, no work identity, no placeholders on a public remote |
+| 1 | `githooks/` — global `core.hooksPath` | no machine attribution, no work identity, no placeholders on an upstream-tier push |
 | 2 | `hooks/human-authored-text/` — `PreToolUse` | I write every message, body and comment; a PR carries a filled `## AI use` section |
-| 3 | `skills/pr-facts`, `ai-use-facts`, `explain-back`, `gh-issue-*`, `dev-flow` gates 0 and 2.5 | facts instead of drafts; prior-art and size checks; understanding checked before the PR |
-| 4 | `dotfiles/claude-md/hobby.CLAUDE.md`, `just check-placeholders` | no AI-written comments, doc comments or prose |
+| 3 | `skills/pr-facts`, `ai-use-facts`, `explain-back`, `comment-review`, `gh-issue-*`, `build:task` gates | facts instead of drafts; prior-art and size checks; understanding checked before the PR; comments checked and cut |
+| 4 | `dotfiles/claude-md/hobby.CLAUDE.md`, `just check-placeholders`, `just ai-policy` | what may be commented, and by whom, per tier |
 
 `githooks/policy-lib.sh` is the single definition of the banned patterns, the
 placeholder token and the expected commit email. Layer 2 sources it.
+`scripts/ai-policy-tier.sh` is the single definition of the **tier**; layer 1
+reads it through `policy_tier()`, and layers 3 and 4 call it directly.
 
 The placeholder tokens are `TODO(jb-comment)` (inline) and `TODO(jb-doc)` (doc
 comments and README sections). They name **what needs explaining, never the
 explanation**.
 
-### TODO(jb-doc): why layer 1 is the only one that counts as a guarantee
+### The two tiers
 
-<!-- What it should cover: where the Co-Authored-By trailer actually comes from,
-     and what a permission rule does to every layer above 1. -->
+`scripts/ai-policy-tier.sh` takes the first answer of:
 
-### TODO(jb-doc): why the gate denies rather than rewriting the command
+1. `AI_POLICY_TIER` in the environment
+2. an `ai-policy: upstream` / `ai-policy: private` line in the repo's `CLAUDE.md`
+3. an origin owner that is not `julianbieber` → `upstream`
+4. `gh repo view --json isFork` → `upstream` when true
+5. otherwise `private`
 
-<!-- What it should cover: updatedInput was verified as available on PreToolUse
-     before this was built, so it is a choice; the shell-quoting problem, and what
-     the .sha registry guarantees. -->
+Step 4 is the only one that touches the network; `HOBBY_AI_POLICY_NO_GH=1` skips
+it, and a fork then resolves `private`. Step 2 is the only marker that works
+offline.
 
-### TODO(jb-doc): why stripping the trailer is only half of it
+`just ai-policy` reports the tier and the reason per repo. Under `~/fun_repos` it
+finds 11 `upstream`, of which 7 are forks owned by me: `bevy_ecs_ldtk`,
+`bevy_image_export`, `bevy_new_minimal`, `bevy_sky_gradient`, `glasgow`,
+`presenterm`, `wgsl-analyzer`. The predicate this replaced —
+`github.com[:/]julianbieber/` on the push URL — matched all 7 as mine.
 
-<!-- What it should cover: norm 1 bans the trailer, norm 2 requires a disclosure,
-     and what the ledger in /ai-use-facts is for. -->
+### Ownership, not the URL
 
-### TODO(jb-doc): why the style rule applies to this private repo too
+The URL predicate tested where a push lands, and a fork's whole purpose is that
+the code does not stop there. An unresolvable tier fails closed —
+`push_is_upstream` returns true for anything that is not literally `private`, so a
+broken resolver over-enforces instead of silently letting a public push through.
 
-<!-- What it should cover: the argument for habit over scope, and what the
-     repo's previous comment style was for. -->
+### Why the private tier stops at public doc comments
+
+The ban produced markers rather than comments: 56 of them in this repo alone,
+none of which describe anything. A doc comment on a public item states the
+contract a caller needs before reading the body, and is checkable against the
+signature. An inline comment on a private item is where restating-the-code lives,
+so it stays a placeholder on both tiers.
+
+### Layer 1 is the only guarantee
+
+The `Co-Authored-By: Claude` trailer is not the model's idea — it is instructed by
+the harness system prompt, so a CLAUDE.md rule against it is one instruction
+against another. Layers 2–4 are all inside Claude Code: layer 2's matcher is
+`Bash`, so a commit made any other way never reaches it, and layers 3–4 are
+instructions a model can misread. Layer 1 runs whoever invokes git, including me
+by hand.
+
+### Deny, rather than rewriting the command
+
+`updatedInput` is available on `PreToolUse`, so this is a choice, not a
+limitation. Rewriting means splicing my prose back into a shell command string,
+which is a quoting hazard on exactly the text most likely to contain quotes. The
+deny path instead hands over a file and records its sha, and pass 1 re-checks that
+sha on the re-issued command — so nothing can edit the authored text between my
+writing it and git using it.
+
+### Stripping the trailer is half of it
+
+Norm 1 bans the attribution; norm 2 requires a disclosure. Doing only the first
+produces a PR that hides AI involvement completely — the opposite failure.
+`/ai-use-facts` assembles the record, so the paragraph I write has something to be
+accurate about.
+
+### This repo is `private`, and that is recent
+
+The blanket style rule used to apply here on the argument that habit beats scope.
+It no longer does — `ai-policy: private` at the top of this file, and the tier
+table in `hobby.CLAUDE.md`, are what govern. Every `TODO(jb-comment)` still in
+this tree predates that and is inline, which is the one category the private tier
+does not relax.
 
 [bevy-website#2551]: https://github.com/bevyengine/bevy-website/pull/2551
 

@@ -83,22 +83,39 @@ rejects the co-author trailer outright.
 section that I write. You may assemble the *facts* of what you did (`/ai-use-facts`);
 you write no part of the paragraph.
 
-**No comments, no doc comments, no prose.** In any code you write:
+**Comments and doc comments run on two tiers.** `scripts/ai-policy-tier.sh`
+decides which, and `just ai-policy` prints it per repo. A repo is `upstream` when
+its origin belongs to someone else, or is my fork of someone else's repo;
+`private` otherwise. An `ai-policy: upstream` or `ai-policy: private` line in a
+repo's own `CLAUDE.md` overrides the resolver and is the only way to mark a fork
+while offline.
 
-- No explanatory `//` comments. Where one is needed, leave
-  `// TODO(jb-comment): <what needs explaining>`.
-- No `///` or `//!` doc comments at all — those are module docs, which the policy
-  bans AI from drafting. At most `/// TODO(jb-doc): <what needs documenting>`.
+| | upstream | private |
+|---|---|---|
+| `///` / `//!` on a **public** item | `TODO(jb-doc)` only | you write it |
+| `///` / `//!` on a private item | `TODO(jb-doc)` only | not allowed |
+| `//` in a body, or on a private item | `TODO(jb-comment)` only | `TODO(jb-comment)` only |
+| `panic!` / `expect!` / `#[error(...)]` strings | bare factual phrase | you write it |
+| README, release notes, migration guides | mine | mine |
+| `CLAUDE.md` and `skill.md` bodies | code, not prose — you write it | code, not prose — you write it |
+
+- **Public element of a module** is `pub` in Rust; elsewhere, whatever the module
+  exports. A comment on anything else is a comment that should not exist.
 - The placeholder states **what needs explaining, never the explanation**. Half a
   drafted sentence is worse than none.
-- The same applies to `panic!` / `expect!` / `#[error(...)]` strings beyond a bare
-  factual phrase, to README and CLAUDE.md prose, and to any release-note or
-  migration-guide file.
-- Structure, headings, tables and factual lists are fine. Argument and explanation
-  are not.
+- Structure, headings, tables and factual lists are fine everywhere. Argument and
+  explanation are not, wherever the table says *mine*.
+- `/explain-back` checks the comments in a diff against the code and fixes them;
+  `/comment-review` then cuts every clause that is not required. Both refuse to
+  write on an `upstream` repo.
 
 Find outstanding markers with `just check-placeholders`. `pre-push` refuses them
-on any remote that is not mine.
+on a push from an `upstream` repo.
+
+The split is ownership, not the push URL: a fork under my own name pushes to me
+and still ends up in someone else's repo. An unresolvable tier counts as
+`upstream`, so a broken resolver over-enforces rather than letting a public push
+through.
 
 **Before starting anything substantial**, search for prior art
 (`gh pr list --search`, `gh issue list --search`) and state the expected diff
@@ -107,7 +124,10 @@ accelerate past someone else's active work.
 
 **Never be a direct pipe.** Findings get verified before they are reported.
 
-TODO(jb-doc): why this applies to private repos and not only to Bevy-bound code
+Everything above except the comment table applies on every repo, private ones
+included: which text is mine to write does not depend on who can read it. The
+comment rule is the one part that is scoped, because it is the one part that was
+about the reader rather than the author.
 
 [bevy-website#2551]: https://github.com/bevyengine/bevy-website/pull/2551
 

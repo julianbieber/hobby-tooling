@@ -2,7 +2,8 @@
 # Reject a commit message carrying machine attribution, or a commit authored
 # under the work identity.
 #
-# TODO(jb-doc): why this check has to be a git hook rather than a CLAUDE.md rule
+# A CLAUDE.md rule only reaches the model, and the trailer is injected by the
+# harness system prompt — or typed by hand.
 #
 # Args: $1 = path to the file holding the prospective commit message.
 
@@ -14,7 +15,6 @@ HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 MSG_FILE="$1"
 
-# TODO(jb-comment): why a global core.hooksPath obliges this hook to chain
 run_local_hook() {
     local git_dir local_hook
     git_dir=$(git rev-parse --git-dir 2>/dev/null) || return 0
@@ -26,7 +26,6 @@ run_local_hook "$@"
 
 policy_in_scope || exit 0
 
-# TODO(jb-comment): what git already rejects here, and what this adds
 BODY=$(grep -v '^#' "$MSG_FILE" | sed '/^[[:space:]]*$/d')
 if [ -z "$BODY" ]; then
     policy_die "Empty commit message." \
