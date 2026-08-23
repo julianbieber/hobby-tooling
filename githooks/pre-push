@@ -29,6 +29,7 @@ run_local_hook() {
 }
 run_local_hook "$@"
 
+policy_guards_enabled || exit 0
 policy_in_scope || exit 0
 
 push_is_upstream() {

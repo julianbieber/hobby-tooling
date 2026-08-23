@@ -6,6 +6,20 @@
 #
 # A second copy of the regex is a message one of them accepts and another rejects.
 
+# The single on/off switch for every AI-policy check: this file's three callers
+# (commit-msg, pre-push, the human-authored-text PreToolUse hook) each ask it
+# first and exit 0 when it says no. `0` disables, anything else enables.
+#
+# The default lives here rather than in settings.json because a git hook is not a
+# Claude Code process and never sees that file's env block. Set
+# HOBBY_AI_POLICY_GUARDS=1 in the environment, or flip this default, to re-arm all
+# three at once.
+POLICY_GUARDS_DEFAULT=0
+
+policy_guards_enabled() {
+    [ "${HOBBY_AI_POLICY_GUARDS:-$POLICY_GUARDS_DEFAULT}" != "0" ]
+}
+
 # core.hooksPath is global, so these hooks run in every repo on the machine.
 # Outside the hobby tree that would mean rejecting work commits for carrying the
 # work identity.

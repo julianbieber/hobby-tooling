@@ -18,6 +18,8 @@ REPO="$(cd "$HERE/../.." && pwd)"
 # shellcheck source=../../githooks/policy-lib.sh
 . "$REPO/githooks/policy-lib.sh"
 
+policy_guards_enabled || exit 0
+
 INPUT=$(cat)
 [ "$(echo "$INPUT" | jaq -r '.tool_name // empty')" = "Bash" ] || exit 0
 
