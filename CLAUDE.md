@@ -352,7 +352,24 @@ explanation**.
 
 ### Layers 1 and 2 are wired but disarmed
 
-TODO(jb-doc): why the two mechanical layers were turned off
+**The false positives are why.** Layer 2 classifies by substring against the whole
+Bash command text, so any command whose *argument* happens to contain `git commit`,
+`gh pr create` or `gh issue comment` is intercepted as if it were that command — writing the
+phrase into a journal entry, a heredoc, a `python3 -c`, a grep pattern. Issue #24
+reports it, and disarming the layer tripped it four more times in the session that
+wrote this section: twice far enough to open an editor and demand a message, once
+for a `cat > facts.md` and once classifying a file edit as a pull request.
+
+That is worse than an ordinary bug because of what the layer does when it fires: it
+blocks and waits on a human. A check that stops work on text merely mentioning the
+thing it guards costs more attention than the thing it prevents.
+
+The classifier at `hooks/human-authored-text/hook.sh:75-110` is untouched here —
+this turns the layer off rather than narrowing the matcher, so #24 stays open and
+re-arming brings the false positives back with it.
+
+Layer 1 went with it because the two share `policy-lib.sh`, and because the git
+hooks were the enforcement half of the same rule.
 
 `policy_guards_enabled` in `githooks/policy-lib.sh` is the single switch. All three
 mechanical checks — `commit-msg`, `pre-push`, and the `human-authored-text`
