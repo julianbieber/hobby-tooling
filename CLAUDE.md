@@ -328,18 +328,18 @@ directory would see no MCPs. `install-mcps` removes before adding, so re-running
 repoints an entry that still names a work binary instead of skipping it as already
 registered.
 
-## The AI policy is enforced in four layers
+## The AI policy is enforced in four layers — two of them currently switched off
 
 Bevy's revised AI policy ([bevy-website#2551]) applies to **all** work on this
 account, not only Bevy contributions. Four layers, ordered by how hard they are to
 bypass.
 
-| Layer | Where | Enforces |
-|---|---|---|
-| 1 | `githooks/` — global `core.hooksPath` | no machine attribution, no work identity, no placeholders on an upstream-tier push |
-| 2 | `hooks/human-authored-text/` — `PreToolUse` | I write every message, body and comment; a PR carries a filled `## AI use` section |
-| 3 | `skills/pr-facts`, `ai-use-facts`, `explain-back`, `comment-review`, `gh-issue-*`, `build:task` gates | facts instead of drafts; prior-art and size checks; understanding checked before the PR; comments checked and cut |
-| 4 | `dotfiles/claude-md/hobby.CLAUDE.md`, `just check-placeholders`, `just ai-policy` | what may be commented, and by whom, per tier |
+| Layer | Where | Enforces | State |
+|---|---|---|---|
+| 1 | `githooks/` — global `core.hooksPath` | no machine attribution, no work identity, no placeholders on an upstream-tier push | **off** |
+| 2 | `hooks/human-authored-text/` — `PreToolUse` | I write every message, body and comment; a PR carries a filled `## AI use` section | **off** |
+| 3 | `skills/pr-facts`, `ai-use-facts`, `explain-back`, `comment-review`, `gh-issue-*`, `build:task` gates | facts instead of drafts; prior-art and size checks; understanding checked before the PR; comments checked and cut | on |
+| 4 | `dotfiles/claude-md/hobby.CLAUDE.md`, `just check-placeholders`, `just ai-policy` | what may be commented, and by whom, per tier | on |
 
 `githooks/policy-lib.sh` is the single definition of the banned patterns, the
 placeholder token and the expected commit email. Layer 2 sources it.
@@ -349,6 +349,61 @@ reads it through `policy_tier()`, and layers 3 and 4 call it directly.
 The placeholder tokens are `TODO(jb-comment)` (inline) and `TODO(jb-doc)` (doc
 comments and README sections). They name **what needs explaining, never the
 explanation**.
+
+### Layers 1 and 2 are wired but disarmed
+
+**The false positives are why.** Layer 2 classifies by substring against the whole
+Bash command text, so any command whose *argument* happens to contain `git commit`,
+`gh pr create` or `gh issue comment` is intercepted as if it were that command — writing the
+phrase into a journal entry, a heredoc, a `python3 -c`, a grep pattern. Issue #24
+reports it, and disarming the layer tripped it four more times in the session that
+wrote this section: twice far enough to open an editor and demand a message, once
+for a `cat > facts.md` and once classifying a file edit as a pull request.
+
+That is worse than an ordinary bug because of what the layer does when it fires: it
+blocks and waits on a human. A check that stops work on text merely mentioning the
+thing it guards costs more attention than the thing it prevents.
+
+The classifier at `hooks/human-authored-text/hook.sh:75-110` is untouched here —
+this turns the layer off rather than narrowing the matcher, so #24 stays open and
+re-arming brings the false positives back with it.
+
+Layer 1 went with it because the two share `policy-lib.sh`, and because the git
+hooks were the enforcement half of the same rule.
+
+`policy_guards_enabled` in `githooks/policy-lib.sh` is the single switch. All three
+mechanical checks — `commit-msg`, `pre-push`, and the `human-authored-text`
+`PreToolUse` hook — call it first and `exit 0` when it says no. It reads
+`HOBBY_AI_POLICY_GUARDS`, defaulting to `POLICY_GUARDS_DEFAULT`, which is `0`.
+
+```
+HOBBY_AI_POLICY_GUARDS=1 git push        # re-arm for one command
+POLICY_GUARDS_DEFAULT=1 in policy-lib.sh # re-arm everywhere, permanently
+```
+
+**Nothing was uninstalled.** `core.hooksPath` still points at `githooks/`, the hook
+is still symlinked into `~/.claude-hobby/hooks/` and still registered in
+`settings.json`, and `just doctor` still checks all of that — it reports the wiring
+and the switch on separate lines, because installed and armed are separate
+questions. The switch is one word away from being on, which unsetting
+`core.hooksPath` would not have been.
+
+The default lives in `policy-lib.sh` rather than `settings.json`'s `env` block
+because a git hook is not a Claude Code process: `commit-msg` and `pre-push` run
+under whoever invokes git, including by hand, and never see that file.
+
+Two consequences:
+
+- **The work-identity check falls with them.** `commit-msg` and `pre-push` also
+  rejected commits authored under the work email, which is a leak, not an
+  authorship question — it shared a file with the AI checks and so shares the
+  switch. `just doctor` and `just git-identity` still cover the two repos that set
+  the identity explicitly; nothing now catches a hobby repo that never did.
+- **Layers 3 and 4 are instructions, and stay in force.** The rules in this file
+  and in `hobby.CLAUDE.md` — I write every commit message, PR body, issue and
+  comment; no machine attribution; the comment tier table — are unchanged. What is
+  gone is the mechanism that made them non-optional, which is exactly what "layer 1
+  is the only guarantee" below was about.
 
 ### The two tiers
 
@@ -385,7 +440,10 @@ contract a caller needs before reading the body, and is checkable against the
 signature. An inline comment on a private item is where restating-the-code lives,
 so it stays a placeholder on both tiers.
 
-### Layer 1 is the only guarantee
+### Layer 1 is the only guarantee — which is what turning it off costs
+
+This is the reasoning the layers were built on, unchanged; with layer 1 disarmed it
+now reads as the list of what nothing checks.
 
 The `Co-Authored-By: Claude` trailer is not the model's idea — it is instructed by
 the harness system prompt, so a CLAUDE.md rule against it is one instruction

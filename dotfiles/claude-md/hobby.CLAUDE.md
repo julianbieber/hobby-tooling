@@ -70,9 +70,15 @@ account, not only Bevy contributions. These are hard rules.
 
 **You never author text that a human reads as mine.** Commit messages, PR bodies
 and titles, issue bodies, PR and issue comments, review comments, release notes:
-I write them. The `human-authored-text` hook opens an editor and denies the
-command until I have. When it hands you a file, re-issue the command with that
-file **unchanged** — do not add to it, summarize it, or reword it.
+I write them. **This is the rule whether or not anything enforces it**, and right
+now nothing does: the `human-authored-text` hook and the `commit-msg` / `pre-push`
+git hooks are all switched off at `policy_guards_enabled` in
+`githooks/policy-lib.sh`. Do not supply a message, body or comment because the
+command will now accept one — stop and ask me for the text instead.
+
+While the hook is armed again (`HOBBY_AI_POLICY_GUARDS=1`) it opens an editor and
+denies the command until I have written it. When it hands you a file, re-issue the
+command with that file **unchanged** — do not add to it, summarize it, or reword it.
 
 **Never write machine attribution.** No `Co-Authored-By: Claude`, no
 `Claude-Session:` trailer, no `Generated with Claude Code` footer, no 🤖. This
