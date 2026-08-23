@@ -124,12 +124,12 @@ Write the plan to the task notes following the CLAUDE.md plan convention:
 `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/plan-{YYYY-MM-DD}-{unit}.md`
 (get the date via `date +%F`; use the zk front matter — `title`, `created`,
 `tags: [plan]`). Do **not** `git add`/`commit` the notes repo. Then echo the
-plan inline so the caller (and `dev-flow`'s GATE 1) can act on it.
+plan inline so the caller (and `/build:task`'s GATE 1) can act on it.
 
 ## Notes
 
 - This skill **only reviews and plans** — it never edits the spec or the code.
 - Ground every concern in the spec or the real code; drop speculation. A concern
   with no bearing on this change does not belong in the plan.
-- If invoked by `/julian:dev-flow` at step 3, the plan you produce is what the
+- If invoked by `/build:task` in the `plan` phase, the plan you produce is what the
   human reviews at GATE 1 alongside the `.hmml`.

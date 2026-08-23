@@ -2,11 +2,11 @@
 # PreToolUse hook: no message, body or comment reaches git or GitHub unless I
 # typed it.
 #
-# TODO(jb-doc): why PreToolUse and not PermissionRequest, given
-# hooks/edit-before-execute already opened an editor on these same commands
+# PermissionRequest fires only when I would be prompted, so an allowlisted
+# `git commit` skips it entirely. PreToolUse runs on every matching call.
 #
-# TODO(jb-doc): why the hook denies and makes Claude re-issue the command
-# against a file, rather than rewriting the command with updatedInput
+# updatedInput is what edit-before-execute does, and there an unchanged buffer
+# counts as approval — inaction passes.
 #
 # Input:  PreToolUse JSON on stdin { tool_name, tool_input: { command }, cwd }
 # Output: nothing (allow), or a PreToolUse deny with instructions
@@ -44,7 +44,6 @@ deny() {
 }
 
 # --- Pass 1: a command that only references already-authored files -----------
-# TODO(jb-comment): what the .sha file is for, and what re-checking it prevents
 
 referenced_files=$(printf '%s\n' "$CMD" \
     | grep -oE -- '(-F|--file|--body-file|--notes-file|--body-file=|--file=)[= ]?[^ "'"'"']+' \
@@ -73,7 +72,6 @@ KIND=""; FILEFLAG=""; NEEDS_AI=0; TEMPLATE="markdown"
 
 case "$CMD" in
     *"git commit"*)
-        # TODO(jb-comment): why --amend --no-edit and -C are exempt
         case "$CMD" in
             *--no-edit*|*--reuse-message*|*" -C "*) exit 0 ;;
         esac
@@ -105,7 +103,6 @@ case "$CMD" in
     *"gh gist create"*)
         KIND="gist"; FILEFLAG="" ;;
     *"gh api"*)
-        # TODO(jb-comment): why gh api is matched at all, and only on a write
         case "$CMD" in
             *-f\ body=*|*--field\ body=*|*-F\ body=*|*--input*)
                 KIND="GitHub API post"; FILEFLAG="" ;;
@@ -142,9 +139,6 @@ facts() {
         printf '\ncommits on this branch:\n'
         git -C "${CWD:-$PWD}" log --oneline "$(git -C "${CWD:-$PWD}" rev-parse --abbrev-ref '@{upstream}' 2>/dev/null || echo 'HEAD~10')..HEAD" 2>/dev/null | sed 's/^/  /'
     fi
-    # TODO(jb-comment): why a skill hands facts over through a file instead of
-    # putting them in the command
-    # TODO(jb-comment): why facts.md survives until the gate is passed
     if [ -s "$GATE_DIR/facts.md" ]; then
         printf '\n--- gathered for this PR ---\n'
         cat "$GATE_DIR/facts.md"
@@ -153,7 +147,6 @@ facts() {
     printf 'here on purpose: norm 6 asks for your words, not an edit of its words.\n'
 }
 
-# TODO(jb-comment): why a rejected buffer is offered back instead of a blank one
 if [ -s "$GATE_DIR/seed.md" ]; then
     { cat "$GATE_DIR/seed.md"; printf '\n'; facts; } > "$BUF"
     TEMPLATE_SEEDED=1
@@ -177,16 +170,12 @@ case "$TEMPLATE" in
             facts
         } > "$BUF" ;;
     titled)
-        # TODO(jb-comment): why line 1 is the title here too
         [ "$TEMPLATE_SEEDED" = "1" ] || { printf '\n\n'; facts; } > "$BUF" ;;
     *)
         [ "$TEMPLATE_SEEDED" = "1" ] || { printf '\n\n'; facts; } > "$BUF" ;;
 esac
 
 # --- Pass 4: open it ---------------------------------------------------------
-# TODO(jb-comment): why the ZELLIJ variables decide the spawn method
-# TODO(jb-comment): why every spawn must have its stdout closed off — `zellij run`
-# prints the pane name, and one stray line ahead of the JSON breaks the hook
 if [ -n "${ZELLIJ:-}" ]; then
     zellij run --floating --close-on-exit --name "write: $KIND" -- \
         bash -c "${EDITOR:-hx} '$BUF' && touch '$DONE'" >/dev/null 2>&1
@@ -210,13 +199,10 @@ if [ -z "$TRIMMED" ]; then
     deny "Nothing was written, so the $KIND is not authored. Bevy AI policy norm 1: I own what I submit. Re-run when I am ready to write it."
 fi
 
-# TODO(jb-comment): why the checks below run on $AUTHORED and never on $BUF
 if printf '%s\n' "$AUTHORED" | policy_find_attribution - >/dev/null; then
     deny "The text I wrote contains machine attribution. Bevy AI policy norm 1 bans it. What I wrote is still at $BUF — re-run to reopen it."
 fi
 
-# TODO(jb-comment): why this compares against the whole command instead of the
-# text extracted from it
 norm() { tr -d '[:space:]'; }
 if [ "$(printf '%s' "$TRIMMED" | wc -c)" -gt 40 ] \
     && printf '%s' "$CMD" | norm | grep -qF -- "$(printf '%s' "$TRIMMED" | norm)"; then
@@ -240,7 +226,6 @@ rm -f "$GATE_DIR/facts.md" "$GATE_DIR/seed.md"
 
 if [ "$TEMPLATE" = "pr" ] || [ "$TEMPLATE" = "titled" ]; then
     TITLE=$(head -n1 "$BUF")
-    # TODO(jb-comment): why an empty first line has to be its own rejection
     if [ -z "$(printf '%s' "$TITLE" | tr -d '[:space:]')" ]; then
         cp "$BUF" "$GATE_DIR/seed.md"
         deny "Line 1 of the buffer is the title and it is empty. What I wrote is kept — re-run and the buffer comes back with it, so only the title line needs adding."

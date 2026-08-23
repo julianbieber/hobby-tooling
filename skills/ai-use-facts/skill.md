@@ -72,7 +72,8 @@ guessing.
 A large **Unrecorded** section is a finding, not an inconvenience. Say so plainly
 and name the files; do not fill it in by inference.
 
-## TODO(jb-doc): why this stops short of the paragraph
+## Why this stops short of the paragraph
 
-<!-- What it should cover: where norm 2 and norm 6 meet, and what a skill that
-     offered "just a first draft" would cost. -->
+Norm 2 makes the disclosure mandatory; norm 6 makes it mine to write. A drafted
+paragraph would leave the one section that certifies human authorship as the
+AI-written one.

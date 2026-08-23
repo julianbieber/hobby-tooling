@@ -6,8 +6,8 @@
 # Triggers:
 #   - Write tool calls where content exceeds a size threshold
 #
-# TODO(jb-comment): why the Bash triggers were removed, and what treating an
-# unchanged buffer as approval did that made this unusable as a policy gate
+# Unchanged content falls through to the normal accept/reject flow, so as a policy
+# gate this reads "wrote nothing" as a pass. That is why the Bash triggers left.
 #
 # Behavior:
 #   - Content unchanged → exit 0 (normal accept/reject flow)

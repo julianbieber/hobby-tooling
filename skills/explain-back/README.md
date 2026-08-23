@@ -17,7 +17,14 @@ list of the hunks I could not explain.
 Enforces Bevy AI policy norm 1 — *you must personally understand every line you
 submit* — which no hook can check.
 
-Runs at Gate 2.5 of `/dev-flow`, before the PR gate.
+Then, and only after the tally, a **comment pass**: every comment in the diff is
+checked against the code and marked drifted / missing / misplaced / fine. On a
+`private` repo it rewrites drifted comments and writes missing doc comments on
+public items; on `upstream` it emits placeholders and writes nothing. It may edit
+comment lines and nothing else.
+
+Runs at the `explain-back` phase of `/build:task`, before the PR gate.
+`/comment-review` runs after it and cuts what is not required.
 
 ## Installation
 
