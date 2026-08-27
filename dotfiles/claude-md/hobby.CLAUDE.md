@@ -145,13 +145,40 @@ the common cases.
 
 ## Git Identity
 
-Hobby repos commit as `julianbieber <julian.bieber.1992@gmail.com>`, set per-repo.
-The **global** git identity is the work one, so a fresh hobby repo needs:
+Hobby repos commit as `julianbieber <julian.bieber.1992@gmail.com>`. The **global**
+identity is the work one, so this is handled by an `includeIf` in `~/.gitconfig`
+covering `~/fun_repos/` and `~/fun_worktrees/` — a clone landing there is born with
+the hobby identity, with no follow-up command. `just git-identity` installs it and
+repairs any repo whose local config disagrees; `just doctor` checks every repo.
+
+A repo **outside** those two trees still needs it set by hand:
 
 ```bash
 git config user.name julianbieber
 git config user.email julian.bieber.1992@gmail.com
 ```
+
+## Syncing two machines
+
+`hwt sync` reports every checkout holding state no remote has — main checkouts,
+task worktrees and orphans alike. It changes nothing without a flag:
+
+```
+hwt sync                touch nothing, just report
+hwt sync --pull         fetch all, fast-forward what can be, list waiting snapshots
+hwt sync --push         push branches holding commits no remote has
+hwt sync --wip          snapshot dirty trees to refs/wip/<machine>/<branch>
+```
+
+Arriving at a machine is `--pull`; leaving it is `--push --wip`.
+
+`--wip` leaves HEAD, the index and the working tree exactly as they were; the
+snapshot is a ref outside `refs/heads/`, so it is never a branch and never a PR.
+`--pull` only ever fast-forwards — a dirty or diverged checkout is reported, not
+touched — and lists the other machine's snapshots from `refs/remote-wip/` with the
+diff command for each. Applying one is yours to do.
+
+Stashes are out of scope — they cannot be pushed. Use a wip snapshot instead.
 
 ## Tooling
 

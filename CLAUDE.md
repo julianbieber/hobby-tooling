@@ -123,6 +123,135 @@ here, and it would put a network call behind a keystroke that currently writes o
 local file. `hdash` asks `gh` for open issues only, so a closed issue's task simply
 shows unjoined — which is the honest rendering of the two being independent.
 
+## Two machines: what is actually at risk, and `hwt sync`
+
+Work moves between two machines, so anything a remote has never seen exists on one
+disk. `hwt status` did not answer that question — it reads `hwt list`, which is
+task-driven, so it sees only the worktrees.
+
+**The worktrees were never the leak.** 34 of 37 are clean, with an upstream, zero
+commits ahead: the PR flow pushes them as a side effect of how a task is worked.
+Every unsynced byte was in the **main checkouts** under `~/fun_repos`, which no
+command enumerated. `hwt sync` scans all three populations — main checkouts, task
+worktrees, and orphans — because the last two are cheap to include once the walk
+exists, and an orphan is by definition recorded nowhere else.
+
+Four states, and only one of them is a sync problem:
+
+| state | means | fix |
+|---|---|---|
+| `unsynced` | commits no remote has, or a dirty tree | `--push` / `--wip` |
+| `no-remote` | commits, but nowhere to push them | `gh repo create` |
+| `unborn` | zero commits; every file untracked | a first commit |
+| `skipped` | `hobby.sync=false` in that repo | — |
+
+`unborn` is its own state because it is not a degree of `unsynced`: five repos here
+were `git init`'d and never committed, so `.gitignore` and `Cargo.toml` are
+untracked alongside `src/`. Reporting that as "12 dirty files" would have buried it.
+
+The opt-out is `git config hobby.sync false`, in the repo's own `.git/config`
+rather than a marker file — a marker file in the working tree would itself show up
+as untracked, i.e. as the thing it is meant to silence. It does not travel between
+machines, which is correct: whether a scratch checkout exists at all is a fact
+about one disk.
+
+### A snapshot is a ref, not a branch, and not a stash
+
+`--wip` writes the working tree — tracked edits and untracked files alike, minus
+what `.gitignore` excludes — to a commit reachable only from
+`refs/wip/<machine>/<branch>`, then pushes that ref.
+
+**HEAD, the index and the working tree are untouched.** The snapshot is assembled
+in a throwaway index (`GIT_INDEX_FILE` → `read-tree` → `add --all` → `write-tree`
+→ `commit-tree`), so it can run over a checkout that is mid-edit without
+disturbing it. That is what makes it safe to run without reading the diff first,
+and it is why the target is a ref rather than a branch: committing on a branch
+means checking that branch out.
+
+The ref lives outside `refs/heads/`, so a snapshot never appears as a branch in the
+GitHub UI and no PR can be opened from one by accident. GitHub accepts the push —
+verified, not assumed.
+
+`<machine>` is `$HOBBY_MACHINE`, falling back to the short hostname. It is in the
+ref name so that snapshotting the same branch on both machines produces two refs
+rather than one machine silently overwriting the other's in-flight work.
+
+**Stashes are deliberately out of scope.** They cannot be pushed at all, so no
+amount of tooling reaches them, and `CLAUDE.md` already treats the shared stash
+stack as a hazard rather than a place to keep things.
+
+### The message is a pointer, not a summary
+
+A wip commit message is a file count, the branch, the machine, and — for a task
+worktree — the path to that task's notes directory. It never describes the change.
+The notes are synced too and are where the prose lives, so the message points at
+them instead of paraphrasing them; and under the AI policy a factual list is
+writable where a summary is not.
+
+### The other direction: `--pull` fast-forwards, and nothing else
+
+Arriving at a machine is the other half, and it was covered worse than leaving.
+`hwt refresh` exists but pulls `main`/`master` on **main checkouts only** — not the
+branch you were actually on, not any worktree, and it never sees a snapshot. So
+`hwt sync` on a freshly-opened machine could report everything clean while the
+other machine's work sat on the remote, unmentioned.
+
+`--pull` fetches every checkout that has a remote (in parallel — it is the one
+network-bound phase), then **fast-forwards, and only fast-forwards**. A merge or a
+rebase can conflict; fast-forward is the single move that cannot lose work, so
+everything else is printed rather than attempted:
+
+```
+  wusel                  main       ff  a1b2c3d..e4f5a6b (3)
+  sdf-flood              sunset     skipped — behind 4, dirty (2 files)
+  hackathon_game         main       skipped — diverged (2 local / 5 remote)
+```
+
+It runs over **every** checkout with a remote, not just the ones the report calls
+`unsynced`: that column measures what this disk holds and no remote has, which
+says nothing about the reverse direction.
+
+Snapshots fetch into `refs/remote-wip/*`, deliberately not `refs/wip/*`. The second
+namespace is *this* machine's own snapshots, and a forced fetch into it would rewind
+one taken but not yet pushed — the same split git already makes between `refs/heads`
+and `refs/remotes`. Snapshots whose `<machine>` component is this machine are then
+filtered out of the "waiting" list, or every push would be reported back as incoming
+work. What remains is listed newest first, with the diff command:
+
+```
+Wip snapshots waiting from another machine:
+  zig_survivor  refs/remote-wip/desktop/laptop  2 hours ago
+    git -C ~/fun_repos/zig_survivor diff HEAD refs/remote-wip/desktop/laptop
+```
+
+Applying one is left to you. It writes files you have not read yet, which is a
+different kind of act from fast-forwarding a clean branch.
+
+### Reports by default, acts only when asked
+
+`--push` publishes commits, `--wip` publishes the working tree as it stands, and
+`--pull` moves branches. None can be un-published, and one of these repos is public,
+so the bare command prints and changes nothing. The report ends with the exact
+command for each state it cannot act on itself.
+
+### The identity leak this surfaced
+
+Scanning the same tree turned up ~600 commits across 29 repos authored as the work
+email, 11 of those repos public. The cause was structural: the **global** git
+identity is the work one, and `just git-identity` set the hobby identity on exactly
+two repos — this one and the notes repo. Every other clone inherited work identity
+and nothing ever said so.
+
+The fix is an `includeIf` on `gitdir:~/fun_repos/` and `gitdir:~/fun_worktrees/`
+pointing at `~/.gitconfig-hobby`, so a repo is born with the right identity because
+of **where it lands** rather than because a recipe was re-run after cloning.
+Per-repo local config is still written on top, so a checkout moved out from under
+those paths keeps the identity. `just doctor` now checks every repo under
+`~/fun_repos` instead of two.
+
+History was not rewritten: that means a force-push across public repos, and it is
+a separate decision from stopping the bleeding.
+
 ## One dashboard, because there was only ever one list
 
 `tools/hdash` replaces `hwt-overview` (the worktrees that exist) and `hgh-issues`

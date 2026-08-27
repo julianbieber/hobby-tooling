@@ -100,15 +100,21 @@ if common=$(git rev-parse --git-common-dir 2>/dev/null); then
 else
     MAIN_CHECKOUT=$PWD
 fi
-for r in "$MAIN_CHECKOUT" "$NOTES"; do
-    [ -d "$r/.git" ] || continue
+# Every repo, because the global identity is the work one and a repo that never
+# overrode it commits as work — the silent case, which looks fine until the commits
+# are already pushed. `git config user.email` reports the *resolved* value, so a
+# repo covered only by the includeIf passes without needing local config.
+wrong=0
+for r in "$MAIN_CHECKOUT" "$NOTES" "$HOME/fun_repos"/*/; do
+    [ -e "$r/.git" ] || continue
     e=$(git -C "$r" config user.email 2>/dev/null || true)
-    if [ "$e" = "julian.bieber.1992@gmail.com" ]; then
-        ok "$(basename "$r") commits as $e"
-    else
-        bad "$(basename "$r") commits as ${e:-<unset>}" "just git-identity"
-    fi
+    [ "$e" = "julian.bieber.1992@gmail.com" ] || wrong=$((wrong + 1))
 done
+if [ "$wrong" -eq 0 ]; then
+    ok "every repo under ~/fun_repos commits as julian.bieber.1992@gmail.com"
+else
+    bad "$wrong repo(s) commit as someone else" "just git-identity"
+fi
 [ -d "$HOME/fun_worktrees" ] && ok "~/fun_worktrees exists" || bad "~/fun_worktrees missing" "just clone-notes"
 
 echo ""
