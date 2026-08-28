@@ -31,6 +31,14 @@
       "members": [
         {
           "type": "SYMBOL",
+          "name": "change_added"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "change_removed"
+        },
+        {
+          "type": "SYMBOL",
           "name": "comment"
         },
         {
@@ -80,36 +88,121 @@
       ]
     },
     "comment": {
-      "type": "TOKEN",
-      "content": {
-        "type": "SEQ",
-        "members": [
-          {
-            "type": "STRING",
-            "value": "#"
-          },
-          {
-            "type": "CHOICE",
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "TOKEN",
+          "content": {
+            "type": "SEQ",
             "members": [
               {
-                "type": "SEQ",
-                "members": [
-                  {
-                    "type": "PATTERN",
-                    "value": "[^#\\r\\n]"
-                  },
-                  {
-                    "type": "PATTERN",
-                    "value": "[^\\r\\n]*"
-                  }
-                ]
+                "type": "STRING",
+                "value": "#"
               },
               {
-                "type": "BLANK"
+                "type": "CHOICE",
+                "members": [
+                  {
+                    "type": "SEQ",
+                    "members": [
+                      {
+                        "type": "PATTERN",
+                        "value": "[^#\\r\\n]"
+                      },
+                      {
+                        "type": "PATTERN",
+                        "value": "[^\\r\\n]*"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "BLANK"
+                  }
+                ]
               }
             ]
           }
-        ]
+        },
+        {
+          "type": "TOKEN",
+          "content": {
+            "type": "PREC",
+            "value": 2,
+            "content": {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "#"
+                },
+                {
+                  "type": "PATTERN",
+                  "value": "[ \\t]*"
+                },
+                {
+                  "type": "PATTERN",
+                  "value": "[-+][-+]+[^\\r\\n]*"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "change_added": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 1,
+        "content": {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "#"
+            },
+            {
+              "type": "PATTERN",
+              "value": "[ \\t]*"
+            },
+            {
+              "type": "STRING",
+              "value": "+"
+            },
+            {
+              "type": "PATTERN",
+              "value": "[^\\r\\n]*"
+            }
+          ]
+        }
+      }
+    },
+    "change_removed": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 1,
+        "content": {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "#"
+            },
+            {
+              "type": "PATTERN",
+              "value": "[ \\t]*"
+            },
+            {
+              "type": "STRING",
+              "value": "-"
+            },
+            {
+              "type": "PATTERN",
+              "value": "[^\\r\\n]*"
+            }
+          ]
+        }
       }
     },
     "section_header": {
@@ -541,6 +634,18 @@
                       {
                         "type": "SYMBOL",
                         "name": "_newline"
+                      },
+                      {
+                        "type": "SYMBOL",
+                        "name": "comment"
+                      },
+                      {
+                        "type": "SYMBOL",
+                        "name": "change_added"
+                      },
+                      {
+                        "type": "SYMBOL",
+                        "name": "change_removed"
                       }
                     ]
                   }

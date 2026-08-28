@@ -67,6 +67,22 @@ be indented and must not start a new construct, so a nested `- bullet`, a
 Roles, schedules and access-list membership are **not** checked here; that is
 `hobby-mml-parser`'s job. The grammar only assigns shapes.
 
+## Change annotations (`# +` / `# -`)
+
+A spec carries the change a task intends as comment markers on top of its
+baseline (grammar.md §10): `# +` marks the line beneath it — and that line's
+nested children — as added, `# - <text>` is a baseline line the change removes,
+commented out in place. They are ordinary comments to the language, so nothing
+else about parsing changes, but they get their own nodes here, `change_added`
+and `change_removed`, captured as `@diff.plus` / `@diff.minus` so an annotated
+spec reads like a diff instead of a wall of comment-grey.
+
+Both markers take the whole line and outrank `comment`, which matches the same
+span. A repeated sign (`# --- divider ---`, `# +++`) is a rule line, not a
+marker: it is matched at a higher precedence still and stays a `comment`.
+Markers are also accepted inside a `struct` / `enum` body, where an added field
+otherwise had nowhere to sit.
+
 The `##` punctuation node is called `section_marker`, not `marker` — `marker` is
 now the `marker Name` keyword, and one name for both would be a trap in a query.
 

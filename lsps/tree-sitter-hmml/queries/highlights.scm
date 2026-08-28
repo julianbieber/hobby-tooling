@@ -16,6 +16,12 @@
 
 (comment) @comment
 
+; Change annotations (grammar §10): `# +` marks the line beneath it as added,
+; `# - <text>` is a baseline line the change removes. Plain comments to the
+; language, coloured like a diff so the intended change reads at a glance.
+(change_added) @diff.plus
+(change_removed) @diff.minus
+
 ; Section headers: `## modules` etc.
 (section_header (section_marker) @punctuation.special)
 (section_name) @keyword.directive
@@ -44,7 +50,7 @@
 (marker_declaration name: (identifier) @type)
 
 ; A type declaration's `@ <path>` — the real code it references (grammar §4.7),
-; and the `+` / `-` that mark what the body asks to change there.
+; and the legacy inline `+` / `-` member markers §10 superseded.
 (type_definition path: (type_path) @string.special.path)
 (marker_declaration path: (type_path) @string.special.path)
 (delta) @operator
