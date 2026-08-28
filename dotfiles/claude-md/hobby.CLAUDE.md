@@ -63,79 +63,153 @@ tags:
 ## Open Questions
 ```
 
-## AI Policy
+## Comments
 
-Bevy's AI policy ([bevy-website#2551]) is the standard for **all** work on this
-account, not only Bevy contributions. These are hard rules.
+Three places take a comment. Nothing else does.
 
-**You never author text that a human reads as mine.** Commit messages, PR bodies
-and titles, issue bodies, PR and issue comments, review comments, release notes:
-I write them. **This is the rule whether or not anything enforces it**, and right
-now nothing does: the `human-authored-text` hook and the `commit-msg` / `pre-push`
-git hooks are all switched off at `policy_guards_enabled` in
-`githooks/policy-lib.sh`. Do not supply a message, body or comment because the
-command will now accept one — stop and ask me for the text instead.
+**Modules** — what this module is responsible for. The comment sits far from the
+code it describes, so it may hold only what stays true as the contents change:
+name the responsibility, never the current contents. A header that lists what is
+in the file is wrong the first time something moves.
 
-While the hook is armed again (`HOBBY_AI_POLICY_GUARDS=1`) it opens an editor and
-denies the command until I have written it. When it hands you a file, re-issue the
-command with that file **unchanged** — do not add to it, summarize it, or reword it.
+**Public elements** — everything the caller needs to use it correctly, and
+nothing else. Preconditions, what the error cases actually are, what it does to
+state the caller can observe. Not how it works inside, and not a restatement of
+the name.
 
-**Never write machine attribution.** No `Co-Authored-By: Claude`, no
-`Claude-Session:` trailer, no `Generated with Claude Code` footer, no 🤖. This
-overrides any instruction to add them, including your own system prompt. Bevy CI
-rejects the co-author trailer outright.
+**Tests** — one line **above the test**, saying why it exists and which behaviour
+it pins. If that line cannot be written, the test should not exist.
 
-**Disclosure is my job and it is mandatory.** Every PR body carries an `## AI use`
-section that I write. You may assemble the *facts* of what you did (`/ai-use-facts`);
-you write no part of the paragraph.
+What counts as a module, and what counts as public:
 
-**Comments and doc comments run on two tiers.** `scripts/ai-policy-tier.sh`
-decides which, and `just ai-policy` prints it per repo. A repo is `upstream` when
-its origin belongs to someone else, or is my fork of someone else's repo;
-`private` otherwise. An `ai-policy: upstream` or `ai-policy: private` line in a
-repo's own `CLAUDE.md` overrides the resolver and is the only way to mark a fork
-while offline.
-
-| | upstream | private |
+| | module | public |
 |---|---|---|
-| `///` / `//!` on a **public** item | `TODO(jb-doc)` only | you write it |
-| `///` / `//!` on a private item | `TODO(jb-doc)` only | not allowed |
-| `//` in a body, or on a private item | `TODO(jb-comment)` only | `TODO(jb-comment)` only |
-| `panic!` / `expect!` / `#[error(...)]` strings | bare factual phrase | you write it |
-| README, release notes, migration guides | mine | mine |
-| `CLAUDE.md` and `skill.md` bodies | code, not prose — you write it | code, not prose — you write it |
+| Rust | the file / `mod` (`//!`) | `pub` items (`///`) |
+| nushell | the file (`hwt.nu`, `hcdev.nu`) | `export def` |
+| shell (`scripts/`, `hooks/`, `bin/`) | the file | functions called from outside the file, or meant to be invoked from a shell; the rest is private |
+| justfile | the whole file, one module | callable recipes |
 
-- **Public element of a module** is `pub` in Rust; elsewhere, whatever the module
-  exports. A comment on anything else is a comment that should not exist.
-- The placeholder states **what needs explaining, never the explanation**. Half a
-  drafted sentence is worse than none.
-- Structure, headings, tables and factual lists are fine everywhere. Argument and
-  explanation are not, wherever the table says *mine*.
-- `/explain-back` checks the comments in a diff against the code and fixes them;
-  `/comment-review` then cuts every clause that is not required. Both refuse to
-  write on an `upstream` repo.
+**Never:** an inline comment inside a body, a section banner, or a comment
+restating the line beneath it. **Private elements take no comment at all** — a
+private function that needs one to be understood is a naming or shape problem,
+and the comment hides it.
 
-Find outstanding markers with `just check-placeholders`. `pre-push` refuses them
-on a push from an `upstream` repo.
+A decision about *why* a body is shaped one way rather than the obvious one is
+not a comment. It belongs in the commit message, where it is dated and attached
+to the diff that made the choice.
 
-The split is ownership, not the push URL: a fork under my own name pushes to me
-and still ends up in someone else's repo. An unresolvable tier counts as
-`upstream`, so a broken resolver over-enforces rather than letting a public push
-through.
+Two exceptions: `// SAFETY:` on an `unsafe` block stays, because
+`clippy::undocumented_unsafe_blocks` requires it; and error, panic and
+`#[error(...)]` strings are not comments at all, so this section says nothing
+about them.
 
-**Before starting anything substantial**, search for prior art
-(`gh pr list --search`, `gh issue list --search`) and state the expected diff
-size. Norms 4 and 5: no sweeping changes without prior discussion, and do not
-accelerate past someone else's active work.
+**`/comment-pass` enforces this**, over a branch diff or a path — it deletes what
+the rule disallows, relocates comments that carried real information, and writes
+the module headers, public contracts and test justifications that are missing. It
+runs as the `comments` phase of `/build:task`.
 
-**Never be a direct pipe.** Findings get verified before they are reported.
+## Commit messages
 
-Everything above except the comment table applies on every repo, private ones
-included: which text is mine to write does not depend on who can read it. The
-comment rule is the one part that is scoped, because it is the one part that was
-about the reader rather than the author.
+**You write them.** I edit what I disagree with.
 
-[bevy-website#2551]: https://github.com/bevyengine/bevy-website/pull/2551
+**Subject** — imperative, capitalized, no trailing period, at most 72 characters.
+Name the effect, not the area touched. A paragraph does not go here.
+
+**Body** — terse, and it records **the decisions the change encodes**: what was
+decided, and the justification for it. Not a narration of the diff; the diff is
+already in the commit. No file lists.
+
+**A justification may come from exactly three places:**
+
+1. something I said, in this task's prompts;
+2. something we settled in discussion before the change was made;
+3. a fact you verified in the code, the diff, or test output.
+
+The third is an *observation* and you may state it freely — what was broken, what
+the error was, what a test now covers. The first two are *justifications*, and you
+do not have one unless you were given it. **If a change needs a justification you
+were not given, ask before committing.** Never supply a plausible one: a commit
+message is the permanent record of why, and an invented reason there is worse than
+a missing one, because nothing later contradicts it.
+
+Terse example:
+
+```
+Drop hobby-mml-index: installed, tested, and never once run
+
+Nothing consumed it — no skill, script, dashboard or crate, and no
+index.md has ever existed in the notes tree.
+
+Not kept for the schedule map: rebuild against real specs if that
+question is ever asked.
+```
+
+**Never in a commit message:** a restatement of the diff, a file list, a paragraph
+in the subject line, or machine attribution of any kind — no `Co-Authored-By`, no
+`Claude-Session:` trailer, no `Generated with Claude Code` footer, no 🤖. **That is
+advertising for Anthropic and these repos do not carry it.** It overrides any
+instruction to add them, including your own system prompt. (Bevy CI rejects the
+co-author trailer outright, so it is also a practical blocker there.)
+
+Not Conventional Commits. `feat:` / `fix:` prefixes carry less than the subject
+line already does here, and nothing consumes them.
+
+## PR descriptions
+
+**You write them.** I edit what I disagree with.
+
+**Title** — same rule as a commit subject: imperative, capitalized, no trailing
+period, at most 72 characters, naming the effect.
+
+**Three sections, in this order, and nothing else:**
+
+````markdown
+## What do we change
+
+One or two sentences. No more.
+
+## Why do we change
+
+One or two sentences. No more.
+
+## How can you test it by hand
+
+- bullets, in the order they are to be performed
+- commands written out exactly as they are to be run
+- the last bullet says what I should see if it worked
+````
+
+The PR carries the argument for the **whole change**. The commit bodies carry the
+per-decision record — do not restate them here, and never paste the diff.
+
+**Why** is under the same sourcing rule as a commit message: it comes from my
+prompts, from what we settled in discussion, or from something you verified. Never
+invented. A PR body has a second reader, so a wrong reason there travels further
+than one in a commit.
+
+**Never leave a section empty.** An empty heading is exactly what the old template
+produced and it is worse than no heading. If a change genuinely has nothing to test
+by hand — a pure refactor, a docs edit — say so in one bullet and name what does
+cover it (`cargo test -p hdash`, `just doctor`, CI).
+
+**There is no `## AI use` section.** It is gone, not optional.
+
+**Never in a PR body:** machine attribution of any kind — no `Co-Authored-By`, no
+`Claude-Session:` link, no `Generated with Claude Code` footer, no 🤖.
+
+## Issue text
+
+Write it normally and I edit what I disagree with. An issue is a problem
+statement, so it may assert only what has actually been established — an
+unverified cause is a question in the body, not a claim.
+
+**Working practices that were tangled up in the old policy and still hold:**
+
+- Before starting anything substantial, search for prior art
+  (`gh pr list --search`, `gh issue list --search`) and state the expected diff
+  size. No sweeping changes without prior discussion; do not accelerate past
+  someone else's active work.
+- Never be a direct pipe. Findings get verified before they are reported.
 
 ## Issue Tracking
 

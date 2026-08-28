@@ -31,11 +31,6 @@
           {
             "type": "command",
             "command": "$HOME/.claude-hobby/hooks/mise-guard.sh"
-          },
-          {
-            "type": "command",
-            "command": "$HOME/.claude-hobby/hooks/human-authored-text.sh",
-            "timeout": 1800
           }
         ]
       }

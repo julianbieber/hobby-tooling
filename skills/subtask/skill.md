@@ -41,14 +41,12 @@ notes, and optionally a GitHub issue.
       - the parent task name itself, if it carries a `gh-<n>` prefix
       - `gh issue list --search "<parent task name>"` in the project repo
    b. Create the issue from the project's main checkout so `gh` picks the right
-      repo. **No `--title`, no `--body`** — the `human-authored-text` gate opens a
-      buffer so I write both:
+      repo:
       ```bash
-      cd ~/fun_repos/{project} && gh issue create
+      cd ~/fun_repos/{project} && gh issue create --title "…" --body "…"
       ```
-      Re-issue exactly as the gate instructs. Tell me the parent reference and the
-      parent issue number (`#<n>`, so GitHub cross-links them) so I can put them in
-      the body; do not write it for me.
+      Reference the parent task and the parent issue number (`#<n>`) in the body,
+      so GitHub cross-links them.
    c. The returned issue number gives the subtask ID: `gh-{number}-{slug}`.
 
    Hobby projects use GitHub issues; there is no Jira here.

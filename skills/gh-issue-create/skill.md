@@ -1,15 +1,15 @@
 ---
-description: Gather the facts a GitHub issue needs, resolve its topic label, and open the authoring buffer so I write the issue myself
+description: Gather the facts a GitHub issue needs, resolve its topic label, and write the issue from them for me to edit
 allowed-tools: Bash(git branch:*), Bash(git remote:*), Bash(pwd:*), Bash(ls:*), Bash(mkdir:*), Bash(gh:*), Read, Write
 ---
 
 Resolve which repo and topic an issue belongs to, gather what has been established
-about the problem, and open the authoring gate so **I** write the title and body.
+about the problem, and write the title and body from those facts for me to edit.
 
-**You do not write the issue body or title.** An issue is a public problem
-statement, and Bevy AI policy norm 9 requires those to be personally authored. Not
-a draft, not an outline, not a suggested title. If asked to write it, say what
-this skill does instead and run it.
+**The facts come first and they constrain the text.** An issue is a problem
+statement, so it may assert only what the gathering step actually established —
+what was observed, where, and what reproduces it. A cause you have not verified is
+a question in the body, not a claim. Show me the text before filing it.
 
 Issues are usually opened before any notes exist, so this skill does not read the
 notes directory — the conversation is the source.
@@ -148,14 +148,10 @@ Rules:
       replace other labels, and leave title, assignees and state alone unless
       asked.
 
-   The `human-authored-text` hook intercepts, opens the buffer with the facts
-   attached, and denies the call. **Re-issue exactly as it instructs**, with the
-   `--title` and `--body-file` it names and every other flag you had. Change
-   nothing in the file.
+   Write the title and body from the facts gathered above and pass them as
+   `--title` / `--body-file`. Show me the body before filing it.
 
-9. **Report** the issue URL and the topic label it carries. If the gate says I
-   wrote nothing, say the issue was not filed and stop — do not retry, do not
-   offer to draft it.
+9. **Report** the issue URL and the topic label it carries.
 
 10. **Suggest the follow-up**, if a worktree doesn't exist yet — either of:
 

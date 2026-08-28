@@ -25,7 +25,8 @@ TOOL=$(echo "$INPUT" | jaq -r '.tool_name // "unknown"')
 
 case "$TOOL" in
   Bash)
-    # Message-bearing commands now go through hooks/human-authored-text.
+    # Message-bearing commands were handed to hooks/human-authored-text, which is
+    # now deleted; nothing intercepts them.
     exit 0
     ;;
   Write)

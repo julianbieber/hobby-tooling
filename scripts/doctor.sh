@@ -118,43 +118,6 @@ fi
 [ -d "$HOME/fun_worktrees" ] && ok "~/fun_worktrees exists" || bad "~/fun_worktrees missing" "just clone-notes"
 
 echo ""
-echo "AI policy gates"
-# Installed and switched on are two questions. Everything below reports the first;
-# policy_guards_enabled is the second, and while it says no all three checks exit 0
-# before doing anything.
-# shellcheck source=../githooks/policy-lib.sh
-. "$MAIN_CHECKOUT/githooks/policy-lib.sh" 2>/dev/null || true
-if ! declare -F policy_guards_enabled >/dev/null; then
-    warn "guard switch unreadable" "githooks/policy-lib.sh"
-elif policy_guards_enabled; then
-    ok "guards ARMED (HOBBY_AI_POLICY_GUARDS/POLICY_GUARDS_DEFAULT)"
-else
-    warn "guards DISABLED — the rows below are wiring only" "HOBBY_AI_POLICY_GUARDS=1 to re-arm"
-fi
-HOOKS_PATH=$(git config --global core.hooksPath 2>/dev/null || true)
-WANT_HOOKS="$MAIN_CHECKOUT/githooks"
-if [ "$HOOKS_PATH" = "$WANT_HOOKS" ]; then
-    ok "core.hooksPath -> githooks/"
-elif [ -n "$HOOKS_PATH" ]; then
-    bad "core.hooksPath is $HOOKS_PATH" "just install-git-hooks"
-else
-    bad "core.hooksPath unset — the trailer ban cannot run" "just install-git-hooks"
-fi
-for h in commit-msg pre-push; do
-    if [ -x "$WANT_HOOKS/$h" ]; then ok "$h executable"; else bad "$h not executable" "just install-git-hooks"; fi
-done
-if [ -e "$CFG/hooks/human-authored-text.sh" ]; then
-    ok "authoring gate hook linked"
-else
-    bad "authoring gate hook missing" "just install-hooks"
-fi
-if grep -q 'human-authored-text' "$CFG/settings.json" 2>/dev/null; then
-    ok "authoring gate registered in settings.json"
-else
-    bad "authoring gate not registered" "just bootstrap-config"
-fi
-
-echo ""
 echo "Optional extras"
 if command -v hdash >/dev/null 2>&1; then ok "hdash built"; else warn "hdash not built" "just install-dash"; fi
 # The two dashboards hdash replaces. Reported so a machine that installed them before the
