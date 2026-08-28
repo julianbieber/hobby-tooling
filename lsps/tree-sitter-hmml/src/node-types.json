@@ -94,6 +94,11 @@
     }
   },
   {
+    "type": "comment",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "control_flow",
     "named": true,
     "fields": {
@@ -365,6 +370,14 @@
           "named": true
         },
         {
+          "type": "change_added",
+          "named": true
+        },
+        {
+          "type": "change_removed",
+          "named": true
+        },
+        {
           "type": "comment",
           "named": true
         },
@@ -499,6 +512,18 @@
       "required": false,
       "types": [
         {
+          "type": "change_added",
+          "named": true
+        },
+        {
+          "type": "change_removed",
+          "named": true
+        },
+        {
+          "type": "comment",
+          "named": true
+        },
+        {
           "type": "member",
           "named": true
         }
@@ -605,7 +630,11 @@
     "named": true
   },
   {
-    "type": "comment",
+    "type": "change_added",
+    "named": true
+  },
+  {
+    "type": "change_removed",
     "named": true
   },
   {

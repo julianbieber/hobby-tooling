@@ -14,9 +14,11 @@ Analyzes one unit of an existing system — an endpoint, a message/queue workflo
 or a scheduled job — and emits a valid
 [`.hmml`](../../lsps/hobby-mml-lsp/grammar.md) (Mental Model Language)
 spec: the four sections **modules / data / behavior / invariants** that capture
-how the unit behaves at mental-model altitude. The human then edits the `.hmml`
-to drive a change, which `hmml-translate` turns back into code — spec →
-code, not prose → code.
+how the unit behaves at mental-model altitude. What it writes is the
+**baseline** — the *current* version of the unit, captured before anyone thinks
+about the change. The human then annotates that baseline with the intended delta
+(`# +` / `# -`, grammar §10), and `hmml-translate` turns the annotations into
+code — spec → code, not prose → code.
 
 You point at one unit ("the `/tiles/{z}/{x}/{y}` endpoint", "the shader reload batch
 consumer"); the skill traces the call graph with `tree-extract`, reads the

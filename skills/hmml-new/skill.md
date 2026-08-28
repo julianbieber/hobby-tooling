@@ -22,7 +22,22 @@ There are two paths, and you pick from what I give you:
 
 Write the file and **stop** — reviewing, editing, and committing it are my job
 (same contract as extract and translate). The spec becomes real when I edit it
-and commit it as the baseline `hmml-translate` diffs against.
+and commit it as the baseline `hmml-translate` works from.
+
+**Baseline first, even here.** A new unit still gets a current-version baseline
+— it is just sparse or empty. Two cases:
+
+- **The task dir already holds a `<unit>.hmml`** (a baseline someone extracted
+  from the host code): do **not** write a second file or overwrite it. Draft
+  your content *into* that file as `# +` additions per the annotation convention
+  in grammar §10, leaving every baseline line untouched, so the file keeps
+  showing current-vs-intended side by side.
+- **Genuinely greenfield** (nothing to extract): the blank template *is* the
+  baseline. Write the scaffold unannotated when I asked for a template to fill in
+  by hand; when I asked for a **draft from an idea**, mark the drafted body with
+  `# +` — for a new unit that is most of the file, which is honest: it says
+  everything here is new. Never emit `# -` (there is no baseline behaviour to
+  remove).
 
 Read `~/fun_repos/hobby-tooling/lsps/hobby-mml-lsp/grammar.md` (the authoritative
 hobby grammar, v2 — **not** the work one) before your first scaffold if you are

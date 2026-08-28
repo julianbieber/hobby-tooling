@@ -24,7 +24,14 @@ Two paths, chosen from what I give it:
   right path so I start well-formed.
 - **Draft from a rough idea** — I describe the feature in a sentence or two and
   the skill drafts a first-pass `.hmml` (best-guess modules / data / behavior /
-  invariants), clearly marked `# DRAFT`, that I then edit down.
+  invariants), clearly marked `# DRAFT`, that I then edit down. The drafted body
+  is marked `# +` (grammar §10) — for a new unit that is most of the file, which
+  is honest: it says everything here is new.
+
+Either way the baseline comes first. When the task dir already holds a
+`<unit>.hmml` extracted from the code that will host the new behaviour, the
+skill drafts *into* that file as `# +` additions rather than writing a second
+one, so the file keeps showing current-vs-intended side by side.
 
 Produces:
 

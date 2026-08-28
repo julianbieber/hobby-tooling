@@ -11,6 +11,8 @@
 //! - [`parse`] — text → [`Document`] (parse-time diagnostics in
 //!   [`Document::diagnostics`]).
 //! - [`validate`] — semantic diagnostics over a [`Document`].
+//! - [`annotations::check`] — change-annotation diagnostics (grammar §10),
+//!   which read the comment markers the AST does not carry.
 //! - [`analyze`] — parse + validate, returning the document and all diagnostics
 //!   merged and sorted by position.
 //!
@@ -18,6 +20,7 @@
 //! [`Span`]: crate::span::Span
 //! [`LineIndex`]: crate::span::LineIndex
 
+pub mod annotations;
 pub mod ast;
 pub mod diagnostic;
 pub mod lexer;
@@ -49,6 +52,7 @@ pub fn analyze(src: &str) -> (Document, Vec<Diagnostic>) {
     let doc = parse(src);
     let mut all = doc.diagnostics.clone();
     all.extend(validate(&doc));
+    all.extend(annotations::check(&doc, src));
     all.sort_by_key(|d| (d.span.start, d.span.end));
     (doc, all)
 }

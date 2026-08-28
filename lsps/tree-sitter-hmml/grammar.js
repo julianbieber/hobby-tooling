@@ -52,6 +52,8 @@ module.exports = grammar({
 
     _item: ($) =>
       choice(
+        $.change_added,
+        $.change_removed,
         $.comment,
         $.section_header,
         $.io_declaration,
@@ -70,7 +72,24 @@ module.exports = grammar({
     // The rest of the line is optional so a bare `#` — used as a spacer in the
     // `/hmml-new` templates — is a comment too. `##` still wins by being the
     // longer match.
-    comment: ($) => token(seq("#", optional(seq(/[^#\r\n]/, /[^\r\n]*/)))),
+    //
+    // The second form is a rule/divider line (`# --- x ---`, `# +++`): a repeated
+    // sign, matched at the highest precedence so it stays a comment instead of
+    // lexing as a change marker plus a stray bullet.
+    comment: ($) =>
+      choice(
+        token(seq("#", optional(seq(/[^#\r\n]/, /[^\r\n]*/)))),
+        token(prec(2, seq("#", /[ \t]*/, /[-+][-+]+[^\r\n]*/))),
+      ),
+
+    // Change annotations (grammar §10): `# +` marks the line beneath it (with
+    // that line's nested children) as added, and `# - <text>` is a baseline line
+    // this change removes, commented out in place. They are plain comments to
+    // the language — they get their own nodes here only so an editor can colour
+    // them like a diff. Each takes the whole line and outranks `comment`, which
+    // matches the same span.
+    change_added: ($) => token(prec(1, seq("#", /[ \t]*/, "+", /[^\r\n]*/))),
+    change_removed: ($) => token(prec(1, seq("#", /[ \t]*/, "-", /[^\r\n]*/))),
 
     section_header: ($) =>
       seq(
@@ -173,7 +192,22 @@ module.exports = grammar({
         field("keyword", choice("struct", "enum")),
         field("name", $.identifier),
         optional(seq("@", field("path", $.type_path))),
-        optional(seq("{", repeat(choice($.member, ",", $._newline)), "}")),
+        optional(
+          seq(
+            "{",
+            repeat(
+              choice(
+                $.member,
+                ",",
+                $._newline,
+                $.comment,
+                $.change_added,
+                $.change_removed,
+              ),
+            ),
+            "}",
+          ),
+        ),
       ),
     member: ($) =>
       seq(

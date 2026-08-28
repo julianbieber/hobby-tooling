@@ -104,7 +104,7 @@ impl Backend {
             // `unresolved-source-path` to report it once.
             if let Ok(file) = uri.to_file_path() {
                 let ws = self.workspace_root.get().map(PathBuf::as_path);
-                all.extend(lint::lint(&doc, &file, ws));
+                all.extend(lint::lint(&doc, &text, &file, ws));
                 all.sort_by_key(|d| (d.span.start, d.span.end));
             }
             let line_index = LineIndex::new(&text);
@@ -2292,7 +2292,7 @@ mod tests {
 
         let (doc, diags) = analyze(PLUGIN);
         assert!(diags.is_empty(), "{diags:#?}");
-        let fs_diags = lint::lint(&doc, &spec, Some(dir.path()));
+        let fs_diags = lint::lint(&doc, PLUGIN, &spec, Some(dir.path()));
         assert!(fs_diags.is_empty(), "{fs_diags:#?}");
     }
 }
@@ -2467,7 +2467,7 @@ pub struct Wave {
         // `seconds` is asserted and present; `+ jitter` is intent, not drift;
         // the `Component` derive matches `## components`; and `Collider` comes
         // from a dependency, so nothing tries to resolve it.
-        let fs_diags = lint::lint(&doc, &spec, Some(dir.path()));
+        let fs_diags = lint::lint(&doc, SPAWN, &spec, Some(dir.path()));
         assert!(fs_diags.is_empty(), "{fs_diags:#?}");
     }
 
@@ -2475,7 +2475,7 @@ pub struct Wave {
     fn a_role_mismatch_reaches_the_editor_as_a_warning() {
         // WaveConfig derives Resource; the spec files it as a component.
         let (dir, ds, _uri) = tree("## components\nstruct WaveConfig @ waves.rs\n");
-        let diags = lint::lint(&ds.doc, &dir.path().join("u.hmml"), None);
+        let diags = lint::lint(&ds.doc, &ds.text, &dir.path().join("u.hmml"), None);
         let codes: Vec<&str> = diags.iter().map(|d| d.code).collect();
         assert_eq!(codes, ["rust-role-mismatch"], "{diags:?}");
     }

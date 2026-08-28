@@ -368,3 +368,73 @@ continuation carrying a spec ref
     (spec_annotation
       (spec_keyword)
       (spec_ref))))
+
+==================
+change annotations in behavior
+==================
+
+## behavior
+- read the wave
+# - spawn one enemy per tick
+# +
+- spawn WaveConfig.rate enemies per tick
+
+---
+
+(source_file
+  (section_header
+    (section_marker)
+    (section_name))
+  (bullet
+    (prose))
+  (change_removed)
+  (change_added)
+  (bullet
+    (prose)))
+
+==================
+a repeated sign stays a comment
+==================
+
+# --- divider ---
+# +++
+# - a real removal
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (change_removed))
+
+==================
+change annotations inside a struct body
+==================
+
+## components
+struct Wave @ src/waves.rs {
+  index: u32,
+  # - stale: u32,
+  # +
+  streak: u32,
+}
+
+---
+
+(source_file
+  (section_header
+    (section_marker)
+    (section_name))
+  (type_definition
+    (identifier)
+    (type_path)
+    (member
+      (identifier)
+      (type
+        (identifier)))
+    (change_removed)
+    (change_added)
+    (member
+      (identifier)
+      (type
+        (identifier)))))

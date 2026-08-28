@@ -6,15 +6,21 @@ argument-hint: '[<unit> | path/to/spec.hmml] [--min-priority critical|high|mediu
 # HMML Spec Review → Implementation Plan
 
 Review a `.hmml` spec that expresses the **intended behaviour** of a task — a
-freshly adjusted spec (extracted from code, then edited toward the task's goal)
-or a new-feature spec — and turn it into a **concrete implementation plan**.
+baseline extracted from code and then annotated toward the task's goal, or a
+new-feature spec — and turn it into a **concrete implementation plan**.
+
+The spec normally arrives as **baseline + annotated delta**: unannotated lines
+are the unit's current behaviour, `# - <text>` lines are what the change
+removes, `# +` marks what it adds — the line beneath the marker and its nested
+children (grammar §10). That split is the review's spine — the delta is what you
+pressure-test, the baseline is the context it has to keep working in.
 
 This is **not** `hmml-validate`. `hmml-validate` checks whether *existing code*
-conforms to a spec; that is the wrong question here, because the spec was just
-deliberately edited *away* from the current code to describe the change we want.
-Here the spec **is** the intent, the code does **not** yet match it, and the job
-is to pressure-test that intent from multiple engineering perspectives and
-produce the plan for making the code match it.
+conforms to a spec; that is the wrong question here, because the annotations were
+just written deliberately *ahead of* the current code, to describe the change we
+want. Here the delta **is** the intent, the code does **not** yet match it, and
+the job is to pressure-test that intent from multiple engineering perspectives
+and produce the plan for making the code match it.
 
 Your perspective is the **orchestrator / tech lead**: you spawn independent
 specialist reviewers of the spec, then critically synthesize their input into
@@ -32,7 +38,12 @@ in the plan.
 2. **Read the spec** in full. Note the `source:` block and the sections the
    `kind` actually uses — `data` (role-less shapes for a Bevy kind, the whole
    data model for a classic one), `components`/`resources`/`events`,
-   `systems`/`access`, `behaviour`, `invariants`. Run `hobby-mml-parser <path> --lint` first
+   `systems`/`access`, `behaviour`, `invariants` — and **separate baseline from
+   delta**: collect every `# -` (removed) and `# +` block (added), grouped by
+   section. State the delta back in a few lines before fanning out. If the spec
+   carries no annotations at all, say so and review the whole spec as the intent
+   — an unannotated spec cannot tell you which half is new.
+   Run `hobby-mml-parser <path> --lint` first
    (if installed): a parse error means the spec can't be reviewed — report and
    stop; an `unresolved-source-path` warning means the `source:` linkage is
    broken — flag it in the plan so it gets fixed alongside the change.
@@ -52,9 +63,17 @@ in the plan.
 ## Step 2 — Fan out parallel lens reviewers
 
 Spawn **one isolated subagent per lens, in parallel** (single message, multiple
-Task/Agent calls). Give each the spec text, the `source` block, and the paths to
-the current code. Each reviewer answers, **for the intended behaviour in this
-spec**: what must the implementation get right, and what will bite us?
+Task/Agent calls). Give each the full spec text, the `source` block, the paths to
+the current code, and — stated separately — **the delta**: what the annotations
+add and remove. Tell it the unannotated remainder is behaviour that already
+exists and is not under review on its own. Each reviewer answers, **for the
+change this delta makes**: what must the implementation get right, and what will
+bite us?
+
+Two questions belong to every lens, because they are what an annotated delta
+makes askable: does anything **removed** by a `# -` still have callers, consumers,
+systems or invariants depending on it — and does anything **added** by a `# +`
+contradict a baseline line that stays?
 
 Lenses:
 
@@ -115,7 +134,10 @@ Then write an implementation plan with these sections:
 - **Goal** — the intended behaviour in 2–3 lines (from the spec).
 - **Approach** — the recommended strategy, reconciling the lenses.
 - **Steps** — ordered, each naming the file(s) from `source.paths` it touches
-  and the concern(s) it addresses.
+  and the concern(s) it addresses. Cover the `# -` removals as their own steps
+  (dead code to delete, callers to update, a system to unregister, a guard to
+  drop) — a plan that only builds the additions leaves the old behaviour running
+  alongside the new.
 - **Risks & edge cases** — the surviving critical/high concerns and how the plan
   handles them.
 - **Open questions** — anything the spec leaves genuinely undecided.
@@ -129,6 +151,8 @@ plan inline so the caller (and `/build:task`'s GATE 1) can act on it.
 ## Notes
 
 - This skill **only reviews and plans** — it never edits the spec or the code.
+  In particular it never strips annotations: the markers are the delta
+  `hmml-translate` implements.
 - Ground every concern in the spec or the real code; drop speculation. A concern
   with no bearing on this change does not belong in the plan.
 - If invoked by `/build:task` in the `plan` phase, the plan you produce is what the

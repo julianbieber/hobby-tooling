@@ -10,16 +10,22 @@
 
 ## Description
 
-Reviews an **adjusted or new `.hmml` spec** — one that expresses the *intended*
+Reviews an **annotated or new `.hmml` spec** — one that expresses the *intended*
 behaviour of a task — through parallel engineering lenses (security,
 architecture, correctness/QA, performance, maintainability) and synthesizes a
 **concrete implementation plan** for making the code match that intent.
 
+The spec normally arrives as a baseline with the change written on top of it as
+`# +` / `# -` annotations (grammar §10). That split is the review's spine: the
+delta is what gets pressure-tested, the baseline is the context it must keep
+working in, and the plan covers the removals as their own steps rather than only
+building the additions.
+
 It is the counterpart to, not a duplicate of, `hmml-validate`:
 
 - `hmml-validate` asks "does the **existing code** still conform to the spec?"
-  (code-vs-spec drift). Useless right after you edit a spec toward a new goal —
-  it just reports the intended edit as drift.
+  (code-vs-spec drift). Useless right after you annotate a spec toward a new goal
+  — it just reports the intended change as drift.
 - `hmml-review` asks "the spec **is** the intent and the code does not match it
   yet — is the intent sound, and how do we implement it?" It produces the plan.
 

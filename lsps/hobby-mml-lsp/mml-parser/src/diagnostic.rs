@@ -66,9 +66,10 @@ pub mod code {
     /// Emitted only by filesystem-aware consumers: the spec says `struct` and
     /// the code says `enum`, or `marker` names a struct that has fields.
     pub const RUST_SHAPE_MISMATCH: &str = "rust-shape-mismatch";
-    /// Emitted only by filesystem-aware consumers: an *unmarked* field or
-    /// variant — one the spec asserts already exists — is absent from the real
-    /// type. `+` / `-` members are intent, never assertions, so they are silent.
+    /// Emitted only by filesystem-aware consumers: a field or variant the spec
+    /// asserts already exists is absent from the real type. A member added by a
+    /// `# +` is a comment the parser never sees, and a legacy `+` / `-` member
+    /// is intent rather than an assertion, so neither is ever reported.
     pub const RUST_MEMBER_UNKNOWN: &str = "rust-member-unknown";
 
     // External-crate imports (grammar §4.8).
@@ -126,6 +127,22 @@ pub mod code {
     /// An `after:` / `before:` / `set:` name matching no system or set declared
     /// in this file. A warning — ordering across plugins is legitimate.
     pub const UNRESOLVED_SYSTEM_REF: &str = "unresolved-system-ref";
+
+    // Change annotations (grammar §10). All advisory: an annotated spec is a
+    // valid spec, so none of these is an error — they report a delta that has
+    // stopped describing a real change.
+    /// A `# -` with no text after it: the removed line is gone, so the baseline
+    /// can no longer be reconstructed.
+    pub const EMPTY_CHANGE_REMOVAL: &str = "empty-change-removal";
+    /// A `# +` with no content beneath it — an addition marker introducing
+    /// nothing.
+    pub const EMPTY_CHANGE_ADDITION: &str = "empty-change-addition";
+    /// A removed line that kept its `- ` bullet, which the marker's own `-`
+    /// already stands in for.
+    pub const REDUNDANT_CHANGE_BULLET: &str = "redundant-change-bullet";
+    /// Un-annotating the spec yields a baseline that does not parse or validate
+    /// — so the unannotated lines are not a version that stands on its own.
+    pub const UNRECOVERABLE_BASELINE: &str = "unrecoverable-baseline";
 
     // Semantic (validate-time).
     pub const UNDEFINED_TYPE: &str = "undefined-type";

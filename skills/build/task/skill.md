@@ -1,5 +1,5 @@
 ---
-description: Run a task end to end as one human-gated pipeline with a recorded stage — brief, HMML plan, review loop, implement and test, comment pass, my review, PR, journal
+description: Run a task end to end as one human-gated pipeline with a recorded stage — brief, HMML baseline, annotated delta, spec review loop, implement and test, comment pass, my review, PR, journal
 argument-hint: '[<description> | #<issue> | --notes] [<phase>] [--no-hmml] [--resume-deep]'
 allowed-tools: Skill, Read, Write, Edit, Bash(pwd:*), Bash(ls:*), Bash(git branch:*), Bash(git -C * status:*), Bash(git -C * diff:*), Bash(git -C * log:*), Bash(git -C * rev-parse:*), Bash(git -C * ls-files:*), Bash(git status:*), Bash(git diff:*), Bash(git log:*), Bash(gh pr list:*), Bash(gh pr view:*), Bash(gh issue view:*), Bash(gh issue list:*)
 ---
@@ -19,10 +19,14 @@ except where a sub-skill already does (`journal:resume`).
 
 ## Three rules that override everything else
 
-1. **Hard-stop at the human gates** — after the HMML self-review, and after the
-   implementation review. "Hard stop" means: finish the phase, write the state
-   file, print a compact summary of what I need to do, and **end your turn**. Do not
-   start the next phase until I say so.
+1. **Hard-stop at the human gates** — after the HMML spec review, and once the
+   change is implemented, tested and comment-passed. "Hard stop" means: finish the
+   phase, write the state file, print a compact summary of what I need to do, and
+   **end your turn**. Do not start the next phase until I say so. **Reading the
+   code is mine.** Nothing in this pipeline reviews the diff — `hmml-review` looks
+   at the spec and `/comment-pass` at the comments, and that is deliberately all of
+   it. Do not add a review pass of your own, and do not print a critique of your
+   own change at GATE 2; give me the diff and the evidence.
 2. **Never auto-commit** — not the source repo, not the notes repo where the
    `.hmml` baseline lives. That is my call, same contract as every sub-skill.
    Read-only git, `gh pr list` and `gh issue view` are fine. You do write the
@@ -72,7 +76,11 @@ except where a sub-skill already does (`journal:resume`).
 
 4. **Starting phase**, in this precedence: an explicit phase argument forces it;
    else `phase` from the state file; else **infer** from artifacts and say what
-   you inferred — no `.hmml` → `plan`; a `.hmml` exists → `await-hmml-review`;
+   you inferred — no `.hmml` → `plan`; an **unannotated** `.hmml` (baseline
+   captured, no `# +` / `# -` markers yet) → `plan`, resuming at the annotate
+   step; an **annotated** `.hmml` (`rg -c '^\s*# [+-]'` on it is non-zero) **and
+   a clean worktree** → `await-hmml-review` — annotations are never stripped, so
+   an annotated spec alone does not mean the change is unimplemented;
    uncommitted code changes → `implement`; an open PR for the branch → `done`.
 
 5. **Flags:** `--no-hmml` skips the spec phases entirely (plan the change inline in
@@ -101,39 +109,87 @@ Record `size_budget` and `prior_art`. On my own repo this is usually one empty
 search; on a repo I do not own it is the difference between a welcome PR and a
 closed one.
 
-**The HMML plan.** Pick the entry from what the task is:
+**The HMML baseline: spec the *current* version first.** Before working out what
+the change should be — before any design thinking at all — capture what the unit
+does **today**. That spec is the baseline the whole task is stated against;
+skipping it leaves the delta with nothing to be a delta *of*. Pick the entry from
+what the task is:
 
-- new behaviour, no code yet → `hmml-new`
-- adjusting existing code → `hmml-extract`
+- adjusting existing code → `hmml-extract` on that unit
+- new behaviour → still baseline first: `hmml-extract` on the code that will
+  **host** it (the plugin, the system, the endpoint it lands in), or `hmml-new`
+  asked for a blank template when there is genuinely nothing to extract. A sparse
+  baseline is a fine baseline.
 
-If genuinely unclear, ask **one** question. The sub-skill writes
-`~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/<unit>.hmml` and
-stops. Record `hmml_unit`.
+If genuinely unclear which unit to baseline, ask **one** question. The sub-skill
+writes
+`~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/<unit>.hmml` —
+**unannotated**, describing current behaviour only — and stops. Record
+`hmml_unit`.
 
-**Adjust the spec to the intended behaviour.** `hmml-extract` captures what the
-code does *now* — the starting point, not the plan. Edit the `.hmml` until it
-describes what this task intends. On the `hmml-new` path this is usually a no-op.
-The spec now describes the target and the code does not match it; that is exactly
-what the review is for.
+Do not think about the change while doing this, and do not let the intended
+behaviour leak into the baseline: a baseline that already contains the change
+cannot show what the change is.
 
-**Self-review the spec.** Run `hmml-review`: parallel lens reviewers over the spec
-and the current code, synthesized into a prioritized implementation plan in the
-task notes. Not `hmml-validate` — the spec was just moved away from the code on
-purpose, so a conformance check would report the intended change as drift.
+**Annotate the intended delta on top of the baseline.** *Now* think about the
+change. Edit the `.hmml` so it also expresses the behaviour **this task
+intends**, marking every difference with the annotation convention from grammar
+§10 — the same file then holds both versions:
+
+- `# - <text>` — a baseline line the change **removes**: comment it out in place,
+  keeping its text verbatim (the marker's `-` stands in for the bullet, where the
+  line had one) at its original indentation. **Never delete a baseline line
+  outright.**
+- `# +` — introduces **added** content: the line directly beneath it, plus any
+  lines nested deeper than that line. Adjacent added siblings each take their own
+  marker; a `struct`/`enum` head is covered through its closing brace.
+- A **modified** line is a `# -` immediately followed by a `# +` — never an
+  in-place rewrite.
+
+The binding rule: dropping every `# +` block and un-commenting every `# -` line
+must reproduce the baseline **exactly**. Re-lint with
+`hobby-mml-parser <path> --lint` — annotations are plain comments, so the file
+must still parse clean, and the linter checks recoverability directly, reporting
+`unrecoverable-baseline` when un-annotating no longer gives a coherent spec (plus
+`empty-change-removal` / `empty-change-addition` / `redundant-change-bullet` for
+a marker that says nothing).
+
+Cover every section the change touches, not just `## behavior` — an added
+component, a new `## systems` entry with its access block, a removed invariant.
+A `# +` step whose new component or new invariant is missing gives the review an
+incomplete delta.
+
+**Review the delta.** Run `hmml-review` on the annotated `.hmml`: parallel
+lens reviewers over the delta and the current code, synthesized into a prioritized
+implementation plan in the task notes, scoped to what the annotations add and
+remove. Not `hmml-validate` — the annotations are deliberately ahead of the code,
+so a conformance check would report the intended change as drift.
 
 **→ GATE 1: HARD STOP.** Set `phase: await-hmml-review`, write the state file,
-print the spec path, the implementation plan (path plus an inline summary), and:
-*"Review the spec and the plan. Refine either, then say `continue` — or say
-`revise` and I'll re-review what you changed."* End your turn.
+print:
+
+- the spec path;
+- **the annotated delta itself** — every `# -` and `# +` line, grouped by
+  section, with a count. This is the change I am approving, so show it rather
+  than describing it;
+- the implementation plan (path plus an inline summary);
+- *"Review the baseline, the `# +`/`# -` delta on it, and the plan. Refine any of
+  them, then say `continue` — or say `revise` and I'll re-review what you
+  changed."*
+
+End your turn.
 
 ## Phase `await-hmml-review` and `revise` — the loop
 
 - `revise` re-runs `hmml-review` on the edited spec, increments `rounds`, returns
   to `await-hmml-review`, and stops again. No cap: this loops until I am happy.
-- Each round reports what changed in the spec since the previous one, so I can see
-  whether my edit did what I meant.
-- `continue` moves to `implement`. Committing the `.hmml` as the baseline is mine
-  to do; if it is still uncommitted when I say continue, say so once and proceed.
+- Each round reports what changed in the **delta** since the previous one — which
+  markers were added, dropped or reworded — so I can see whether my edit did what
+  I meant.
+- `continue` moves to `implement`. Committing the annotated `.hmml` is mine to do;
+  if it is still uncommitted when I say continue, say so once and proceed.
+  Committing it does not erase the delta the way an unannotated in-place edit
+  would — the markers are in the file.
 
 ______________________________________________________________________
 
@@ -143,22 +199,24 @@ Write comments to the rule as you go — a module header, a public element's
 contract, a test's justification, nothing else. The `comments` phase is a check,
 not a laundry: do not write comments expecting it to delete them.
 
-**Implement.** Unless `--no-hmml`, run `hmml-translate <unit>`: it diffs the
-committed spec against my working-tree edit and applies the **minimal** code
-change, compiles, tests, and stops. It owns delta-vs-full-generation — do not
-second-guess it. With `--no-hmml`, make the change directly.
-
-**Self-review.** The hobby account has no review skills installed, so do this
-inline over `git diff`, in one pass, as the implementer: correctness (boundaries,
-empty input), design (right shape, or fighting the architecture), performance
-(quadratic, allocating in a hot loop, blocking a frame), clarity (naming, dead
-code, leftover debugging). Fix confirmed critical/high findings; list medium/low
-for me. Evaluate each — do not blanket-apply.
+**Implement.** Unless `--no-hmml`, run `hmml-translate <unit>`: it reads the
+`# +` / `# -` annotations as the delta — the unannotated baseline around them is
+code that already exists — and applies the **minimal** code change, compiles,
+tests, and stops. It owns delta-vs-full-generation — do not second-guess it. A
+`# -` it declines to delete (the spec is lossy, so absence ≠ dead code) comes back
+as a flag for me, not as a silent skip: carry it into GATE 2. With `--no-hmml`,
+make the change directly.
 
 **Test.** Drive it end to end: run the app or the affected flow, plus the repo's
 own test command (`cargo test`, `cargo clippy`, `just test`, whatever it uses).
 Then, unless `--no-hmml`, `hmml-validate` once more — the code should report
-**`CONFORMS`**. Report residual `SPEC-AHEAD` as unfinished work.
+**`CONFORMS`** to the annotated spec: every `# +` claim present in the code, every
+`# -` behaviour gone from it. Report residual `SPEC-AHEAD` as unfinished work.
+
+**Leave the annotations in place.** The `.hmml` keeps its `# +` / `# -` markers
+after the code lands — the spec is the record of *this* change, and stripping it
+back to a plain baseline would erase what the task did. Never edit the spec here
+at all; committing it stays my call at GATE 2.
 
 Record the evidence, then fall through to `comments` without stopping.
 
@@ -185,8 +243,9 @@ Record both, then fall through to `review`.
 **→ GATE 2: HARD STOP.** Set `phase: await-review`, write the state file, print:
 
 - the diff summary — files, one line each on what changed;
-- the self-review outcome: fixed vs deferred;
-- the test evidence and the validate verdict;
+- the test evidence and the validate verdict, plus the spec's `# +` / `# -` delta
+  as it now stands — it keeps its annotations, so any marker validate still
+  reports as `SPEC-AHEAD` is outstanding work, not a leftover;
 - what `/comment-pass` changed, and what it declined to act on;
 - the shape-decision notes it extracted, verbatim, for the commit message;
 - the size against the Gate 0 budget, and by how much it was crossed;

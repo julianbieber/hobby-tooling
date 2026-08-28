@@ -9,12 +9,17 @@ HMML loop: `hmml-extract` turns code into a `.hmml`, the human edits the
 `.hmml` to express the change they want, and this skill turns that edit into a
 minimal, reviewable diff against the real repo.
 
-The default and best path is **delta-based**: specs live per-task inside the
-notes repo `~/fun_repos/hobby-mimisbrunnr`, which is a git repo, so
-the last *committed* `.hmml` there is the baseline and the human's working-tree
-edits are the delta. Translate **only the delta** — do not regenerate the unit
-(regeneration produces noisy diffs and rewrites code the spec never mentioned).
-Full generation is a fallback for a brand-new spec with no committed baseline.
+The default and best path is **delta-based**, and the delta is normally written
+*into* the spec: the file holds the unit's **baseline** (the version
+`hmml-extract` captured) plus **annotations** marking what this change adds and
+removes — `# +` blocks and `# - <text>` lines, per grammar §10. Those annotations
+are your work list; the unannotated lines around them describe code that already
+exists and must not be touched. Translate **only the delta** — do not regenerate
+the unit (regeneration produces noisy diffs and rewrites code the spec never
+mentioned). For an unannotated spec, fall back to the git delta (specs live in
+the notes repo `~/fun_repos/hobby-mimisbrunnr`, a git repo, so the last
+*committed* `.hmml` is the baseline and the working-tree edit is the delta).
+Full generation is the last resort, for a brand-new spec with neither.
 
 Apply the change to the task's **worktree** checkout of the source repo, verify
 it (compile/tests), report the diff, and **stop** — reviewing and committing the
@@ -44,8 +49,42 @@ end of this file are the reference.
    against the cheat-sheet. If the pointer is ambiguous, ask **one** clarifying
    question rather than guessing.
 
-2. **Compute the delta and pick a mode.** The baseline is the last committed
-   spec; the delta is the human's working-tree edit on top of it:
+2. **Compute the delta and pick a mode.** First look **inside the spec** for
+   annotations (`rg -n '^\s*# [+-]' <path>`).
+
+   **Annotated spec** (any `# +` / `# -`) → **annotated-delta mode, the main
+   path.** The delta is exactly what the markers say: a `# - <text>` line is
+   baseline text commented out in place, i.e. behaviour / data / a system / an
+   invariant this change **removes**; a `# +` marker means the line directly
+   beneath it, plus any lines nested deeper than that line, is **added**
+   (adjacent added siblings each carry their own marker, and a `struct`/`enum`
+   head is covered through its closing brace); a `# -` immediately followed by a
+   `# +` is one **modification**, not two independent edits. Everything
+   unannotated is the baseline: it already exists in code, so **do not re-derive
+   or rewrite it**. The spec's git state is irrelevant here — an annotated spec
+   that is committed and clean is still a delta to apply, not a no-op — so skip
+   the git modes below and go straight to step 3. Two guards:
+
+   - **Sanity-check that the baseline is recoverable**: un-commenting the `# -`
+     lines and dropping the `# +` blocks must yield a coherent spec of the code
+     as it is today. `hobby-mml-parser <path> --lint` checks the mechanical half
+     (`unrecoverable-baseline`, `empty-change-removal`, `empty-change-addition`);
+     you check the half it cannot — a `# -` line with no counterpart in the code,
+     a `# +` block whose behaviour the code already has. Either way the
+     annotations are stale or hand-mangled: **stop and say so** rather than
+     applying half a change.
+   - **Never edit the spec**, including "settling" it by stripping annotations.
+     The markers stay after the code lands — the spec is the record of the change
+     — and only the human ever removes them.
+
+   A legacy inline member delta (`+ field: Type` / `- field` inside a `@ <path>`
+   type body, grammar §4.7) still means add / remove and you still apply it; new
+   specs write it as `# +` / `# -` like everything else.
+
+   **Unannotated spec** → fall back to the git delta. The baseline is the last
+   committed spec and the delta is the human's working-tree edit on top of it.
+   Say in your report that the spec was unannotated, since the annotated form is
+   the one that survives a commit.
 
    ```sh
    # <path> = notes/{project}/{topic}/{task}/<unit>.hmml (relative to the notes repo)
@@ -65,8 +104,9 @@ end of this file are the reference.
    - **Clean tree but the human asserts an edit** (they already committed it) →
      ask for an explicit base ref and diff against it
      (`git -C ~/fun_repos/hobby-mimisbrunnr diff <base>..HEAD -- <path>`).
-   - **Non-empty diff** → **delta mode** (the main path). Split the diff into
-     **(a) a header/`source` delta** and **(b) a body delta**.
+   - **Non-empty diff** → **git delta mode** (the main path when there are no
+     annotations). Split the diff into **(a) a header/`source` delta** and
+     **(b) a body delta**.
      - If the diff looks like a **re-extraction** (whole sections replaced,
        `source.repo`/`paths` rewritten wholesale) rather than a targeted human
        edit, **stop and confirm intent** — translating a re-extraction would
@@ -162,7 +202,7 @@ end of this file are the reference.
      generator, another module's `match`); **grep the whole source repo** for
      the type's usages, and *report* out-of-unit impact sites even when you do
      not edit them — a spec-scoped edit is blind to them otherwise.
-   - **`## behavior`** step added/removed/reordered → the corresponding logic,
+   - **`## behavior`** step added (`# +`) / removed (`# -`) / reordered → the corresponding logic,
      **routed to the module named in the step** via its `@ path`. Be
      conservative:
      - a **reworded** step with no semantic change → **no code change**;
@@ -258,7 +298,10 @@ end of this file are the reference.
 8. **Report and stop.**
 
    a. Show the worktree `git diff` and a one-line summary of what changed and
-   why (which spec delta drove which code edit).
+   why (which spec delta drove which code edit). In annotated mode, walk the
+   markers: every `# +` and `# -`, and the code edit it produced — or, for a
+   `# -` you declined to delete because the ownership was ambiguous, an explicit
+   "not applied, needs your call". An unmentioned marker reads as done.
 
    b. **Fallback** — if no writable worktree was available, write a `.patch`
    (against the source checkout) into the task's scratch/notes dir, report its

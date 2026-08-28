@@ -10,20 +10,24 @@
 
 ## Description
 
-Translates an **edited** [`.hmml`](../../lsps/hobby-mml-lsp/grammar.md)
+Translates an **annotated** [`.hmml`](../../lsps/hobby-mml-lsp/grammar.md)
 (Mental Model Language) spec into the **code change** that makes the real system
 match it — spec → code, not prose → code. This is the payoff step of the HMML
-loop: `hmml-extract` turns code into a `.hmml`, the human edits the `.hmml`
-to express the change they want, and this skill turns that edit into a minimal,
+loop: `hmml-extract` turns code into a `.hmml` baseline, the human annotates it
+with the change they want, and this skill turns those annotations into a minimal,
 reviewable diff against the real repo.
 
-It works **delta-based**: specs live per-task in the notes repo
-`~/fun_repos/hobby-mimisbrunnr` (a git repo), so the last committed
-`.hmml` there is the baseline and the human's working-tree edits are the delta.
-The skill translates only the delta (a minimal diff), applies it to the task's
-**worktree** checkout of the source repo — never the shared `~/fun_repos/<repo>`
-— verifies it (compile/tests), and reports the diff. Full generation is a
-fallback for a brand-new spec with no committed baseline.
+It works **delta-based**, and the delta is normally in the file: the spec holds
+the baseline plus `# +` / `# -` change annotations (grammar §10), which are the
+work list — the unannotated lines around them are code that already exists. An
+unannotated spec falls back to the git delta (specs live in the notes repo
+`~/fun_repos/hobby-mimisbrunnr`, a git repo, so the last committed `.hmml` is the
+baseline and the working-tree edit is the delta). The skill applies it to the
+task's **worktree** checkout of the source repo — never the shared
+`~/fun_repos/<repo>` — verifies it (compile/tests), and reports the diff marker
+by marker. Full generation is the last resort, for a brand-new spec with neither.
+It never edits the spec, including stripping annotations — the markers stay after
+the code lands, so the spec keeps representing the change.
 
 Produces:
 
