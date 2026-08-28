@@ -6,6 +6,9 @@
 //!   mml-parser <file> --lint    # --check + filesystem checks (source paths)
 //!   mml-parser <file> --json    # { "ast": ..., "diagnostics": [...] } as JSON
 //!
+//! Every mode also runs the change-annotation checks (grammar §10): the `# +` /
+//! `# -` markers must still reconstruct to a baseline that parses and validates.
+//!
 //! All modes run the filesystem-aware reference checks from `mml_parser::lint`
 //! (`@ spec` refs, `use` imports); `--lint` adds the source-linkage check —
 //! every header `source.paths` entry and module `@ path` must resolve to a
@@ -79,7 +82,7 @@ fn main() -> ExitCode {
         // Rust-reference checks came to be invisible from the binary the
         // `hmml-*` skills shell out to.
         if matches!(mode, Mode::Lint) {
-            diagnostics.extend(lint::lint(&doc, &abs, None));
+            diagnostics.extend(lint::lint(&doc, &src, &abs, None));
         } else {
             diagnostics.extend(lint::unresolved_spec_refs(&doc, &abs, None));
             diagnostics.extend(lint::unresolved_imports(&doc, &abs, None));

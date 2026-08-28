@@ -15,11 +15,22 @@ use crate::{Diagnostic, paths, validate};
 
 /// All lint checks combined: unresolved `@ spec` refs, `use` imports, source
 /// paths, and Rust type references.
-pub fn lint(doc: &Document, current_file: &Path, workspace_root: Option<&Path>) -> Vec<Diagnostic> {
+///
+/// `src` is the text `doc` was parsed from. The Rust-reference checks need it
+/// because they assert things about the code *as it is today*, and a `# +`
+/// change annotation (grammar §10) marks a line that is deliberately not true
+/// yet — the marker is a comment the parser drops, so the AST alone cannot tell
+/// a proposed member from an asserted one.
+pub fn lint(
+    doc: &Document,
+    src: &str,
+    current_file: &Path,
+    workspace_root: Option<&Path>,
+) -> Vec<Diagnostic> {
     let mut out = unresolved_spec_refs(doc, current_file, workspace_root);
     out.extend(unresolved_imports(doc, current_file, workspace_root));
     out.extend(unresolved_source_paths(doc, current_file, workspace_root));
-    out.extend(rust_references(doc, current_file, workspace_root));
+    out.extend(rust_references(doc, src, current_file, workspace_root));
     out
 }
 
@@ -152,11 +163,12 @@ pub fn unresolved_source_paths(
 /// disagrees with the section it was filed under, its shape disagrees with the
 /// keyword, or a member the spec asserts is not there.
 ///
-/// **Only unmarked members are assertions.** `+ field` and `- field` state what
-/// the spec wants done to the code, so a `+` that has not landed yet and a `-`
-/// that has not been applied yet are both the normal mid-implementation state,
-/// not drift. Diagnosing them would make every spec noisy for exactly as long as
-/// its work is outstanding — which is when it is being read most.
+/// **Only what the spec asserts about today's code is checked.** A declaration
+/// or member introduced by a `# +` change annotation (grammar §10), and a legacy
+/// inline `+ field` / `- field`, state what the spec wants *done* to the code, so
+/// neither is an assertion and neither is diagnosed. A `# +` that has not landed
+/// yet is the normal mid-implementation state — which is when a spec is read
+/// most, so diagnosing it would make every in-flight spec noisy.
 ///
 /// A path that does not resolve produces **one** `unresolved-source-path`
 /// warning (from [`unresolved_source_paths`], which sees type paths too) and
@@ -164,6 +176,7 @@ pub fn unresolved_source_paths(
 /// that is not there.
 pub fn rust_references(
     doc: &Document,
+    src: &str,
     current_file: &Path,
     workspace_root: Option<&Path>,
 ) -> Vec<Diagnostic> {
@@ -173,9 +186,18 @@ pub fn rust_references(
     }
     let dirs = paths::source_search_dirs(doc, current_file, workspace_root);
     let search_dirs: Vec<&Path> = dirs.iter().map(PathBuf::as_path).collect();
+    // Nothing under a `# +` is a claim about today's code, so none of the
+    // checks below apply to it (grammar §10).
+    let added = crate::annotations::added_lines(src);
+    let index = crate::span::LineIndex::new(src);
+    let is_proposed =
+        |span: crate::span::Span| added.contains(&(index.position(span.start).line as usize));
 
     let mut out = Vec::new();
     for (def, role) in refs {
+        if is_proposed(def.name().span) {
+            continue; // a type this change adds; there is nothing there to check
+        }
         let Some(path) = def.path() else { continue };
         let (raw, _line, _col) = paths::split_suffix(&path.value);
         let Some(target) = paths::resolve(raw, &search_dirs) else {
@@ -197,7 +219,7 @@ pub fn rust_references(
         };
         check_shape(def, item, &mut out);
         check_role(def, item, role, &mut out);
-        check_members(def, item, &mut out);
+        check_members(def, item, &is_proposed, &mut out);
     }
     out
 }
@@ -288,6 +310,7 @@ fn check_role(
 fn check_members(
     def: &crate::ast::TypeDef,
     item: &crate::rust_source::RustItem,
+    is_proposed: &dyn Fn(crate::span::Span) -> bool,
     out: &mut Vec<Diagnostic>,
 ) {
     use crate::ast::{Delta, TypeDef};
@@ -302,7 +325,7 @@ fn check_members(
             ..
         } => fields
             .iter()
-            .filter(|f| f.delta == Delta::Keep)
+            .filter(|f| f.delta == Delta::Keep && !is_proposed(f.name.span))
             .map(|f| (&f.name, "field"))
             .collect(),
         TypeDef::Enum {
@@ -310,7 +333,7 @@ fn check_members(
             ..
         } => variants
             .iter()
-            .filter(|v| v.delta == Delta::Keep)
+            .filter(|v| v.delta == Delta::Keep && !is_proposed(v.name.span))
             .map(|v| (&v.name, "variant"))
             .collect(),
         _ => return,
@@ -323,9 +346,8 @@ fn check_members(
             member.span,
             code::RUST_MEMBER_UNKNOWN,
             format!(
-                "`{}` has no {noun} `{}`; mark it `+ {}` to ask for it, or drop the line",
+                "`{}` has no {noun} `{}`; put it under a `# +` to ask for it, or drop the line",
                 def.name().value,
-                member.value,
                 member.value,
             ),
         ));
@@ -475,7 +497,7 @@ pub struct Spawner;
 
     fn rust_codes(sections: &str) -> Vec<(String, String)> {
         let (_dir, current, src) = rust_tree(sections);
-        rust_references(&doc(&src), &current, None)
+        rust_references(&doc(&src), &src, &current, None)
             .into_iter()
             .map(|d| {
                 (
@@ -523,13 +545,33 @@ pub struct Spawner;
 
     #[test]
     fn only_unmarked_members_are_asserted() {
-        // `index` exists; `+ streak` and `- remaining` state intent, so neither
-        // is drift while the work is outstanding. Only `bogus` is a claim the
-        // code contradicts.
+        // `index` exists; the legacy `+ streak` and `- remaining` state intent,
+        // so neither is drift while the work is outstanding. Only `bogus` is a
+        // claim the code contradicts.
         let diags = rust_codes(
             "## components\nstruct Wave @ waves.rs {\n  index: u32,\n  bogus: u32,\n  + streak: u32,\n  - remaining,\n}\n",
         );
         assert_eq!(diags, [("rust-member-unknown".into(), "bogus".into())]);
+    }
+
+    /// A `# +` marker is a comment, but the member beneath it is ordinary
+    /// content the parser reads like any other — so without the §10 exclusion
+    /// this check would read a field the change *proposes* as a field the spec
+    /// asserts is already there, and warn on every in-flight spec.
+    #[test]
+    fn a_member_a_change_annotation_adds_is_not_asserted() {
+        let diags = rust_codes(
+            "## components\nstruct Wave @ waves.rs {\n  index: u32,\n  # +\n  streak: u32,\n}\n",
+        );
+        assert_eq!(diags, []);
+    }
+
+    /// Likewise for a whole type: a `# +` on the declaration means the change
+    /// adds it, so `rust-type-not-found` would be reporting the work as drift.
+    #[test]
+    fn a_type_a_change_annotation_adds_is_not_looked_up() {
+        let diags = rust_codes("## components\n# +\nstruct Missing @ waves.rs\n");
+        assert_eq!(diags, []);
     }
 
     #[test]
@@ -539,8 +581,11 @@ pub struct Spawner;
         let (_dir, current, src) =
             rust_tree("## components\nstruct Wave @ nope.rs {\n  index: u32,\n  other: u32,\n}\n");
         let d = doc(&src);
-        assert!(rust_references(&d, &current, None).is_empty());
-        let codes: Vec<&str> = lint(&d, &current, None).iter().map(|x| x.code).collect();
+        assert!(rust_references(&d, &src, &current, None).is_empty());
+        let codes: Vec<&str> = lint(&d, &src, &current, None)
+            .iter()
+            .map(|x| x.code)
+            .collect();
         assert_eq!(codes, ["unresolved-source-path"]);
     }
 
@@ -551,7 +596,7 @@ pub struct Spawner;
         // sibling → one source-path warning per path + one spec-ref warning.
         let src = spec_src("").replace("- run", "- run @ spec other");
         let current = dir.path().join("one.hmml");
-        let diags = lint(&doc(&src), &current, None);
+        let diags = lint(&doc(&src), &src, &current, None);
         let codes: Vec<&str> = diags.iter().map(|d| d.code).collect();
         assert!(codes.contains(&"unresolved-spec-ref"), "{codes:?}");
         assert_eq!(

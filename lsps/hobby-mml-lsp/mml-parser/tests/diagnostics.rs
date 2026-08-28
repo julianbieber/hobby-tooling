@@ -775,3 +775,116 @@ fn a_malformed_crate_path_is_reported() {
     assert_eq!(d.severity, Severity::Error);
     assert_span(&src, &d, "3avian::prelude");
 }
+
+// ---- change annotations (grammar §10) --------------------------------------
+
+/// A `kind: job` spec whose `## behavior` is `steps`, everything else minimal.
+fn annotated(steps: &[&str]) -> String {
+    format!(
+        "{VALID_HEADER}## modules\n\n## data\nin: String\nout: String\n\n\
+## behavior\n{}\n\n## invariants\n",
+        steps.join("\n")
+    )
+}
+
+/// Without the removed line's text the baseline is gone for good — the one
+/// thing the convention exists to prevent.
+#[test]
+fn empty_change_removal() {
+    let src = annotated(&["- do it", "# -"]);
+    let d = only(&src, code::EMPTY_CHANGE_REMOVAL);
+    assert_eq!(d.severity, Severity::Warning);
+    assert_span(&src, &d, "# -");
+}
+
+/// A `# +` covers the line beneath it; with nothing beneath, it adds nothing.
+#[test]
+fn empty_change_addition() {
+    let src = annotated(&["- do it", "# +"]);
+    let d = only(&src, code::EMPTY_CHANGE_ADDITION);
+    assert_eq!(d.severity, Severity::Warning);
+    assert_span(&src, &d, "# +");
+}
+
+/// The marker's own `-` stands in for the bullet, so a kept one is doubled.
+#[test]
+fn redundant_change_bullet() {
+    let src = annotated(&["- do it", "# - - do it the old way"]);
+    let d = only(&src, code::REDUNDANT_CHANGE_BULLET);
+    assert_eq!(d.severity, Severity::Warning);
+}
+
+/// A repeated sign is a divider, not a marker — otherwise every rule line in a
+/// spec would read as an empty addition or removal.
+#[test]
+fn a_repeated_sign_is_a_comment_not_a_marker() {
+    let src = annotated(&["- do it", "# --- section divider ---", "# +++"]);
+    let (_doc, diags) = analyze(&src);
+    assert!(diags.is_empty(), "expected no diagnostics, got: {diags:#?}");
+}
+
+/// Marking as added a type the *baseline* already needs: the annotated spec is
+/// fine, but the baseline it reconstructs to references a type that is no
+/// longer defined — so the unannotated half does not stand on its own.
+#[test]
+fn unrecoverable_baseline() {
+    let src = format!(
+        "{VALID_HEADER}## modules\n\n## data\n\
+# +\nstruct Added {{\n  x: i64,\n}}\n\
+in: Added\nout: String\n\n\
+## behavior\n- do it\n\n## invariants\n"
+    );
+    let d = only(&src, code::UNRECOVERABLE_BASELINE);
+    assert_eq!(d.severity, Severity::Warning);
+    assert!(
+        d.message.contains("Added"),
+        "message should name the broken claim, got: {}",
+        d.message
+    );
+}
+
+/// The everyday annotated spec — a replaced behavior step and a field added to
+/// a referenced type (§4.7's member delta, now spelled the §10 way) — is clean.
+#[test]
+fn well_formed_annotations_are_silent() {
+    let src = plugin(
+        "## components\nstruct Wave @ src/waves.rs {\n  index: u32,\n  # - stale: u32,\n  # +\n  streak: u32,\n}\n\n\
+## resources\nstruct Cfg {\n  n: u32,\n}\n",
+    );
+    let src = src.replace(
+        "## behavior\n- x\n",
+        "## behavior\n- read the wave\n# - spawn one enemy per tick\n# +\n- spawn Cfg.n enemies per tick\n# +\n- increment the spawn counter\n",
+    );
+    let (_doc, diags) = analyze(&src);
+    assert!(diags.is_empty(), "expected no diagnostics, got: {diags:#?}");
+}
+
+/// A `# +` on a whole `## systems` entry covers its indented access block too:
+/// one marker per addition, not one per line.
+#[test]
+fn an_added_marker_covers_the_nested_block() {
+    let src = plugin_with_systems(
+        "go — does it\n  schedule: Update\n# +\nlater — does it later\n  schedule: PostUpdate\n  after: go",
+    );
+    let (_doc, diags) = analyze(&src);
+    assert!(diags.is_empty(), "expected no diagnostics, got: {diags:#?}");
+
+    // The baseline drops the added system with its block, leaving only `go`.
+    let recovered = mml_parser::annotations::baseline(&src).text;
+    assert!(recovered.contains("go — does it"), "{recovered}");
+    assert!(!recovered.contains("later"), "{recovered}");
+    assert!(!recovered.contains("PostUpdate"), "{recovered}");
+}
+
+/// Un-commenting a `# -` restores the bullet the marker's `-` stood in for in a
+/// bulleted section, and restores nothing in a section that has none.
+#[test]
+fn the_baseline_restores_a_bullet_only_where_the_section_has_them() {
+    let src = plugin(
+        "## components\nstruct Wave @ src/waves.rs {\n  # - stale: u32,\n  index: u32,\n}\n",
+    );
+    let src = src.replace("## behavior\n- x\n", "## behavior\n# - do the old thing\n");
+    let recovered = mml_parser::annotations::baseline(&src).text;
+    assert!(recovered.contains("\n  stale: u32,\n"), "{recovered}");
+    assert!(recovered.contains("\n- do the old thing\n"), "{recovered}");
+}

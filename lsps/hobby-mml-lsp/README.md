@@ -43,8 +43,9 @@ section is a type namespace in this dialect, not an interface.
 
 v2.2 lets a spec **point at a type instead of restating it**. `struct Wave @
 src/waves/mod.rs` says the type is already there: the body becomes optional, and
-when present it is a *delta* — `+` adds a member, `-` removes one, unmarked
-asserts one exists, and anything unlisted stays as it is. Because the target is
+when present it is partial — it lists the members the spec asserts, and anything
+unlisted stays as it is. (v2.2's inline `+` / `-` member markers still parse but
+are legacy; v2.3's `# +` / `# -` are the one change spelling.) Because the target is
 real Rust on disk, the reference is checked: the type must exist, its
 `#[derive(…)]` must match the section's role (filing a `Resource` under
 `## components` is the classic spec error, and now a warning), and
@@ -54,6 +55,13 @@ because the guarantee differs and a reader should not have to resolve a path to
 tell which they are looking at. Reading the Rust is `mml-parser/src/rust_source.rs`,
 via the vendored `tree-sitter-rust` grammar rather than the Helix grammar cache,
 so `hobby-mml-parser --lint` keeps working on a machine with no built grammars.
+
+v2.3 makes the spec hold **both** versions of the unit: the baseline it started
+from, and the change written on top of it as `# +` / `# -` comment markers
+(grammar §10). See [Change annotations](#change-annotations-grammar-10) below for
+the checks; the reason it is worth a convention is that the delta then survives
+being committed, and `/hmml-translate` is told what to add and remove instead of
+inferring it from git.
 
 That divergence ends any prospect of re-merging with the work binary, and makes
 upstream `mml-parser` cherry-picks a manual job — a cost accepted deliberately,
@@ -72,10 +80,36 @@ docs and parser cannot drift:
 | Fixture | Shows |
 |---|---|
 | `enemy-waves.hmml` | `kind: plugin` — world sections, role-less `## data`, systems, ordering, `marker`, `where:` |
-| `spawn-enemies.hmml` | `kind: system` — `## access`, cross-spec imports into `## data` and a world section, query exclusion, a Rust reference with a `+`/`-` delta body, `use extern` |
+| `spawn-enemies.hmml` | `kind: system` — `## access`, cross-spec imports into `## data` and a world section, query exclusion, a Rust reference with a partial body carrying a `# +` annotation, `use extern` |
 | `get-map-tile.hmml` | `kind: endpoint` — `method`, param sources |
 | `mesh-terrain-chunks.hmml` | `kind: workflow` — `Queue`/`Stream` |
 | `shared-data-imports.hmml` / `cross-spec-refs.hmml` | `use` imports, `@ spec` refs |
+
+### Change annotations (grammar §10)
+
+A spec carries a change as `# +` / `# - <text>` comment markers on top of the
+baseline — the version the change starts from. The markers stay after the change
+lands, so the spec keeps representing it. They are comments, so no other pass
+sees them — and the property that makes the convention work, **baseline
+recoverability**, is therefore checked in `mml-parser/src/annotations.rs`:
+dropping every `# +` block and un-commenting every `# -` line must give back the
+baseline spec, coherent on its own.
+
+`unrecoverable-baseline` is the check that earns its keep. The reconstructed
+baseline is re-parsed and re-validated, and an **error it has that the annotated
+spec does not** is reported against the line that caused it — typically a `# +`
+on something the baseline itself already needs, which means the two versions the
+file is supposed to hold are not both coherent. The rest are shape checks:
+`empty-change-removal` (a `# -` that kept no text, so the baseline is gone),
+`empty-change-addition` (a `# +` with nothing beneath it), and
+`redundant-change-bullet` (a removed line that kept the bullet the marker's own
+`-` stands in for).
+
+All four are **warnings**, so `--lint` gates on them. The work copy makes
+`redundant-change-bullet` an info hint instead, because its `--lint` does not
+gate on info severity; this one does gate on any diagnostic at all, so an info
+hint here would gate anyway while claiming not to. A doubled bullet is a
+one-character fix, so gating on it costs nothing.
 
 ## Helix routing
 

@@ -1,5 +1,5 @@
 ---
-title: "Hobby HMML — language specification (v2.2, Bevy dialect)"
+title: "Hobby HMML — language specification (v2.3, Bevy dialect)"
 created: 2026-07-25
 tags:
   - spec
@@ -74,6 +74,30 @@ head, one review, one diff. You edit the `.hmml`; Claude translates spec → cod
 >
 > Two keywords rather than one because the guarantee differs and should be
 > legible at a glance. Additive: every v2.1 spec is still a valid v2.2 spec.
+
+> **v2.3 (2026-08-28) — the spec holds both versions.** A spec used to be edited
+> in place to describe the change a task intends, which threw away the thing the
+> change is a change *to*: read afterwards, the file said what the code should
+> do and nothing said what it did. Recovering the delta meant git archaeology in
+> the notes repo, and an edit committed there stopped being a delta at all.
+>
+> v2.3 adds **change annotations** ([§10](#10-change-annotations)): the file
+> keeps the **baseline** — the unit as it is before the change — and the change
+> is written on top of it as `# +` / `# -` comment markers. Both versions are in
+> one file, the delta survives being committed, and `/hmml-translate` is told
+> exactly what to add and remove instead of inferring it.
+>
+> They are ordinary comments (§1), so this is a **convention, not grammar**: an
+> annotated spec parses and validates exactly like any other. What is new is
+> vocabulary, plus four checks that the markers still describe a real change.
+>
+> **§10 is the one change spelling, and it supersedes the v2.2 member delta.**
+> A `@ <path>` body's inline `+` / `-` said the same thing in a second way, and
+> the two could not both be right about what an unmarked line means: §10 needs
+> unannotated text to be the baseline, and `+ streak: u32` is intent. The inline
+> form still parses, so every v2.2 spec is still valid — but a new spec writes a
+> member change the way it writes every other change
+> ([§4.7](#47-referencing-a-rust-type--path)).
 
 ## 1. File shape
 
@@ -263,8 +287,7 @@ type already exists, over there**:
 struct Wave @ src/waves/mod.rs
 struct EnemyHealth @ src/waves/mod.rs {
   hp: f32,
-  + streak: u32,
-  - remaining,
+  remaining: u32,
 }
 marker Spawner @ src/waves/mod.rs
 ```
@@ -275,25 +298,35 @@ directory, then the workspace root. It is legal in **both dialects** and in
 every type-declaring section — a `## data` reference is role-less like any other
 `## data` name.
 
-**The body is optional, and when present it is a delta, not a definition.**
-Anything the body does not mention **stays as it is**. Each member line may
-carry a marker:
+**The body is optional, and when present it is partial.** It lists the members
+this spec has something to say about; anything it does not mention **stays as it
+is**. Every listed member is an **assertion** that the real type already has it.
 
-| Line | Means |
-|---|---|
-| `+ streak: u32` | add this member to the real type |
-| `- remaining` | remove this member from the real type |
-| `hp: f32` | this member is already there (an assertion) |
+Changing the member set is a change like any other, so it is written with the
+`# +` / `# -` markers of [§10](#10-change-annotations):
 
-A removal needs no type — the field being removed already has one, in the code.
-A `+` or `-` on a type that declares its own shape is a `malformed-field` error:
-there is nothing to change.
+```
+struct EnemyHealth @ src/waves/mod.rs {
+  hp: f32,
+# - remaining: u32,
+# +
+  streak: u32,
+}
+```
 
-**Only unmarked members are assertions**, and only assertions can be
-contradicted. A `+` that has not landed yet and a `-` that has not been applied
-yet are the normal state of a spec whose work is outstanding, which is exactly
-when it is read most; diagnosing them would make every in-progress spec noisy.
-`/hmml-translate` reads them the other way round — as the change to make.
+That falls out of what a marker is. `# +` and `# -` are comments, and the parser
+skips comments, so an added member never reaches the assertion check below and an
+in-progress spec is never noisy about work that has not landed — which is exactly
+the property the v2.2 inline markers were written to provide, reached by the
+route every other section already uses.
+
+**The v2.2 inline form is legacy.** A member line may still open with `+` or `-`
+and still means add / remove, so v2.2 specs keep working and
+`/hmml-translate` still reads them; new specs do not write them. Two spellings
+for one statement is one too many, and the inline one is the spelling that made
+§10's rule — unannotated text is the baseline — untrue inside a body. A `+` or
+`-` on a type that declares its own shape stays a `malformed-field` error: there
+is nothing to change.
 
 The filesystem-aware tools check four things, all **warnings**:
 
@@ -301,7 +334,7 @@ The filesystem-aware tools check four things, all **warnings**:
 - its `#[derive(…)]` does not match the section's role → `rust-role-mismatch`
 - the spec says `struct` and the code says `enum`, or `marker` names a struct
   with fields → `rust-shape-mismatch`
-- an unmarked member is not there → `rust-member-unknown`
+- a member the body asserts is not there → `rust-member-unknown`
 
 A path that does not resolve produces one `unresolved-source-path` warning and
 none of the above: nothing about a file that is not there is knowable, so one
@@ -621,11 +654,95 @@ line in `## data` (a marker is a component; see [§4.6](#46--data--in-the-bevy-d
 **Semantic:** `undefined-type`, `duplicate-type`, `duplicate-field`,
 `duplicate-module`.
 
+**Change annotations** ([§10](#10-change-annotations)):
+`empty-change-removal` (warn), `empty-change-addition` (warn),
+`redundant-change-bullet` (warn), `unrecoverable-baseline` (warn). All four are
+warnings and none is an error — an annotated spec is a valid spec, and these
+report a delta that has stopped describing a real change.
+
 The `unresolved-*` codes need a filesystem and are emitted only by the
 filesystem-aware consumers (the LSP and `hobby-mml-parser --lint`),
 never by the pure parse/validate passes.
 
-## 10. Worked examples
+## 10. Change annotations
+
+An `.hmml` describes one unit **as it is**. When a task changes that unit, the
+change is written *on top of* that version rather than replacing it: the file
+keeps the **baseline** — the version the change starts from — and two comment
+markers, `# +` and `# -`, say what the change adds and removes.
+
+This is a **convention, not grammar.** Both markers are ordinary comments
+([§1](#1-file-shape)), so an annotated spec parses and validates exactly like any
+other, and a tool that ignores comments simply sees the baseline.
+
+- `# - <text>` — a line the change **removes**. Comment the original out **in
+  place**, keeping its text verbatim at its original indentation; the marker's
+  `-` stands in for the bullet the line had, where it had one.
+- `# +` — a marker introducing **added** content: the line directly beneath it,
+  together with any lines nested deeper than that line (its children). Several
+  added siblings each take their own marker — one marker covers one line's worth
+  of addition, the way a `+` in a diff does, so what is added is never inferred
+  from where a run happens to stop.
+
+```
+## behavior
+- for each Spawner:
+  # - spawn one enemy per tick
+  # +
+  - spawn WaveConfig.rate enemies per tick
+  # +
+  - emit a WaveSpawned event
+```
+
+A marker covering a line with children takes the whole subtree, so nested work
+needs one marker, not one per line:
+
+```
+# +
+- while the spawner's share is not exhausted:
+  - take the next SpawnPoint from WaveConfig
+```
+
+A `struct` / `enum` head is covered through its closing brace, since the brace
+sits at the head's own indentation and the subtree rule would stop one line
+short of it.
+
+The rules that make the convention worth having:
+
+1. **Baseline recoverability.** Dropping every `# +` block and un-commenting
+   every `# -` line must reproduce the baseline **exactly**. So a baseline line
+   is never deleted or reworded in place — it is commented out with `# -` and
+   the replacement added with `# +`. The file alone therefore carries both
+   versions and the whole delta, with no git archaeology, and the delta survives
+   being committed. This is a **checkable** property, and
+   `hobby-mml-parser` / the LSP check it: reconstructing the baseline and
+   finding that it no longer parses or validates is `unrecoverable-baseline`.
+2. **A modification is a removal plus an addition** — `# -` the old line, `# +`
+   the new one. There is no in-place edit.
+3. **One task's change at a time.** Annotations describe one change, not a
+   history of them; a spec is never a changelog. The next task starts from a
+   fresh extract of the code in its own task directory, so a second change never
+   lands on top of a first one's markers.
+4. **The annotations stay.** Nothing strips them once the implementation
+   matches: the spec is the record of what that change was, and un-annotating it
+   would leave a file indistinguishable from a plain baseline. The unannotated
+   lines are the version the change started from — not, after it lands, the code
+   as it is today.
+
+Annotations apply in **every** section, and to every line shape: a removed
+struct field, an added component, a new `## systems` entry with its whole access
+block, a changed behavior step, an added invariant. There is no second spelling
+for any of them — including a `@ <path>` type body, whose v2.2 inline `+` / `-`
+markers §10 supersedes ([§4.7](#47-referencing-a-rust-type--path)).
+
+In the tooling: `/hmml-extract` writes the unannotated baseline and never
+annotates; the human (or `/build:task`) adds the delta; `/hmml-review`
+pressure-tests the delta against the baseline; `/hmml-translate` implements
+exactly what the markers say and never edits the spec; `/hmml-validate` expects
+`# +` claims to be absent from the code before implementation and `# -`
+behaviour to be gone from it after.
+
+## 11. Worked examples
 
 The canonical, always-parsing examples are the parser's fixtures — they are
 compiled into the test suite, so they cannot drift:
@@ -633,13 +750,13 @@ compiled into the test suite, so they cannot drift:
 | File | Shows |
 |---|---|
 | `mml-parser/tests/fixtures/examples/enemy-waves.hmml` | `kind: plugin` — all three world sections, a role-less `## data`, three systems, ordering, a `marker`, a `where:` binding |
-| `mml-parser/tests/fixtures/examples/spawn-enemies.hmml` | `kind: system` — `## access`, imports across specs into both `## data` and a world section, a `-` query exclusion, a Rust reference with a `+`/`-` delta body, and a `use extern` import |
+| `mml-parser/tests/fixtures/examples/spawn-enemies.hmml` | `kind: system` — `## access`, imports across specs into both `## data` and a world section, a `-` query exclusion, a Rust reference with a partial body carrying a `# +` change annotation, and a `use extern` import |
 | `mml-parser/tests/fixtures/examples/get-map-tile.hmml` | `kind: endpoint` — `method`, param sources |
 | `mml-parser/tests/fixtures/examples/mesh-terrain-chunks.hmml` | `kind: workflow` — `Queue`/`Stream` in/out |
 | `mml-parser/tests/fixtures/examples/shared-data-imports.hmml` | `use` type imports |
 | `mml-parser/tests/fixtures/examples/cross-spec-refs.hmml` | `@ spec` annotations |
 
-## 11. Authoring checklist
+## 12. Authoring checklist
 
 - Filename equals the `unit:` header value, plus `.hmml`.
 - `kind:` set, and only that kind's sections present — in canonical order.
@@ -653,6 +770,9 @@ compiled into the test suite, so they cannot drift:
   `use extern` for a dependency
   ([§4.8](#48-importing-from-a-dependency-use-extern)). A referenced type's body
   lists only what changes.
+- **A change in flight is annotated, not applied in place** — every baseline
+  line either untouched or commented out with `# -`, every addition under its
+  own `# +` ([§10](#10-change-annotations)).
 - Behavior control flow uses only the closed keyword set.
 - Declared names are written verbatim in prose so they cross-link.
 - Invariants are checkable claims, not restatements of the behavior.

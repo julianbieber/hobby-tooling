@@ -382,6 +382,44 @@ makes an access list checkable, and that is exactly what `## data` withholds.
 non-Bevy hobby repos (`mosaik_map`, `securitd`, `glsllsp`) still have a usable
 dialect. The two cannot be mixed in one file.
 
+### A spec holds both versions of the unit (v2.3)
+
+A spec used to be edited in place to describe the change a task intended, which
+threw away the thing the change was a change *to*: read afterwards, the file said
+what the code should do and nothing said what it did. §10 makes the file keep the
+**baseline** — the unit as it is before the change — and write the change on top
+of it as `# +` / `# -` comment markers. Both versions in one file, the delta
+surviving a commit, and `/hmml-translate` told exactly what to add and remove
+instead of inferring it from `git diff` in the notes repo.
+
+The markers are ordinary comments, so this is a convention, not grammar — which
+is precisely why `mml-parser/src/annotations.rs` exists. **No other pass sees
+them**, including the one rule that makes the convention work: dropping every
+`# +` block and un-commenting every `# -` line must reproduce the baseline. That
+is checked by reconstructing it, re-parsing and re-validating, and reporting any
+error the baseline has that the annotated spec does not — `unrecoverable-baseline`,
+typically a `# +` on something the baseline itself already needs.
+
+**The annotations stay after the code lands.** Stripping them would leave a file
+indistinguishable from a plain baseline, and the spec is the record of what the
+task changed. The next task gets its baseline from a fresh extract, not from this
+file.
+
+**§10 is the one change spelling, which cost v2.2 its member delta.** A `@ <path>`
+type body's inline `+ streak: u32` / `- remaining` said the same thing a second
+way, and the two could not both be right about what an unmarked line means: §10
+needs unannotated text to be the baseline, and `+ streak` is intent. The inline
+form still parses so v2.2 specs keep working, but the grammar now calls it legacy
+and nothing emits it. Nothing was lost in the trade — a `# +` member is a comment,
+the parser skips comments, so it never reaches `rust-member-unknown`, which is
+exactly the "intent is never an assertion" suppression the inline markers were
+written to provide.
+
+One divergence from the work copy: `redundant-change-bullet` is a **warning**
+here, not an info hint. Work's `--lint` does not gate on info severity; this one
+gates on any diagnostic at all, so an info hint would gate anyway while claiming
+not to. A doubled bullet is a one-character fix, so gating on it costs nothing.
+
 ## The vendored language servers
 
 `lsps/` holds five servers. `hobby-mml-lsp` is a fork with its own dialect (above);
