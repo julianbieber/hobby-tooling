@@ -563,18 +563,78 @@ def resolve-task-arg [task?: string, project?: string] {
     }
 }
 
-# Create the worktree for a task at <project>/<topic>/<task>, reusing the branch
-# named after the task if it already exists.
-def create-worktree [main_repo: path, worktree_dir: path, task: string, base?: string] {
-    let branch_exists = (do -i { ^git -C $main_repo rev-parse --verify $task } | complete).exit_code == 0
-    if $branch_exists {
-        print $"Creating worktree for existing branch '($task)'..."
-        ^git -C $main_repo worktree add $worktree_dir $task
-    } else {
-        let base_ref = if $base != null { $base } else { "HEAD" }
-        print $"Creating worktree with new branch '($task)' from ($base_ref)..."
-        ^git -C $main_repo worktree add -b $task $worktree_dir $base_ref
+def registered-worktrees [main_repo: path] {
+    git-out $main_repo ["worktree" "list" "--porcelain"]
+    | split row "\n\n"
+    | each {|block| $block | lines | where { $in | is-not-empty } }
+    | where {|lines| $lines | any { $in | str starts-with "worktree " } }
+    | each {|lines|
+        {
+            path: ($lines | where { $in | str starts-with "worktree " } | first | str substring 9.. | path expand)
+            branch: ($lines | where { $in | str starts-with "branch refs/heads/" } | get -o 0 | default "" | str substring 18..)
+            prunable: ($lines | any { $in | str starts-with "prunable" })
+        }
     }
+}
+
+def prune-dead-worktrees [main_repo: path] {
+    let stale = (registered-worktrees $main_repo | where prunable)
+    if ($stale | is-empty) { return }
+    for w in $stale { print $"Clearing stale worktree registration: ($w.path)" }
+    ^git -C $main_repo worktree prune
+}
+
+def branch-checked-out-at [main_repo: path, branch: string] {
+    let hits = (registered-worktrees $main_repo | where branch == $branch)
+    if ($hits | is-empty) { null } else { ($hits | first).path }
+}
+
+def remote-branch-ref [main_repo: path, branch: string] {
+    git-out $main_repo ["remote"]
+    | lines
+    | where { $in | is-not-empty }
+    | each {|r| $"refs/remotes/($r)/($branch)" }
+    | where {|r| ref-exists $main_repo $r }
+    | get -o 0
+}
+
+def create-worktree [main_repo: path, worktree_dir: path, task: string, base?: string] {
+    prune-dead-worktrees $main_repo
+
+    if ($worktree_dir | path exists) {
+        let target = ($worktree_dir | path expand)
+        if (registered-worktrees $main_repo | any {|w| $w.path == $target }) {
+            print $"Worktree already present: ($worktree_dir)"
+            return
+        }
+        if (ls -a $worktree_dir | is-empty) {
+            rm $worktree_dir
+        } else {
+            error make { msg: $"($worktree_dir) exists and is not a registered worktree — move it aside, then retry" }
+        }
+    }
+
+    let has_local = (ref-exists $main_repo $"refs/heads/($task)")
+    let add_args = if $has_local {
+        let at = (branch-checked-out-at $main_repo $task)
+        if $at != null {
+            error make { msg: $"Branch '($task)' is already checked out at ($at)" }
+        }
+        print $"Creating worktree for existing branch '($task)'..."
+        ["worktree" "add" ($worktree_dir | into string) $task]
+    } else {
+        let remote_ref = (remote-branch-ref $main_repo $task)
+        let base_ref = if $base != null { $base } else if $remote_ref != null { $remote_ref } else { "HEAD" }
+        print $"Creating worktree with new branch '($task)' from ($base_ref)..."
+        ["worktree" "add" "-b" $task ($worktree_dir | into string) $base_ref]
+    }
+
+    let r = (do -i { ^git -C $main_repo ...$add_args } | complete)
+    let out = ([$r.stdout, $r.stderr] | str join | str trim)
+    if $r.exit_code != 0 {
+        error make { msg: $"git ($add_args | str join ' ') failed: ($out)" }
+    }
+    if ($out | is-not-empty) { print $out }
 }
 
 # --- commands ---------------------------------------------------------------
@@ -882,8 +942,13 @@ export def "hwt rm" [
 }
 
 # Re-create a removed task's worktree from its notes directory. The branch is the
-# task name (re-created from HEAD if it no longer exists). Only the notes path is
-# needed, so a task whose task.json was purged by `hwt forget` still restores.
+# task name — an existing local branch is reused, else the branch's own remote-
+# tracking ref, else HEAD. Only the notes path is needed, so a task whose
+# task.json was purged by `hwt forget` still restores.
+#
+# Repairs a checkout left half-removed as far as it can: a stale registration or
+# an empty directory at the task path is cleared rather than reported. A directory
+# with contents that is not a worktree, and a branch checked out elsewhere, raise.
 export def --env "hwt restore" [
     task: string@notes-task-completions   # Task to restore (from the notes tree)
     --no-cd                               # Don't cd into the restored worktree
@@ -892,7 +957,7 @@ export def --env "hwt restore" [
     if $found == null {
         error make { msg: $"No notes directory found for '($task)' under ($NOTES_BASE)" }
     }
-    if $found.present {
+    if $found.present and (is-git-repo $found.path) {
         print $"Already present: ($found.path)"
         if not $no_cd { cd $found.path }
         return $found.path
