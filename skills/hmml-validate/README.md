@@ -14,10 +14,17 @@ Read-only **conformance / drift check**: does the implementation still do what
 its [`.hmml`](../../lsps/hobby-mml-lsp/grammar.md) spec says? This is the
 closing step of the HMML loop and the mirror of `hmml-translate`:
 
-- `hmml-extract` — code → `.hmml`
-- `hmml-translate` — an edited `.hmml` → a code change
+- `hmml-extract` — code → a `.hmml` baseline
+- `hmml-translate` — an annotated `.hmml` → a code change
 - **`hmml-validate` — code vs the current `.hmml` → a drift report** (edits
   nothing)
+
+A spec normally carries its task's change as `# +` / `# -` annotations on top of
+the baseline (grammar §10), and that splits the report in two: a `# +` claim is
+intent, so its absence before implementation is expected and its absence after is
+unfinished work; a `# -` line is behaviour the change removes, so finding it
+still in the code after implementation is a failure to conform. The annotations
+are never stripped — they stay after the change lands.
 
 Over time code and spec drift apart — someone changes the code and forgets the
 spec, or edits a spec but never translates it. Validate routes each spec claim

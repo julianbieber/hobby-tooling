@@ -50,15 +50,35 @@ for you. Map each finding to a verdict:
 - `rust-role-mismatch` — its `#[derive(…)]` no longer matches the section (a
   component became a resource) → **SPEC-AHEAD**, and a real design change worth
   calling out, not a typo.
-- `rust-member-unknown` — an unmarked field the spec asserts is gone →
-  **SPEC-AHEAD**.
-- A **`+` or `-` member that has been applied** — the `+` field now exists, or
-  the `-` field is gone — is **CONFORMS**, and worth reporting as a spec-hygiene
-  note: the delta has landed and the marker can be dropped. A `+`/`-` that has
-  *not* landed is outstanding work, not drift; the linter is silent on both, so
-  this one is yours to read.
+- `rust-member-unknown` — a field the spec asserts is gone → **SPEC-AHEAD**.
+- A member under a `# +` / `# -` annotation is part of the change, so it is read
+  by the annotation rules below, not by these. (A legacy inline `+`/`-` member,
+  grammar §4.7, is read the same way: applied → **CONFORMS** with a hygiene note
+  that it can be rewritten as a §10 marker; not applied → outstanding work, not
+  drift. The linter is silent on both, so this one is yours to read.)
 - A field the code has and the reference body omits is **not** CODE-AHEAD. A
-  reference body is a delta by definition, so omission carries no claim.
+  reference body is partial by definition, so omission carries no claim.
+
+**Annotated specs.** A spec carries the task's intended change as annotations on
+top of the baseline — `# - <text>` for what the change removes, `# +` for the
+block it adds (grammar §10). Read them; they change what each verdict *means*:
+
+- an unannotated line is a claim about the code as it is → the verdicts above
+  apply unchanged;
+- a `# +` claim is intent. Before implementation, its absence from the code is
+  **expected** — report it as SPEC-AHEAD and say plainly that the fix is
+  `hmml-translate`, not a code bug. After implementation it must be present, and
+  its absence is real unfinished work;
+- a `# -` line is behaviour the change **removes**. It is a comment, so it is not
+  a claim about today's code: after implementation, finding that behaviour still
+  in the code is a **failure to conform** — call it out as "removal not applied",
+  not as CODE-AHEAD.
+
+Open the report with a one-line census (`N` removals, `M` additions annotated)
+and split the findings into *baseline* and *delta*, so "the change landed" and
+"the rest of the unit still holds" are answerable separately. Never strip the
+annotations — they stay in the spec after the change lands, so it keeps
+representing the change.
 
 ## Instructions
 

@@ -16,6 +16,14 @@ shows. (The round-trip eval, task 08, confirms full-regeneration from a spec is
 lossy by design; the spec's job is to be edited and diffed, not to rebuild the
 unit.)
 
+**What you emit is a baseline.** In the dev loop the extracted spec is the
+*current version* of the unit — the reference the task's change is later stated
+against as `# +` / `# -` annotations (grammar §10). Two things follow: describe
+**only what the code does today** — never the change someone is about to make,
+however obvious it seems — and emit the file **unannotated**. Adding the delta is
+a separate, human-led step; a baseline that already contains the change destroys
+the very comparison it exists to provide.
+
 Read `~/fun_repos/hobby-tooling/lsps/hobby-mml-lsp/grammar.md` (the authoritative
 hobby grammar, v2 — **not** the work one) before your first extraction if you
 are unsure of any rule below. The grammar cheat-sheet and worked examples at the
@@ -308,6 +316,13 @@ four sections, and **the derive decides which**.
    Do **not** put a sha or timestamp anywhere in the `.hmml` — the grammar stays
    pure.
 
+   **If `<unit>.hmml` already exists in the task dir, do not clobber it.** An
+   existing file carrying `# +` / `# -` annotations is a baseline someone has
+   already annotated with an intended change; overwriting it destroys that work
+   (and a re-extraction is exactly the diff `hmml-translate` refuses to apply).
+   Say what is there and ask whether to refresh the baseline, extract under a
+   different `unit`, or stop.
+
 8. **Lint the written file.** Run `hobby-mml-parser <written-path> --lint` and fix
    every diagnostic until it exits clean. An `unresolved-source-path` warning
    means a `source.paths` entry or module `@ path` names a file that does not
@@ -354,11 +369,13 @@ four sections, and **the derive decides which**.
 - Referencing existing code (grammar §4.7): a type declaration may end with
   `@ <repo-relative-path>` — `struct Wave @ src/waves/mod.rs` — meaning the type
   already exists there. The body then becomes **optional**, and when present it
-  is a **delta**: `+ field: Type` adds a field, `- field` removes one, an
-  unmarked field asserts one already exists, and anything not listed **stays as
-  it is**. Reference a type this unit does not own instead of restating it. The
-  filesystem-aware tools check the type is there, that its `#[derive(…)]` fits
-  the section's role, and that unmarked members exist — all warnings.
+  is **partial**: it lists the members the spec asserts are already there, and
+  anything not listed **stays as it is**. Reference a type this unit does not own
+  instead of restating it. The filesystem-aware tools check the type is there,
+  that its `#[derive(…)]` fits the section's role, and that the asserted members
+  exist — all warnings. (A member *change* is written with §10's `# +` / `# -`
+  like every other change; v2.2's inline `+` / `-` members still parse but are
+  legacy, and extraction never emits either.)
 - Dependency types (grammar §4.8): `use extern avian3d::prelude: Collider` for a
   type from another crate. Same scope and role rules as `use`, and nothing else:
   no file to resolve, no derive check, no members. Goto opens its docs.rs page.
@@ -367,6 +384,10 @@ four sections, and **the derive decides which**.
   nested); everything else prose; declared names cross-link. An optional
   trailing `where:` block binds symbols: `Symbol = value [@ config-source]`.
 - `## invariants`: flat `-` bullets, each a checkable claim.
+- Change annotations (grammar §10): `# +` / `# - <text>` comment markers write a
+  task's intended change on top of the baseline. **Extraction never emits them**
+  — they are the next step's job, and a baseline that already carries them is not
+  a baseline.
 - Cross-spec refs (grammar §5.4): a module line, **system entry**, behavior step,
   or invariant may end with `@ spec unit` — "more specification under" a sibling
   `.hmml` in the same task directory. At most one per line, always the last
