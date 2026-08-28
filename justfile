@@ -110,12 +110,32 @@ clone-notes:
 git-identity:
     #!/usr/bin/env bash
     set -euo pipefail
-    for r in "{{REPO_ROOT}}" "{{NOTES_DIR}}"; do
-        [ -d "$r/.git" ] || continue
+    # The global identity is the work one, so anything that does not override it
+    # commits as work. Per-repo config alone never held that line: it has to be set
+    # again on every clone, and 35 of 44 repos here had silently missed it — ~600
+    # commits across 29 repos, 11 of them public. An includeIf on the two hobby
+    # trees is the part that cannot be forgotten, because a fresh clone is born
+    # with the right identity by virtue of where it lands.
+    cat > "$HOME/.gitconfig-hobby" <<EOF
+    [user]
+    	email = {{GIT_EMAIL}}
+    	name = {{GIT_NAME}}
+    EOF
+    git config --global includeIf."gitdir:$HOME/fun_repos/".path "$HOME/.gitconfig-hobby"
+    git config --global includeIf."gitdir:$HOME/fun_worktrees/".path "$HOME/.gitconfig-hobby"
+    echo "  includeIf: ~/fun_repos, ~/fun_worktrees -> ~/.gitconfig-hobby"
+
+    # Explicit local config on top, so a repo keeps the hobby identity if it is ever
+    # moved out from under those paths.
+    fixed=0
+    for r in "{{FUN_REPOS}}"/*/ "{{REPO_ROOT}}" "{{NOTES_DIR}}"; do
+        [ -e "$r/.git" ] || continue
+        [ "$(git -C "$r" config --local user.email 2>/dev/null || true)" = "{{GIT_EMAIL}}" ] && continue
         git -C "$r" config user.name  "{{GIT_NAME}}"
         git -C "$r" config user.email "{{GIT_EMAIL}}"
-        echo "  $(basename "$r"): $(git -C "$r" config user.email)"
+        fixed=$((fixed + 1))
     done
+    echo "  local identity set on $fixed repo(s)"
 
 # Enforce the AI policy in git itself — attribution, identity, placeholders
 install-git-hooks: _root-notice
