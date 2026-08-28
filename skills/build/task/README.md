@@ -5,7 +5,7 @@
 | Type         | skill                                                                  |
 | Install path | `~/.claude-hobby/commands/build/task.md` → `/build:task`               |
 | Owner        | @julianbieber                                                          |
-| Dependencies | `journal:resume`, `hmml-*`, `explain-back`, `comment-review`, `pr-facts`, `journal:write`, `scripts/ai-policy-tier.sh` |
+| Dependencies | `journal:resume`, `hmml-*`, `comment-pass`, `journal:write`            |
 | Status       | experimental                                                           |
 | Supersedes   | `dev-flow`                                                             |
 
@@ -13,10 +13,10 @@
 
 The whole task as one pipeline with a recorded stage. Takes a brief from a
 description, a GitHub issue, or the task notes; plans it in HMML; loops on my
-review until the spec is right; implements and tests; runs `/explain-back` and
-`/comment-review`; stops for my review; then the PR and the journal entry.
+review until the spec is right; implements and tests; runs `/comment-pass`; stops
+for my review; then the PR and the journal entry.
 
-Two hard stops: after the HMML review, and after the comment review.
+Two hard stops: after the HMML review, and after the implementation review.
 
 ## Stages
 
@@ -26,10 +26,10 @@ Two hard stops: after the HMML review, and after the comment review.
 | `await-hmml-review` | nothing — I edit the spec | `continue` or `revise` |
 | `revise` | `hmml-review` again on the edited spec | back to `await-hmml-review` |
 | `implement` | `hmml-translate`, self-review, run + test, `hmml-validate` | falls through |
-| `explain-back` | `/explain-back` — quiz, then the comment pass | falls through |
-| `comment-review` | `/comment-review` | hard stop |
+| `comments` | `/comment-pass` over the branch diff | falls through |
+| `review` | prints the diff, evidence and comments for me to read | hard stop |
 | `await-review` | nothing — I read the summary | `continue` |
-| `pr` | `pr-facts`, then the create command through the authoring gate | falls through |
+| `pr` | gathers the facts, opens the PR | falls through |
 | `journal` | `journal:write` | `done` |
 
 State lives in `build-task.json` in the task's notes dir, beside the `.hmml`.
@@ -54,12 +54,11 @@ prunes stale symlinks on the next run.
 
 ## Known Limitations
 
-- The tier is resolved once, at step 0. A repo that becomes a fork mid-task keeps
-  the old answer until the state file is edited.
+- Comments are checked by `/comment-pass`; commit messages and the PR body are
+  written to the rules in `~/.claude-hobby/CLAUDE.md` but nothing verifies them.
 - Inferring the starting phase from artifacts is a guess when a task was worked on
   outside the pipeline.
 
 ## TODO(jb-doc): why the pipeline stops exactly twice
 
-<!-- What it should cover: what makes those two points the ones worth a hard stop,
-     and why the comment review is inside the loop rather than after the PR. -->
+<!-- What it should cover: what makes those two points the ones worth a hard stop. -->

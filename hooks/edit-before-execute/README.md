@@ -7,8 +7,9 @@ Lets a large `Write` be edited at the permission prompt instead of being approve
 or rejected as-is.
 
 Was a verbatim copy of the work hook. The `Bash` trigger (`git commit`,
-`gh pr create`) is gone — those commands go through
-[`human-authored-text`](../human-authored-text/README.md) now.
+`gh pr create`) was moved out to the `human-authored-text` gate, which has since
+been deleted — so the `Bash` branch now exits 0 and nothing edits those commands.
+Whether it comes back is part of the commenting/commit/PR rework.
 
 ## TODO(jb-doc): why the Bash half moved out
 

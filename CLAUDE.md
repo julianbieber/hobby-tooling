@@ -1,7 +1,5 @@
 # Hobby Tooling
 
-ai-policy: private
-
 ## What This Repo Is
 
 Personal Claude Code tooling for hobby projects, running under a **separate Claude
@@ -457,153 +455,261 @@ directory would see no MCPs. `install-mcps` removes before adding, so re-running
 repoints an entry that still names a work binary instead of skipping it as already
 registered.
 
-## The AI policy is enforced in four layers — two of them currently switched off
+## The AI policy stack was removed, and rebuilt on content instead of authorship
 
-Bevy's revised AI policy ([bevy-website#2551]) applies to **all** work on this
-account, not only Bevy contributions. Four layers, ordered by how hard they are to
-bypass.
+Everything that constrained who writes commit messages, PR bodies, issue text and
+code comments is **gone from this repo**. This section records what was there, so
+the rebuild is not designed blind.
 
-| Layer | Where | Enforces | State |
-|---|---|---|---|
-| 1 | `githooks/` — global `core.hooksPath` | no machine attribution, no work identity, no placeholders on an upstream-tier push | **off** |
-| 2 | `hooks/human-authored-text/` — `PreToolUse` | I write every message, body and comment; a PR carries a filled `## AI use` section | **off** |
-| 3 | `skills/pr-facts`, `ai-use-facts`, `explain-back`, `comment-review`, `gh-issue-*`, `build:task` gates | facts instead of drafts; prior-art and size checks; understanding checked before the PR; comments checked and cut | on |
-| 4 | `dotfiles/claude-md/hobby.CLAUDE.md`, `just check-placeholders`, `just ai-policy` | what may be commented, and by whom, per tier | on |
+### What was deleted
 
-`githooks/policy-lib.sh` is the single definition of the banned patterns, the
-placeholder token and the expected commit email. Layer 2 sources it.
-`scripts/ai-policy-tier.sh` is the single definition of the **tier**; layer 1
-reads it through `policy_tier()`, and layers 3 and 4 call it directly.
+| Deleted | Was |
+|---|---|
+| `githooks/` (`commit-msg`, `pre-push`, `policy-lib.sh`) | a global `core.hooksPath` refusing machine attribution, the work git identity, and unfilled placeholders on an upstream-tier push |
+| `hooks/human-authored-text/` | a `PreToolUse` gate that intercepted every message-bearing `git`/`gh` command, opened an editor, and denied until a human had typed the text |
+| `scripts/ai-policy-tier.sh`, `just ai-policy`, `just check-placeholders` | the `upstream` / `private` tier resolver and the `TODO(jb-comment)` / `TODO(jb-doc)` placeholder convention it gated |
+| `skills/pr-facts`, `skills/ai-use-facts` | facts-not-drafts assembly for a PR body and its mandatory `## AI use` disclosure |
+| `skills/explain-back`, `skills/comment-review` | a hunk-by-hunk comprehension quiz, then a clause-by-clause trimming pass over every comment in the diff |
 
-The placeholder tokens are `TODO(jb-comment)` (inline) and `TODO(jb-doc)` (doc
-comments and README sections). They name **what needs explaining, never the
-explanation**.
+`just install-git-hooks` is gone with them, `bootstrap` no longer calls it, the
+global `core.hooksPath` is unset, and `doctor` no longer has an "AI policy gates"
+section. `install-hooks` gained the same stale-symlink prune `install-skills`
+already had, so the retired hook's link in `~/.claude-hobby/hooks/` does not
+linger.
 
-### Layers 1 and 2 are wired but disarmed
+### The one rule that survived
 
-**The false positives are why.** Layer 2 classifies by substring against the whole
-Bash command text, so any command whose *argument* happens to contain `git commit`,
-`gh pr create` or `gh issue comment` is intercepted as if it were that command — writing the
-phrase into a journal entry, a heredoc, a `python3 -c`, a grep pattern. Issue #24
-reports it, and disarming the layer tripped it four more times in the session that
-wrote this section: twice far enough to open an editor and demand a message, once
-for a `cat > facts.md` and once classifying a file edit as a pull request.
+**No machine attribution.** No `Co-Authored-By: Claude`, no `Claude-Session:`
+trailer, no `Generated with Claude Code` footer, no 🤖. It is now an instruction
+in `dotfiles/claude-md/hobby.CLAUDE.md` and nothing else — the mechanism that made
+it non-optional was `githooks/`, which is deleted. Kept because Bevy CI rejects the
+trailer outright, so it is a correctness fact about where the code goes, not a
+preference about authorship.
 
-That is worse than an ordinary bug because of what the layer does when it fires: it
-blocks and waits on a human. A check that stops work on text merely mentioning the
-thing it guards costs more attention than the thing it prevents.
+The work-identity check went with the hooks. `~/.gitconfig`'s `includeIf` on
+`gitdir:~/fun_repos/` and `gitdir:~/fun_worktrees/` is now the only thing giving a
+hobby clone the hobby identity, and `just doctor` / `just git-identity` the only
+things that notice when one escapes it. Nothing blocks a push any more.
 
-The classifier at `hooks/human-authored-text/hook.sh:75-110` is untouched here —
-this turns the layer off rather than narrowing the matcher, so #24 stays open and
-re-arming brings the false positives back with it.
+### Why it came down
 
-Layer 1 went with it because the two share `policy-lib.sh`, and because the git
-hooks were the enforcement half of the same rule.
+Two reasons, and they are different in kind.
 
-`policy_guards_enabled` in `githooks/policy-lib.sh` is the single switch. All three
-mechanical checks — `commit-msg`, `pre-push`, and the `human-authored-text`
-`PreToolUse` hook — call it first and `exit 0` when it says no. It reads
-`HOBBY_AI_POLICY_GUARDS`, defaulting to `POLICY_GUARDS_DEFAULT`, which is `0`.
+**The gate was wrong in practice.** It classified by substring against the whole
+Bash command text, so any command whose *argument* contained `git commit`,
+`gh pr create` or `gh issue comment` was intercepted as if it were that command —
+a journal entry mentioning the phrase, a heredoc, a `python3 -c`, a grep pattern.
+Issue #24 reports it. That is worse than an ordinary bug because of what the layer
+did when it fired: block, and wait on a human. It had already been disarmed at
+`policy_guards_enabled` for exactly this.
+
+**The policy was wrong in aim.** Its whole content was *who is allowed to write*.
+It had nothing to say about whether a comment explained anything, whether a commit
+message was readable, or whether a PR description was the right size — so what it
+produced was placeholder markers that described nothing (19 still in this tree; the
+policy's own note claimed 56 at its peak) and PR bodies whose only guaranteed
+section was a disclosure. Forbidding bad prose from one author does not produce
+good prose from the other.
+
+The replacement is a quality question, not an authorship one, and it is the open
+work of this task.
+
+### Comments: what replaced it, and why the old shape was wrong
+
+The rule now lives in `dotfiles/claude-md/hobby.CLAUDE.md`. **Three places take a
+comment — the module, a public element, a test — and nothing else does.**
+`/comment-pass` enforces it, over a branch diff or a path, and runs as the
+`comments` phase of `/build:task`.
+
+**The enforcement goes both ways, and that is the whole difference from what it
+replaces.** `comment-review` could only cut; `explain-back` did the writing; when
+the policy stack took both, nothing was left. One reading of the code decides
+whether a comment should go and whether one is missing, so it is one pass.
+`scripts/comment-candidates.py` finds the five states the rule can settle without
+reading the code — `BARE-COMMENT`, `PRIV-DOC`, `PUB-UNDOC`, `MOD-UNDOC`,
+`TEST-UNJUSTIFIED` — across Rust, nushell, shell and the justfile; judging whether
+a *legally placed* comment says the right thing needs the code, and stays the
+skill's job.
+
+The skill's governing constraint is not "cut what is not required" — that is what
+produced placeholders last time — but **never assert a reason you have not
+verified**. A confident, plausible, wrong comment is the worst output available
+here: it is load-bearing for the next reader and invisible, where a missing
+comment is merely missing.
+
+The old tier table keyed on two things, and a survey of the 1098 inline and ~1800
+doc-comment lines in `tools/`, `lsps/` and `mcps/` falsified both.
+
+**Position does not predict value.** The tier table let a `///` through on a
+public item and banned a `//` in a body, so it kept
+
+```rust
+/// Check if two LSP ranges overlap
+fn ranges_overlap(a: &lsp_types::Range, b: &lsp_types::Range) -> bool {
+```
+
+and banned `// Err only if initialize is called twice; first workspace root
+wins.` The first restates its own signature; the second is the only statement of
+a contract that exists nowhere else.
+
+**Authorship does not predict it either.** 26 of the 28 pure-restatement comments
+in the tree (`// Parse URI` ×7, `// Convert position` ×4) are in `mcps/lsp-mcp`,
+vendored from the work checkout and never subject to the policy. Hobby-authored
+code contributed two. The policy was not holding back a flood of bad comments;
+there was no flood. What it produced was the doc/inline skew — 606 doc lines to
+250 inline in `hdash` — because doc comments on public items were the only tier
+that permitted words at all.
+
+**The replacement keys on responsibility instead, and mostly relocates rather
+than deletes.** Of the four most load-bearing comments in the tree, three survive
+the new rule by moving: two sit in test functions and become the test's
+justification, one sits in `async fn initialize` and is a caller-facing contract,
+so it moves into the `///`. Only the fourth dies — `// cheaper than repeated
+removes` in `pub fn replace_file`, which is about the body's shape and not about
+calling it.
+
+That class is the deliberate casualty, and it is not lost so much as moved out of
+the file: **a decision about why a body is shaped one way rather than the obvious
+one belongs in the commit message**, dated and attached to the diff that made it,
+where `git log -L` finds it. That couples the comment rule to the commit-message
+rule below, which is where those notes land.
+
+The module clause carries the one constraint that is easy to violate: a module
+header sits far from what it describes and is read long after, so it may hold
+only what stays true as the contents change. Naming the responsibility survives a
+refactor; listing the contents is wrong the first time something moves.
+
+### Commit messages: the policy made them measurably worse
+
+The AI policy landed on 2026-08-06 and required that every commit message be
+hand-written. Split this repo's history there:
+
+| | commits | with a body | mean body | mean subject |
+|---|---|---|---|---|
+| before | 35 | **35 / 35** | 18 lines | 55 chars |
+| after | 9 | **0 / 9** | — | 42 chars |
+
+The obvious confound — that the later commits are smaller — does not hold. Four of
+the nine touch 23, 17, 15 and 5 files and carry no body at all, and two shipped a
+typo in the subject (`Rewoork`, `mchine`). The other half of the picture: all 20 of
+the pre-policy commits worth imitating carry a `Co-Authored-By: Claude` trailer.
+The best commit messages in this repo were machine-written, and the rule requiring
+them to be hand-written took the body rate from 100% to 0%.
+
+That is a statement about cost, not about writing. An 18-line body per commit is
+affordable when producing it is near-free and the work is editing it; hand-written
+it is a tax, and the tax was paid in bodies not existing.
+
+**So the rule now runs on content, and the model writes them.** It is in
+`dotfiles/claude-md/hobby.CLAUDE.md`. Two things in it are load-bearing.
+
+**Terse, and a record of decisions.** Not the 18-line narratives the pre-policy
+commits carried — those are more than is wanted. The body says what was decided and
+what justifies it, and nothing else. The diff is already in the commit; a body that
+narrates it is spending the reader's attention on what they can already see.
+
+**A justification has exactly three permitted sources**: something said in the
+task's prompts, something settled in discussion before the change, or a fact
+verified in the code, diff or test output. The third is an *observation* and is
+free to state. The first two are *justifications* and cannot be derived — they live
+in the conversation, not in the tree, so a model that was not told the reason does
+not have it and must ask. Never supply a plausible one. This is the same constraint
+`/comment-pass` runs on, sharpened: a comment's reason can at least be checked
+against the code, and a commit message's cannot be checked against anything, which
+is exactly why an invented one survives.
+
+The attribution ban stays, and its actual reason is narrower than the old policy's:
+**a `Co-Authored-By: Claude` trailer is advertising for Anthropic**, and these repos
+do not carry it. Bevy CI rejecting the trailer is a second, practical reason that
+applies only to Bevy contributions.
+
+History is not rewritten. 20 commits here carry the trailer; the rule is forward-only,
+the same call already made about the ~600 work-identity commits, and for the same
+reason — the alternative is a force-push across public repos.
+
+Conventional Commits was considered and rejected: `feat:` / `fix:` prefixes carry
+less than subject lines like `Drop hobby-mml-index: installed, tested, and never
+once run` already do, and nothing here consumes them.
+
+### PR descriptions: the template is what failed, and the artifact survived
+
+Same split, sharper. Median PR body before the policy (#1-#21): 4316 characters,
+81 lines. After (#22-#28): 257 characters, 16 lines. #28 has no body at all on a
+five-file change.
+
+The proof is #27, which is the authoring gate's template with the blanks left in:
 
 ```
-HOBBY_AI_POLICY_GUARDS=1 git push        # re-arm for one command
-POLICY_GUARDS_DEFAULT=1 in policy-lib.sh # re-arm everywhere, permanently
+## Why
+too many false positives, therefore not worth the hassle
+
+## Expected behavior after merge
+
+## Verification
+
+## Scope / out of scope
+
+## AI use
+LLM written
 ```
 
-**Nothing was uninstalled.** `core.hooksPath` still points at `githooks/`, the hook
-is still symlinked into `~/.claude-hobby/hooks/` and still registered in
-`settings.json`, and `just doctor` still checks all of that — it reports the wiring
-and the switch on separate lines, because installed and armed are separate
-questions. The switch is one word away from being on, which unsetting
-`core.hooksPath` would not have been.
+Three sections empty and the mandatory disclosure reduced to two words. Mandating
+headings produced headings, not content.
 
-The default lives in `policy-lib.sh` rather than `settings.json`'s `env` block
-because a git hook is not a Claude Code process: `commit-msg` and `pre-push` run
-under whoever invokes git, including by hand, and never see that file.
+The headings themselves were not the mistake. Across the 17 pre-policy bodies,
+unprompted, `Why` appears 15 times, `Verification` 15, `Scope / out of scope` 12,
+`Expected behavior after merge` 12 — alongside one-offs written for the specific
+change (`Branch matters as much as path`, `The two mechanisms, and why they're in
+this PR rather than a later one`, `Drive-by`). They emerged, and then died the
+moment they became a form to fill.
 
-Two consequences:
+**What replaced them is three sections, each capped.** *What do we change* and
+*Why do we change* are one or two sentences each; *How can you test it by hand* is
+an ordered bullet list ending in what should be seen. The cap is the point: the
+old template failed by asking for five open-ended sections, and the pre-policy
+bodies, good as they were, ran to 81 lines that nobody re-reads.
 
-- **The work-identity check falls with them.** `commit-msg` and `pre-push` also
-  rejected commits authored under the work email, which is a leak, not an
-  authorship question — it shared a file with the AI checks and so shares the
-  switch. `just doctor` and `just git-identity` still cover the two repos that set
-  the identity explicitly; nothing now catches a hobby repo that never did.
-- **Layers 3 and 4 are instructions, and stay in force.** The rules in this file
-  and in `hobby.CLAUDE.md` — I write every commit message, PR body, issue and
-  comment; no machine attribution; the comment tier table — are unchanged. What is
-  gone is the mechanism that made them non-optional, which is exactly what "layer 1
-  is the only guarantee" below was about.
+Two rules keep it from decaying back into #27. **No section may be left empty** —
+a change with nothing to test by hand says so in one bullet and names what does
+cover it, because a blank heading is worse than no heading. And **`## AI use` is
+gone, not optional**: the tier resolver that could have told an owned repo from an
+upstream one was deleted with the rest of the stack, so a disclosure rule would
+have had nothing to key on.
 
-### The two tiers
+The PR carries the argument for the whole change; the commit bodies carry the
+per-decision record. Merges here are merge commits rather than squashes, so both
+persist, and restating one in the other is the failure mode to avoid.
 
-`scripts/ai-policy-tier.sh` takes the first answer of:
+PR bodies were also an attribution leak path — #14's body ends with a
+`Claude-Session:` URL — so the ban is stated there specifically and not only for
+commits.
 
-1. `AI_POLICY_TIER` in the environment
-2. an `ai-policy: upstream` / `ai-policy: private` line in the repo's `CLAUDE.md`
-3. an origin owner that is not `julianbieber` → `upstream`
-4. `gh repo view --json isFork` → `upstream` when true
-5. otherwise `private`
+### What the tree still owes the rule
 
-Step 4 is the only one that touches the network; `HOBBY_AI_POLICY_NO_GH=1` skips
-it, and a fork then resolves `private`. Step 2 is the only marker that works
-offline.
+The rule was written against the code, not applied to it. Outstanding:
 
-`just ai-policy` reports the tier and the reason per repo. Under `~/fun_repos` it
-finds 11 `upstream`, of which 7 are forks owned by me: `bevy_ecs_ldtk`,
-`bevy_image_export`, `bevy_new_minimal`, `bevy_sky_gradient`, `glasgow`,
-`presenterm`, `wgsl-analyzer`. The predicate this replaced —
-`github.com[:/]julianbieber/` on the push URL — matched all 7 as mine.
+`comment-candidates.py .` reports **2165 findings across 239 files**:
 
-### Ownership, not the URL
+| category | count |
+|---|---|
+| `BARE-COMMENT` | 1192 |
+| `TEST-UNJUSTIFIED` | 377 |
+| `PUB-UNDOC` | 299 |
+| `PRIV-DOC` | 248 |
+| `MOD-UNDOC` | 49 |
 
-The URL predicate tested where a push lands, and a fork's whole purpose is that
-the code does not stop there. An unresolvable tier fails closed —
-`push_is_upstream` returns true for anything that is not literally `private`, so a
-broken resolver over-enforces instead of silently letting a public push through.
+Deleting is mechanical. The 299 public contracts, 377 test justifications and 49
+module headers are real writing, and `TEST-UNJUSTIFIED` is the one that is not
+merely writing: the rule says a test whose justification cannot be written should
+not exist, so some fraction of those 377 is a question about the tests rather than
+about their comments.
 
-### Why the private tier stops at public doc comments
-
-The ban produced markers rather than comments: 56 of them in this repo alone,
-none of which describe anything. A doc comment on a public item states the
-contract a caller needs before reading the body, and is checkable against the
-signature. An inline comment on a private item is where restating-the-code lives,
-so it stays a placeholder on both tiers.
-
-### Layer 1 is the only guarantee — which is what turning it off costs
-
-This is the reasoning the layers were built on, unchanged; with layer 1 disarmed it
-now reads as the list of what nothing checks.
-
-The `Co-Authored-By: Claude` trailer is not the model's idea — it is instructed by
-the harness system prompt, so a CLAUDE.md rule against it is one instruction
-against another. Layers 2–4 are all inside Claude Code: layer 2's matcher is
-`Bash`, so a commit made any other way never reaches it, and layers 3–4 are
-instructions a model can misread. Layer 1 runs whoever invokes git, including me
-by hand.
-
-### Deny, rather than rewriting the command
-
-`updatedInput` is available on `PreToolUse`, so this is a choice, not a
-limitation. Rewriting means splicing my prose back into a shell command string,
-which is a quoting hazard on exactly the text most likely to contain quotes. The
-deny path instead hands over a file and records its sha, and pass 1 re-checks that
-sha on the re-issued command — so nothing can edit the authored text between my
-writing it and git using it.
-
-### Stripping the trailer is half of it
-
-Norm 1 bans the attribution; norm 2 requires a disclosure. Doing only the first
-produces a PR that hides AI involvement completely — the opposite failure.
-`/ai-use-facts` assembles the record, so the paragraph I write has something to be
-accurate about.
-
-### This repo is `private`, and that is recent
-
-The blanket style rule used to apply here on the argument that habit beats scope.
-It no longer does — `ai-policy: private` at the top of this file, and the tier
-table in `hobby.CLAUDE.md`, are what govern. Every `TODO(jb-comment)` still in
-this tree predates that and is inline, which is the one category the private tier
-does not relax.
+19 `TODO(jb-comment)` / `TODO(jb-doc)` markers also remain, in
+`tools/hdash/README.md`, `hooks/edit-before-execute/README.md`,
+`skills/build/task/README.md` and `dotfiles/nushell/hwt.nu`. They are unwritten
+documentation, not policy artifacts, so deleting the convention did not delete
+them. `just check-placeholders` no longer exists to find them:
+`rg 'TODO\(jb-(comment|doc)\):'`.
 
 [bevy-website#2551]: https://github.com/bevyengine/bevy-website/pull/2551
 

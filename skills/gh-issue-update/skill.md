@@ -90,19 +90,17 @@ instead of restating it, and surface only outcomes backed by evidence.
    **Link, don't duplicate.** Reference the PR (`#123`) or commit SHA; never paste
    diffs, file lists or code that already lives in the PR.
 
-6. **Open the gate.** Run exactly:
+6. **Post it.** Write the comment from the evidence gathered above, show it to
+   me, then:
 
    ```bash
-   gh issue comment <n>
+   gh issue comment <n> --body-file <file>
    ```
 
-   No `--body`. Run it from the project's worktree or main checkout so `gh`
-   resolves the right repo. The `human-authored-text` hook intercepts, opens the
-   buffer, and denies the call. Re-issue exactly as instructed, with the
-   `--body-file` it names. Change nothing in the file.
+   Run it from the project's worktree or main checkout so `gh` resolves the right
+   repo.
 
-7. **Confirm** what was posted, and what you deliberately skipped. If the gate
-   says I wrote nothing, say nothing was posted and stop.
+7. **Confirm** what was posted, and what you deliberately skipped.
 
 ## Decision Rules — what's worth a comment
 
