@@ -26,7 +26,7 @@ one list.
 | untagged | an issue with no usable `topic:` label | *(none — a line names the missing label)* |
 | startable | a tagged issue with no worktree | **Start task** — `hwt new` then `hcdev wt` |
 | active | a live worktree | **Open hcdev** |
-| removed | worktree gone, notes kept | **Restore** — `hwt restore` |
+| removed | worktree gone, notes kept | **Restore** — `hwt restore` then `hcdev wt` |
 | done | `done` in `task.json` | **Open hcdev** (and **Reopen**) |
 
 Plus, as they apply: **Done**/**Reopen**, **Terminal**, **Notes**, **Browser** (any

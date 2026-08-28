@@ -54,9 +54,23 @@ impl LaunchSpec {
         )
     }
 
+    fn restore_cmd(&self) -> String {
+        format!(
+            "hwt restore '{}' --no-cd | ignore; {}",
+            self.task,
+            self.hcdev_cmd()
+        )
+    }
+
     fn session_title(&self) -> String {
         format!("hcdev-{}-{}-{}", self.project, self.topic, self.task)
     }
+}
+
+fn hold_on_error(cmd: &str) -> String {
+    format!(
+        "try {{ {cmd} }} catch {{|e| print $e.msg; print ''; print 'Failed. Press enter to close.'; input }}"
+    )
 }
 
 fn launch_nu(dir: &str, title: &str, cmd: &str) {
@@ -71,7 +85,7 @@ fn launch_nu(dir: &str, title: &str, cmd: &str) {
         "nu",
         "--login",
         "-c",
-        cmd,
+        &hold_on_error(cmd),
     ]);
 }
 
@@ -100,13 +114,14 @@ pub fn launch_start(spec: &LaunchSpec) {
     );
 }
 
-/// Re-create a removed task's worktree by running `hwt restore` in a new terminal. The
-/// task dir does not exist yet, so the terminal opens in the worktrees root.
-pub fn launch_restore(id: &TaskId) {
+/// Re-create a removed task's worktree and open an `hcdev` session in it, in one
+/// terminal. The task dir does not exist yet, so the terminal opens in the worktrees
+/// root; `hcdev wt` resolves the restored path itself from the three components.
+pub fn launch_restore(spec: &LaunchSpec) {
     launch_nu(
         &worktrees_root().to_string_lossy(),
-        &format!("restore-{}", id.name),
-        &format!("hwt restore '{}'", id.name),
+        &spec.session_title(),
+        &spec.restore_cmd(),
     );
 }
 
@@ -159,7 +174,24 @@ mod tests {
             "hwt new 'gh-7-chunk-loading' -p 'wusel' -t 'perf' --no-cd | ignore; \
              hcdev wt 'gh-7-chunk-loading' --project 'wusel' --topic 'perf'"
         );
+        // Restore is a two-step command for the same reason Start is: re-creating the
+        // worktree without opening the session leaves the click with nothing running.
+        assert_eq!(
+            spec.restore_cmd(),
+            "hwt restore 'gh-7-chunk-loading' --no-cd | ignore; \
+             hcdev wt 'gh-7-chunk-loading' --project 'wusel' --topic 'perf'"
+        );
         assert_eq!(spec.session_title(), "hcdev-wusel-perf-gh-7-chunk-loading");
+    }
+
+    // Pins the wrapper every nu launch goes through: without the `catch`, a failing
+    // command closes the terminal it reported into and the message is never seen.
+    #[test]
+    fn failures_hold_the_terminal_open() {
+        let held = hold_on_error("hwt restore 'x'");
+        assert!(held.starts_with("try { hwt restore 'x' } catch {|e|"));
+        assert!(held.contains("print $e.msg"));
+        assert!(held.trim_end().ends_with("input }"));
     }
 
     #[test]
