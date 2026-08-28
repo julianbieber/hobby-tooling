@@ -325,6 +325,18 @@ removes the three variables from every process it starts, and `hwt sessions` doe
 same with `with-env`. `hcdev-launch` also refuses the self-attach in so many words, for
 the case nothing spawned: a `hcdev wt <this task>` typed by hand.
 
+**And a command that fails kills it the same way.** `nu -c` exits on the first error and
+takes the window with it, so a failing `hwt restore` was indistinguishable from both
+bugs above — nothing on screen either way. Every nu launch now goes through
+`hold_on_error`, which wraps the pipeline in `try`/`catch` and waits on `input`, so the
+message that says what went wrong is still there to read. The cost is a keypress after a
+session that exits non-zero; that is worth paying to never lose an error again.
+
+`Restore` also runs `hcdev wt` after `hwt restore`, as `Start task` does after `hwt new`.
+The card is only rescanned by the **Refresh** button, so a restore that stopped at the
+worktree left the card reading `Removed` and a second click could report nothing but
+"already present".
+
 ## HMML is a Bevy dialect here
 
 `lsps/hobby-mml-lsp/grammar.md` is the **source of truth** for HMML (v2) and

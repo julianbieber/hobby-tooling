@@ -589,8 +589,8 @@ fn on_card_activate(
             }
         }
         CardAction::Restore => {
-            if let Some(task) = item.task {
-                launch_restore(&task.id);
+            if let Some(spec) = item.launch_spec() {
+                launch_restore(&spec);
             }
         }
         CardAction::Terminal => {
