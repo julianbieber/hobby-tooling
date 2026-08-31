@@ -763,6 +763,30 @@ them. `just check-placeholders` no longer exists to find them:
 
 [bevy-website#2551]: https://github.com/bevyengine/bevy-website/pull/2551
 
+## Task shaping lives in CLAUDE.md, not in the skill that applies it
+
+The rules for carving a project into issues — six of them, with one labelled
+escape — are in `dotfiles/claude-md/hobby.CLAUDE.md` under **Task shaping**. The
+skill that runs the pass is `/task-split`, and `/gh-issue-create` checks the three
+text-decidable rules before it files anything.
+
+**The rules are in the always-loaded file on purpose.** That file is symlinked to
+`~/.claude-hobby/CLAUDE.md`, so it governs every hobby session in every repo,
+including the cases that never invoke a skill: a task proposed mid-conversation, a
+`/subtask` split, an issue typed by hand. A skill is opt-in, and opt-in enforcement
+would have covered only the one case that was already being done deliberately.
+
+So the split is: `CLAUDE.md` holds the rules, `skills/task-split/skill.md` holds
+the procedure for applying them and the re-cuts to reach for when one fails, and
+`skills/task-split/README.md` holds the argument for why each rule is shaped the
+way it is. Nothing is duplicated across the three, because the failure mode of a
+rule stated twice is the two copies drifting.
+
+`/task-split` deliberately **files nothing.** Its output is a proposed list to
+edit; an accepted entry becomes an issue through `/gh-issue-create`, one at a
+time, because the topic label and the body are per-issue decisions and a batch
+would make both of them mine to fix afterwards rather than mine to make.
+
 ## Installing
 
 `just bootstrap` is the fresh-machine entry point; `just doctor` diagnoses an

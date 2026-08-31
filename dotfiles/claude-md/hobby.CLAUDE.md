@@ -197,6 +197,57 @@ cover it (`cargo test -p hdash`, `just doctor`, CI).
 **Never in a PR body:** machine attribution of any kind — no `Co-Authored-By`, no
 `Claude-Session:` link, no `Generated with Claude Code` footer, no 🤖.
 
+## Task shaping
+
+Rules for carving a project into issues. They bind wherever work is split —
+`/task-split` runs the pass, `/gh-issue-create` checks the result before filing,
+and `/spawn` and `/subtask` are subject to them too.
+
+**1. Every task has a verifiable impact on user-driven behaviour.** What this
+actually forbids is the *layer* task — "add the table", "add the endpoint", "wire
+the UI" each fail it alone — so the rule forces vertical slices, and any prefix of
+the list is then a shippable system.
+
+**The one escape is labelled.** Genuinely enabling work — a migration, an
+extraction, a build change — may declare itself `enabling`, and the price of that
+declaration is that it names the task whose user-visible behaviour it unlocks, and
+that task exists. No orphan enablers. The two alternatives are both worse:
+bundling the enabler into the first feature that needs it triples that task and
+stops the review separating mechanical risk from semantic risk, and writing a
+fictional user-facing claim on it destroys the one field the rule exists to make
+checkable.
+
+**2. The task states the observation that separates done from not-done, and states
+it before the work starts.** One concrete thing someone can do, and what they
+should see. If it cannot be written, the task is not shaped yet — that failure is
+the signal, not an obstacle to route around. Without this rule 1 is unenforceable:
+"impact on user behaviour" becomes a genre of sentence rather than a check.
+
+**3. A task is independently revertible.** If backing out #3 forces #5 and #7 out
+with it, they were one task split on the wrong axis. This is checkable at merge
+time rather than planning time, which is what catches the splits that satisfy
+rule 1 on paper and are entangled in fact.
+
+**4. Size is bounded by review, not by effort.** Too big means the diff cannot be
+reviewed in one sitting. Effort estimates produce argument; "can one person hold
+this diff in their head" produces agreement, and it gets mechanical churn right —
+a 40-file rename is large and reviewable, and effort-based sizing misjudges it in
+both directions.
+
+**5. No task contains an unanswered question.** A decision that must be made first
+is its own item, its output is the decision plus the tasks that follow from it,
+and it is explicitly exempt from rule 1. Mixing discovery into execution is what
+makes a half-done task sit open for three weeks.
+
+**6. No task leaves state that must be remembered.** No "remove the flag later",
+no "the old path stays until #9". Either the cleanup is inside this task or it is
+a task that exists now. Rule 1 generates these — a vertical slice often ships
+behind a flag — so this is its necessary counterweight.
+
+**No estimates, points, or size field.** Rules 3-5 already bound size by things
+that can be checked; a number constrains nothing about shape and is the one field
+people optimise against.
+
 ## Issue text
 
 Write it normally and I edit what I disagree with. An issue is a problem

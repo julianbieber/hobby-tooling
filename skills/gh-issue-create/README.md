@@ -53,3 +53,13 @@ write.
   title, other labels, assignees, or state.
 - One topic per issue; the dashboard takes the first `topic:` label it sees.
 - Requires a GitHub remote; a purely local hobby repo has nowhere to file an issue.
+
+## It also checks the issue's shape
+
+An issue is a task, so the **Task shaping** rules in `CLAUDE.md` apply to it. The
+skill checks the three that are decidable from the text — a named user-visible
+behaviour (or a declared `enabling` with its consumer), a stated done-condition,
+and no unanswered question in the body — and **reports** what fails rather than
+rewriting the issue to pass. A failing shape usually means the work is two issues,
+which is a decision, not a wording fix. `/task-split` is the pass that does the
+cutting.
