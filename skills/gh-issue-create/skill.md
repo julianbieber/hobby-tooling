@@ -58,6 +58,32 @@ Rules:
   exist yet.
 - **One topic per issue.**
 
+## The shape check (an issue is a task, so the shaping rules apply)
+
+`CLAUDE.md` -> **Task shaping** is the standard. Before the gate opens, check the
+issue against it and **report the result — do not rewrite the issue to pass.** A
+badly shaped issue is usually a signal that the work is two issues, and that is my
+call to make, not a wording problem to fix in the body.
+
+Three of the six rules are checkable from the text alone and are the ones to run
+here:
+
+- **Rule 1** — does the issue name a user-visible behaviour? If it does not, it
+  must declare itself `enabling` and name the issue it unlocks. Never invent a
+  user-facing claim to make an issue pass; that is the specific failure the rule
+  exists to prevent.
+- **Rule 2** — is there a stated observation separating done from not-done? If the
+  conversation has not established one, say so rather than composing a plausible
+  one, and let me write it.
+- **Rule 5** — does the body contain an unanswered question? If it does, the
+  decision belongs in its own issue in front of this one.
+
+Rules 3, 4 and 6 are about the diff and the sequence, so they are checked at
+review and merge time, not here.
+
+For a **split**, say so plainly and propose the cut rather than filing one
+oversized issue. `/task-split` is the pass for that.
+
 ## Instructions
 
 1. **Determine the project (repo)** — `gh` needs to resolve one:
@@ -127,8 +153,11 @@ Rules:
       `gh label create` on an existing label is an error, not a no-op — check first.
       One shared colour for every topic label keeps them visually one family.
 
-7. **Report the topic label you resolved** — say when the label or the topic
-   itself would be new, and when a refresh would replace an existing body.
+7. **Run the shape check** (see above) and **report the topic label you
+   resolved** — say when the label or the topic itself would be new, and when a
+   refresh would replace an existing body. Report any shaping rule the issue
+   fails, and stop for my decision when the answer is that this is more than one
+   issue.
 
 8. **Open the gate.** Run exactly:
 
