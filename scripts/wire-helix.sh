@@ -41,6 +41,7 @@ source "$HERE/helix-paths.sh"
 # discovered: same relative location on every machine that has hobby-tooling.
 HOBBY_ROOT="$(cd "$HERE/.." && pwd)"
 HMML_GRAMMAR="$HOBBY_ROOT/lsps/tree-sitter-hmml"
+HSTRUCT_GRAMMAR="$HOBBY_ROOT/lsps/tree-sitter-hstruct"
 
 [ -n "${1:-}" ] && HELIX_REPO="$1"
 
@@ -59,6 +60,7 @@ LANGS="$REPO/languages.toml"
 LOCAL="$CFG/languages.local.toml"
 INSTALLED="$CFG/languages.toml"
 QUERIES="$REPO/runtime/queries/hmml"
+HSTRUCT_QUERIES="$REPO/runtime/queries/hstruct"
 LEGACY_QUERIES="$REPO/runtime/queries/mml-hobby"
 
 echo "  Helix checkout: $REPO (via $HELIX_REPO_WHY)"
@@ -137,6 +139,18 @@ else
     changed=1
 fi
 
+if grep -q '^hobby-struct-lsp = ' "$LANGS"; then
+    echo "  languages.toml: hobby-struct-lsp server already registered"
+else
+    if grep -q '^hobby-mml-lsp = ' "$LANGS"; then
+        sed -i '/^hobby-mml-lsp = /a hobby-struct-lsp = { command = "hobby-struct-lsp" }' "$LANGS"
+    else
+        sed -i '/^\[language-server\]/a hobby-struct-lsp = { command = "hobby-struct-lsp" }' "$LANGS"
+    fi
+    echo "  languages.toml: registered hobby-struct-lsp"
+    changed=1
+fi
+
 # --- 3. the hmml language, routed by extension -------------------------------
 # No ordering constraint: `hmml` and `mml` claim disjoint file types, so this can
 # simply be appended. (Before the rename both claimed `.mml` and this block had
@@ -183,6 +197,30 @@ TOML
     changed=1
 fi
 
+# --- 3b. the hstruct language, routed by extension ---------------------------
+# `.hstruct` collides with nothing: it is this repo's own language and no work
+# dialect claims the extension, so this is a plain append with no ordering rule.
+if grep -q '^name = "hstruct"$' "$LANGS"; then
+    echo "  languages.toml: hstruct language already present"
+else
+    cat >> "$LANGS" <<'TOML'
+
+# A repo's structure.hstruct — what layers it has, what each module owns, and
+# which violations of its own rules it accepts. Repo-scoped and long-lived,
+# unlike an .hmml spec, which describes one unit for one task.
+[[language]]
+name = "hstruct"
+scope = "source.hstruct"
+injection-regex = "hstruct"
+file-types = ["hstruct"]
+comment-token = "#"
+indent = { tab-width = 2, unit = "  " }
+language-servers = ["hobby-struct-lsp"]
+TOML
+    echo "  languages.toml: added hstruct language (routed by the .hstruct extension)"
+    changed=1
+fi
+
 # --- 4. the machine-local overlay --------------------------------------------
 # Rewritten from scratch every run, between markers, so the block tracks a moved
 # or deleted grammar checkout instead of going stale. Anything you add outside
@@ -202,6 +240,10 @@ local_body=""
 # from the repo root, so every machine gets `.hmml` highlighting with no setup.
 grammars=$(printf '[[grammar]]\nname = "hmml"\nsource = { path = "%s" }\n' "$HMML_GRAMMAR")
 echo "  local overlay: hmml grammar -> $HMML_GRAMMAR"
+
+grammars=$(printf '%s\n[[grammar]]\nname = "hstruct"\nsource = { path = "%s" }\n' \
+    "$grammars" "$HSTRUCT_GRAMMAR")
+echo "  local overlay: hstruct grammar -> $HSTRUCT_GRAMMAR"
 
 # The work `mml` language is a different dialect with a different grammar, and its
 # checkout is outside the hobby tree — so this one stays conditional.
@@ -270,6 +312,15 @@ if cmp -s "$HMML_GRAMMAR/queries/highlights.scm" "$QUERIES/highlights.scm"; then
 else
     cp "$HMML_GRAMMAR/queries/highlights.scm" "$QUERIES/highlights.scm"
     echo "  queries: installed hmml/highlights.scm from the grammar fork"
+    changed=1
+fi
+
+mkdir -p "$HSTRUCT_QUERIES"
+if cmp -s "$HSTRUCT_GRAMMAR/queries/highlights.scm" "$HSTRUCT_QUERIES/highlights.scm"; then
+    echo "  queries: hstruct/highlights.scm up to date"
+else
+    cp "$HSTRUCT_GRAMMAR/queries/highlights.scm" "$HSTRUCT_QUERIES/highlights.scm"
+    echo "  queries: installed hstruct/highlights.scm from the grammar"
     changed=1
 fi
 

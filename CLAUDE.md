@@ -420,10 +420,109 @@ here, not an info hint. Work's `--lint` does not gate on info severity; this one
 gates on any diagnostic at all, so an info hint would gate anyway while claiming
 not to. A doubled bullet is a one-character fix, so gating on it costs nothing.
 
+## HSTRUCT records the standards a repo holds itself to
+
+`lsps/hobby-struct-lsp/grammar.md` is the source of truth. A repo's file is
+`structure.hstruct` at its root — or at each crate root in a workspace — and
+`just structure` checks every repo that has one.
+
+**It exists because the `CLAUDE.md` files are descriptive and nothing was
+prescriptive.** `wusel`'s is 1383 lines narrating how the world generator and
+the market work; the section saying how to write new code is ten lines at the
+bottom. The standards that keep a repo maintainable and performant were written
+nowhere, so nothing could hold the code to them or say how far away it was.
+
+### The standard is durable; the instances are not
+
+This is the whole design, and the obvious approach gets it backwards.
+
+A standard — *"state has one owner"*, *"per-frame work is proportional to what
+changed"* — is as true on a project's last day as its first. The **files that
+violate it** are renamed, split, and edited constantly. So the file stores the
+standard, its argument, and a **budget**: how many offenders exist today.
+
+```
+## A file fits in one head
+
+A file that cannot be read in one sitting gets edited by guessing, and the
+guesses accumulate.
+
+check: files over 900 lines
+budget: 10
+```
+
+Eleven is an error. Nine is a nudge to tighten. Renaming a file, splitting one,
+or adding two hundred lines to one already over changes nothing in here.
+
+**Nothing in an `.hstruct` file names a module, a file, or a type.** A rule
+needing an enumeration to be expressed is the wrong rule for this format. The
+offenders are still available — `--detail` prints them — they are simply not
+*stored*, because storage is where the churn was.
+
+**What the first draft stored, and why it failed.** A record per module with its
+`@ path`, a layer-membership list per layer, and a waiver per violation —
+including
+`? gameplay/growth.rs 2758 lines`. Editing `growth.rs` at all, even to improve
+it, made that waiver stale *and* raised a new violation. The file punished
+touching the code, and 236 of its lines were largely a staler copy of the
+directory listing. It encoded **measurements**, which churn, in place of
+**standards**, which do not.
+
+### The ratchet is the improvement loop
+
+`--ratchet` rewrites every budget the code has moved below, in place, and **only
+downward** — a budget that rose would record a regression as the new normal.
+
+That is what lets a repo adopt this on its worst day, which was the one idea the
+first draft got right and is kept: write the standards with `budget: 999`, ratchet once,
+and the file records exactly how far the code is from each rule. Every later
+refactor that improves a number is one command from being recorded.
+
+### A budget is what makes a rough metric usable
+
+`unfiltered queries` and `allocating systems` are heuristics. Some unfiltered
+queries are correct; the allocation check matches names rather than types, so it
+over-counts a `Vec` built at startup and under-counts one behind a helper.
+
+Under per-instance waivers each would have to be adjudicated and re-adjudicated
+on every edit — unusable, which is exactly why the first draft had **no
+performance metric at all** despite performance being half of what the standards
+are for. Against a budget the count only has to be monotone: getting worse is
+caught, and the noise is constant.
+
+### Not everything is countable, and the file says so
+
+A standard declares its verification: `check:` + `budget:`, or `review:` +
+`audited:`. A reviewed standard is honest about not being mechanical, which is
+the right home for the rules that matter most and that no parser can settle —
+*"every spawn in an `OnEnter` carries a `DespawnOnExit`, or it leaks across
+screens"* is the most load-bearing rule in `wusel` and is not statically
+decidable.
+
+The first draft exiled those to prose, on the reasoning that the file may only
+contain what a checker can verify. That was the wrong cut and it is why it
+drifted toward whatever was easy to count — line numbers and import edges. The honest
+requirement is only that a rule **declares how it is verified**; a dated
+`review:` says plainly that a person last looked on that day, which prose cannot
+say and which can be seen to go stale.
+
+### Two things the discarded draft got right
+
+**Rust is parsed, and an import resolves by path, not by its last segment.** Text
+matching read `use crate::gameplay::{city, growth};` as one import of a module
+called `gameplay`. Leaf-segment matching then blamed
+`use crate::terrain::brush::Brush` on an unrelated top-level `brush.rs`, and read
+`use bevy::app::…` as a local module named `app` — which had put five fabricated
+cycles in `wusel`'s first file.
+
+**Workspaces get one file per crate, at the crate root.** `root:` names one
+source tree and two files at a repo root collide on the filename. The manifest is
+then a sibling, which is what lets `crate:` be verified rather than decorative.
+
 ## The vendored language servers
 
-`lsps/` holds five servers. `hobby-mml-lsp` is a fork with its own dialect (above);
-the other four — `claude-lsp`, `claude-skills-lsp`, `treesitter-class-lsp`,
+`lsps/` holds six servers. `hobby-mml-lsp` and `hobby-struct-lsp` implement this
+repo's own two languages (above); the other four — `claude-lsp`, `claude-skills-lsp`, `treesitter-class-lsp`,
 `path-lsp` — are **copies** of crates that also exist in the work tooling checkout,
 vendored so a hobby-only machine can build them at all.
 

@@ -130,11 +130,21 @@ done
 for b in hobby-mml-lsp hobby-mml-parser; do
     if command -v "$b" >/dev/null 2>&1; then ok "$b built"; else warn "$b not built" "just install-mml"; fi
 done
+
+for b in hobby-struct-lsp hobby-struct-parser; do
+    if command -v "$b" >/dev/null 2>&1; then ok "$b built"; else warn "$b not built" "just install-struct"; fi
+done
 echo ""
 echo "Helix"
 if resolve_repo; then
     REPO="$HELIX_REPO_RESOLVED"
     ok "checkout $REPO (via $HELIX_REPO_WHY)"
+
+    if grep -q '^name = "hstruct"$' "$REPO/languages.toml"; then
+        ok "hstruct language in the checkout"
+    else
+        warn "hstruct not registered" "just wire-helix"
+    fi
 
     if grep -q '^name = "hmml"$' "$REPO/languages.toml"; then
         ok "hmml language in the checkout"
@@ -201,6 +211,13 @@ if resolve_grammar_mml; then
 else
     warn "no tree-sitter-mml — work .mml loses highlighting" "just local-paths"
 fi
+HSTRUCT_GRAMMAR_DIR="$MAIN_CHECKOUT/lsps/tree-sitter-hstruct"
+if [ -d "$HSTRUCT_GRAMMAR_DIR" ]; then
+    ok "lsps/tree-sitter-hstruct present"
+else
+    bad "lsps/tree-sitter-hstruct missing" "git pull"
+fi
+
 HMML_GRAMMAR_DIR="$MAIN_CHECKOUT/lsps/tree-sitter-hmml"
 if [ -f "$HMML_GRAMMAR_DIR/src/parser.c" ]; then
     # Built by `hx --grammar build` into the checkout's runtime; without the .so
