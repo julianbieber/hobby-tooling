@@ -3,7 +3,7 @@
 | Field        | Value                                                                  |
 | ------------ | ---------------------------------------------------------------------- |
 | Type         | skill                                                                  |
-| Install path | `~/.claude-hobby/commands/build/task.md` → `/build:task`               |
+| Install path | `~/.claude-hobby/commands/task/build.md` → `/task:build`               |
 | Owner        | @julianbieber                                                          |
 | Dependencies | `journal:resume`, `hmml-*`, `comment-pass`, `journal:write`            |
 | Status       | experimental                                                           |
@@ -91,10 +91,10 @@ prunes stale symlinks on the next run.
 ## Usage
 
 ```
-/build:task "make the spawner respect the wave budget"
-/build:task #42
-/build:task --notes
-/build:task implement
+/task:build "make the spawner respect the wave budget"
+/task:build #42
+/task:build --notes
+/task:build implement
 ```
 
 ## Known Limitations

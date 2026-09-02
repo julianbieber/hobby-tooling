@@ -668,7 +668,7 @@ work of this task.
 The rule now lives in `dotfiles/claude-md/hobby.CLAUDE.md`. **Three places take a
 comment — the module, a public element, a test — and nothing else does.**
 `/comment-pass` enforces it, over a branch diff or a path, and runs as the
-`comments` phase of `/build:task`.
+`comments` phase of `/task:build`.
 
 **The enforcement goes both ways, and that is the whole difference from what it
 replaces.** `comment-review` could only cut; `explain-back` did the writing; when
@@ -855,7 +855,7 @@ about their comments.
 
 19 `TODO(jb-comment)` / `TODO(jb-doc)` markers also remain, in
 `tools/hdash/README.md`, `hooks/edit-before-execute/README.md`,
-`skills/build/task/README.md` and `dotfiles/nushell/hwt.nu`. They are unwritten
+`skills/task/build/README.md` and `dotfiles/nushell/hwt.nu`. They are unwritten
 documentation, not policy artifacts, so deleting the convention did not delete
 them. `just check-placeholders` no longer exists to find them:
 `rg 'TODO\(jb-(comment|doc)\):'`.

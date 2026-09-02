@@ -30,8 +30,8 @@ decays:
 - **Never add a standard during a task.** A task is short; a standard outlives the
   project's current shape. Deciding one is a conversation.
 
-## Relationship to `/build:task`
+## Relationship to `/task:build`
 
-`build:task` runs the check as its `standards` phase, between `comments` and
+`task:build` runs the check as its `standards` phase, between `comments` and
 `review`. This skill is the same work invoked by hand — on a repo you are not
 running a task against, or when a number is surprising and you want it explained.

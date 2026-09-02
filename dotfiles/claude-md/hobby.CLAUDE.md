@@ -106,7 +106,7 @@ about them.
 **`/comment-pass` enforces this**, over a branch diff or a path — it deletes what
 the rule disallows, relocates comments that carried real information, and writes
 the module headers, public contracts and test justifications that are missing. It
-runs as the `comments` phase of `/build:task`.
+runs as the `comments` phase of `/task:build`.
 
 ## Commit messages
 

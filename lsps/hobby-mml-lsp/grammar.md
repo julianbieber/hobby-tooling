@@ -736,7 +736,7 @@ for any of them — including a `@ <path>` type body, whose v2.2 inline `+` / `-
 markers §10 supersedes ([§4.7](#47-referencing-a-rust-type--path)).
 
 In the tooling: `/hmml-extract` writes the unannotated baseline and never
-annotates; the human (or `/build:task`) adds the delta; `/hmml-review`
+annotates; the human (or `/task:build`) adds the delta; `/hmml-review`
 pressure-tests the delta against the baseline; `/hmml-translate` implements
 exactly what the markers say and never edits the spec; `/hmml-validate` expects
 `# +` claims to be absent from the code before implementation and `# -`
