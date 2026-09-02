@@ -61,6 +61,7 @@ bootstrap: preflight clone-notes git-identity bootstrap-config install-chobby in
     @echo "    just install-mcps      the general-purpose MCP servers (Rust build)"
     @echo "    just install-dash      the hdash work dashboard (Rust build)"
     @echo "    just install-mml       forked HMML language server (Rust build)"
+    @echo "    just install-struct    HSTRUCT structure checker + server (Rust build)"
     @echo "    just install-lsps      the hobby language servers Helix references"
     @echo "    just helix-build       rebuild hx itself from the discovered checkout"
     @echo ""
@@ -68,7 +69,7 @@ bootstrap: preflight clone-notes git-identity bootstrap-config install-chobby in
     @echo "════════════════════════════════════════════════════════════════"
 
 # Bootstrap plus every optional Rust build and the MCP servers.
-bootstrap-full: bootstrap install-mcps install-dash install-mml install-lsps
+bootstrap-full: bootstrap install-mcps install-dash install-mml install-struct install-lsps
     @echo "Full install done. Still need: chobby, then /login."
 
 # Say so when invoked from a worktree — the install still targets the main checkout,
@@ -382,6 +383,36 @@ install-mml:
     cd lsps/hobby-mml-lsp && cargo install --path mml-lsp
     cd lsps/hobby-mml-lsp && cargo install --path mml-parser
 
+# The parser CLI matters twice over: it is what `just structure` runs, and what a
+# repo's own CI would call to gate on its structure.hstruct.
+
+# Build + install the HSTRUCT language server and checker CLI
+install-struct:
+    cd lsps/hobby-struct-lsp && cargo install --path struct-lsp
+    cd lsps/hobby-struct-lsp && cargo install --path struct-parser
+
+# A repo with no structure.hstruct is skipped in the sweep rather than reported:
+# most have none yet, and listing them all would bury the ones that do.
+#
+# The walk goes four levels deep because a workspace gets one file per crate, at
+# the crate root — `watershed/crates/watershed_editor/structure.hstruct`.
+
+# Report every repo against the code quality standards it states
+structure repo="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -n "{{repo}}" ]; then
+        exec hobby-struct-parser "{{FUN_REPOS}}/{{repo}}"
+    fi
+    status=0
+    while read -r spec; do
+        dir=$(dirname "$spec")
+        echo "── ${dir#{{FUN_REPOS}}/}"
+        hobby-struct-parser "$dir" || status=1
+    done < <(find "{{FUN_REPOS}}" -mindepth 2 -maxdepth 4 -name structure.hstruct \
+                  -not -path '*/target/*' | sort)
+    exit $status
+
 # ---------------------------------------------------------------------------
 # Diagnostics
 # ---------------------------------------------------------------------------
@@ -393,6 +424,7 @@ doctor:
 # Run every test in the repo (all language servers + MCP servers + the dashboard)
 test:
     cd lsps/hobby-mml-lsp && cargo test --workspace
+    cd lsps/hobby-struct-lsp && cargo test --workspace
     cd lsps/claude-lsp && cargo test
     cd lsps/claude-skills-lsp && cargo test
     cd lsps/treesitter-class-lsp && cargo test

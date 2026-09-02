@@ -1,0 +1,30 @@
+{
+  "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/config.schema.json",
+  "grammars": [
+    {
+      "name": "hstruct",
+      "camelcase": "Hstruct",
+      "scope": "source.hstruct",
+      "path": ".",
+      "file-types": ["hstruct"],
+      "highlights": ["queries/highlights.scm"]
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "HSTRUCT (hobby repo structure language) grammar for tree-sitter",
+    "authors": [{ "name": "Julian Bieber" }],
+    "links": {
+      "repository": "https://github.com/julianbieber/hobby-tooling"
+    }
+  },
+  "bindings": {
+    "c": false,
+    "go": false,
+    "node": false,
+    "python": false,
+    "rust": false,
+    "swift": false
+  }
+}

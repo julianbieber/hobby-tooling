@@ -1,12 +1,12 @@
 ---
-description: Run a task end to end as one human-gated pipeline with a recorded stage — brief, HMML baseline, annotated delta, spec review loop, implement and test, comment pass, my review, PR, journal
+description: Run a task end to end as one human-gated pipeline with a recorded stage — brief, HMML baseline, annotated delta, spec review loop, implement and test, comment pass, code quality standards, my review, PR, journal
 argument-hint: '[<description> | #<issue> | --notes] [<phase>] [--no-hmml] [--resume-deep]'
-allowed-tools: Skill, Read, Write, Edit, Bash(pwd:*), Bash(ls:*), Bash(git branch:*), Bash(git -C * status:*), Bash(git -C * diff:*), Bash(git -C * log:*), Bash(git -C * rev-parse:*), Bash(git -C * ls-files:*), Bash(git status:*), Bash(git diff:*), Bash(git log:*), Bash(gh pr list:*), Bash(gh pr view:*), Bash(gh issue view:*), Bash(gh issue list:*)
+allowed-tools: Skill, Read, Write, Edit, Bash(hobby-struct-parser:*), Bash(pwd:*), Bash(ls:*), Bash(git branch:*), Bash(git -C * status:*), Bash(git -C * diff:*), Bash(git -C * log:*), Bash(git -C * rev-parse:*), Bash(git -C * ls-files:*), Bash(git status:*), Bash(git diff:*), Bash(git log:*), Bash(gh pr list:*), Bash(gh pr view:*), Bash(gh issue view:*), Bash(gh issue list:*)
 ---
 
 Run a task **end to end** as one predictable, human-gated pipeline. The individual
 skills already exist (`journal:resume`, the HMML suite, `comment-pass`,
-`journal:write`); this is
+`structure`, `journal:write`); this is
 the **thin orchestrator** that runs them in a fixed order, stops hard where I take over, and resumes in a
 later session exactly where it left off.
 
@@ -108,6 +108,22 @@ without prior discussion, and do not accelerate past someone else's active work.
 Record `size_budget` and `prior_art`. On my own repo this is usually one empty
 search; on a repo I do not own it is the difference between a welcome PR and a
 closed one.
+
+**Gate 0b — the standards this repo holds.** If the target repo has a
+`structure.hstruct` (at its root, or at the crate root in a workspace), read it
+and run `hobby-struct-parser <repo>` for the current numbers. State in one line
+each:
+
+- the standards, and which the planned change is likely to move, in which
+  direction;
+- any reviewed (`review:`) standard whose subject the change touches.
+
+This is the cheap end of the loop. "This adds a module importing eight others and
+the standard says six" is a design choice at plan time and rework at review time.
+Carry the reading into the spec so GATE 1 sees it.
+
+A repo with no `structure.hstruct` skips this silently — most have none, and a
+task is not the place to argue for one.
 
 **The HMML baseline: spec the *current* version first.** Before working out what
 the change should be — before any design thinking at all — capture what the unit
@@ -236,7 +252,41 @@ Two parts of its report are inputs to the next phase rather than side effects:
   be written, a module with no single responsibility, anything it could not verify
   from the code. Each is a decision for me.
 
-Record both, then fall through to `review`.
+Record both, then fall through to `standards`.
+
+______________________________________________________________________
+
+## Phase `standards`
+
+Skip entirely if the target repo has no `structure.hstruct`.
+
+Run `/structure` on the target repo. Three outcomes, and only one needs you to
+do anything:
+
+- **Unchanged** — nothing to report.
+- **Slack** — the change improved a number. Run the ratchet; the tightened budget
+  joins this task's diff, which is how an improvement gets recorded by the change
+  that made it.
+- **Exceeded** — the change moved the repo further from a standard it states.
+  **Try to fix it**: read `--detail` to find what this change added, and repair
+  it. A new cycle usually wants an event or a read-only query rather than an
+  import; a file crossing the line usually wants the split its responsibility
+  already implies. Re-run after the fix.
+
+  **If the fix does not work, carry it to GATE 2 as a regression** — the standard,
+  the count before and after, and what you tried. Do not route around it and do
+  not raise the budget. Raising is a hand edit I make deliberately, because it
+  says in the diff that this project got further from its own standard.
+
+Then check the **reviewed** standards. A `review:` standard is only re-audited if
+something asks, so read each one against this diff: if the change touches what it
+covers, say so and ask whether to re-audit and bump `audited:`. Do not bump a date
+for a standard the change did not touch, and do not treat an old date on an
+unrelated standard as a finding.
+
+Record the delta, then fall through to `review`.
+
+______________________________________________________________________
 
 ## Phase `review` → GATE 2
 
@@ -247,6 +297,8 @@ Record both, then fall through to `review`.
   as it now stands — it keeps its annotations, so any marker validate still
   reports as `SPEC-AHEAD` is outstanding work, not a leftover;
 - what `/comment-pass` changed, and what it declined to act on;
+- the standards delta — each budget before and after, any tightened by the ratchet,
+  and **any regression you could not fix**, with what you tried;
 - the shape-decision notes it extracted, verbatim, for the commit message;
 - the size against the Gate 0 budget, and by how much it was crossed;
 - *"Review the above. Say continue to open the PR, or tell me what to change."*
