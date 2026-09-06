@@ -37,7 +37,8 @@ echo "Skills and hooks"
 n_sk=$(find "$CFG/commands" -mindepth 1 -maxdepth 2 -name '*.md' 2>/dev/null | wc -l)
 [ "$n_sk" -gt 0 ] && ok "$n_sk skills installed" || bad "no skills installed" "just install-skills"
 n_hk=$(ls "$CFG"/hooks/*.sh 2>/dev/null | wc -l)
-[ "$n_hk" -eq 7 ] && ok "7 hooks installed" || bad "$n_hk/7 hooks installed" "just install-hooks"
+want_hk=$(find "$HERE/../hooks" -mindepth 2 -maxdepth 2 -name hook.sh 2>/dev/null | wc -l)
+[ "$n_hk" -eq "$want_hk" ] && ok "$want_hk hooks installed" || bad "$n_hk/$want_hk hooks installed" "just install-hooks"
 # Named separately from the count because settings.json registers this one on
 # PostToolUse with an empty matcher: unlinked, it fails after EVERY tool call, and
 # a bare count would report the gap as "5/6" without saying which hook is loud.
