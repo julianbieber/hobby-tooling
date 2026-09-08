@@ -11,7 +11,7 @@
 #
 # Every install-* recipe symlinks into ~/.claude-hobby and ~/.config. Those links
 # must point at the main checkout: a worktree is deleted by `hwt rm`, which would
-# leave the whole installation dangling — 18 skills, 5 hooks, chobby, the lot.
+# leave the whole installation dangling — every skill, every hook, chobby, the lot.
 # `git rev-parse --git-common-dir` reports the main repo's .git from inside any
 # linked worktree, so its parent is the main checkout. Falls back to the invocation
 # directory when this isn't a git repo at all (e.g. an extracted tarball).
