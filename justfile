@@ -405,8 +405,13 @@ install-mml:
 doctor:
     @cd "{{REPO_ROOT}}" && ./scripts/doctor.sh
 
+# Check the authoring gate's command classifier against its fixtures
+# TODO(jb-comment): why this one uses a relative path where install-* use REPO_ROOT
+test-hooks:
+    @./hooks/human-authored-text/tests/run.sh
+
 # Run every test in the repo (all language servers + MCP servers + the dashboard)
-test:
+test: test-hooks
     cd lsps/hobby-mml-lsp && cargo test --workspace
     cd lsps/claude-lsp && cargo test
     cd lsps/claude-skills-lsp && cargo test

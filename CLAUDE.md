@@ -292,6 +292,21 @@ bypass.
 `githooks/policy-lib.sh` is the single definition of the banned patterns, the
 placeholder token and the expected commit email. Layer 2 sources it.
 
+It also holds the command tokenizer and `policy_classify_command`, which layer 2
+uses to decide what a Bash command is. Classification reads parsed argv:
+
+- **not gated** — a command that only mentions a gated one: a search, a heredoc
+  writing notes, a `--grep` pattern, an `echo` into a file
+- **gated** — `git -C <dir> commit`, extra whitespace, a literal `bash -c '…'`,
+  and `--no-edit` / `-C` appearing inside a message rather than as flags
+- **denied without an editor** — a gated command chained to another, or one with
+  no `--*-file` form
+- **allowed** — any segment whose argv cannot be resolved (`eval`, `bash -c "$X"`)
+
+Fixtures: `just test-hooks`.
+
+### TODO(jb-doc): why the gate parses argv instead of matching the command string
+
 The placeholder tokens are `TODO(jb-comment)` (inline) and `TODO(jb-doc)` (doc
 comments and README sections). They name **what needs explaining, never the
 explanation**.

@@ -1,0 +1,112 @@
+# Fixtures for policy_classify_command, one case per line.
+#
+#   verdict <TAB> kind <TAB> file <TAB> command
+#
+# `-` in the kind or file column means "not asserted".
+# The command is passed through printf %b, so \n is a newline.
+#
+# verdict: allow | gate | chain | nofile | bare
+
+# --- mentions the phrase, is not the command ---------------------------------
+allow	-	-	rg 'git commit' hooks/
+allow	-	-	grep -F 'git commit' README.md
+allow	-	-	rg --files-with-matches 'gh pr create' skills/
+allow	-	-	git log --grep='git commit'
+allow	-	-	echo "next step: git commit the fix" >> plan.txt
+allow	-	-	cat >> notes.md <<EOF\nToday I ran git commit -m "x"\nEOF
+allow	-	-	cat > notes.md <<'EOF'\ngh pr create --title x --body y\nEOF
+allow	-	-	cat >> notes.md <<-EOF\n\tgit commit -m "x"\n\tEOF
+allow	-	-	# git commit -m "x"
+allow	-	-	printf '%s\\n' 'git commit -m x' > snippet.txt
+
+# --- not message-bearing -----------------------------------------------------
+allow	-	-	git status
+allow	-	-	git add -A
+allow	-	-	git tag v1.0.0
+allow	-	-	git merge main
+allow	-	-	gh pr view 5
+allow	-	-	gh issue list --label topic:hooks
+allow	-	-	gh pr edit 5 --add-label topic:hooks
+allow	-	-	gh issue close 5
+allow	-	-	gh api repos/julianbieber/hobby-tooling/issues/24
+
+# --- exempt ------------------------------------------------------------------
+allow	-	-	git commit --amend --no-edit
+allow	-	-	git commit -C HEAD
+allow	-	-	git commit --reuse-message=HEAD
+allow	-	-	git commit --fixup=HEAD~1
+allow	-	-	git commit --squash HEAD~1
+
+# --- unresolvable, fails open ------------------------------------------------
+allow	-	-	eval "$CMD"
+allow	-	-	bash -c "$SCRIPT"
+allow	-	-	$GIT commit -m "x"
+
+# --- gated: the spellings the substring gate missed --------------------------
+gate	commit message	-	git commit -m "x"
+gate	commit message	-	git -C /home/jbieber/fun_repos/wusel commit -m "x"
+gate	commit message	-	git  commit -m "x"
+gate	commit message	-	git --no-pager commit -m "x"
+gate	commit message	-	git commit -m "docs: explain --no-edit"
+gate	commit message	-	git commit -m "see the -C flag"
+gate	commit message	-	git commit -m "mentions --reuse-message"
+gate	commit message	-	git commit -am "x"
+gate	commit message	-	git commit -m "$(cat msg.txt)"
+gate	commit message	-	bash -c 'git commit -m "x"'
+gate	commit message	-	sh -c 'git commit -m "x"'
+gate	commit message	-	{ git commit -m "x"; }
+
+# --- gated: message-bearing git ----------------------------------------------
+gate	merge commit message	-	git merge -m "merge branch" main
+gate	merge commit message	-	git merge --message="merge branch" main
+gate	tag message	-	git tag -a v1.0.0 -m "release"
+gate	tag message	-	git tag -a v1.0.0
+gate	git note	-	git notes add -m "note"
+
+# --- gated: gh ---------------------------------------------------------------
+gate	pull request	-	gh pr create --title "x" --body "y"
+gate	pull request	-	gh pr create --fill
+gate	pull request body	-	gh pr edit 5 --body "y"
+gate	PR comment	-	gh pr comment 5 --body "y"
+gate	PR review	-	gh pr review 5 --approve
+gate	issue	-	gh issue create --title "x" --body "y"
+gate	issue body	-	gh issue edit 5 --body "y"
+gate	issue comment	-	gh issue comment 24 --body "y"
+gate	release notes	-	gh release create v1.0.0 --notes "y"
+
+# --- gated, with a file already named ----------------------------------------
+gate	commit message	/run/user/1000/hobby-authoring-gate/1-2.txt	git commit -F /run/user/1000/hobby-authoring-gate/1-2.txt
+gate	commit message	/run/user/1000/hobby-authoring-gate/1-2.txt	git commit --file=/run/user/1000/hobby-authoring-gate/1-2.txt
+gate	commit message	msg.txt	git commit -Fmsg.txt
+gate	commit message	./mine.txt	git commit -F ./mine.txt
+gate	pull request	/run/user/1000/hobby-authoring-gate/1-2.body	gh pr create --title "x" --body-file /run/user/1000/hobby-authoring-gate/1-2.body
+gate	issue comment	/run/user/1000/hobby-authoring-gate/1-2.txt	gh issue comment 24 --body-file /run/user/1000/hobby-authoring-gate/1-2.txt
+gate	pull request body	/run/user/1000/hobby-authoring-gate/1-2.body	gh pr edit 5 --body-file /run/user/1000/hobby-authoring-gate/1-2.body
+
+# --- chains ------------------------------------------------------------------
+chain	-	-	git add -A && git commit -m "x"
+chain	-	-	cd /home/jbieber/fun_repos/wusel && git commit -m "x"
+chain	-	-	git commit -m "x" && git push
+chain	-	-	git add -A && git commit -F /run/user/1000/hobby-authoring-gate/1-2.txt
+chain	-	-	git add -A; git commit -m "x"
+chain	-	-	bash -c 'git add -A && git commit -m "x"'
+chain	-	-	gh pr create --title x --body y | cat
+
+# --- no file form ------------------------------------------------------------
+nofile	gist	-	gh gist create notes.md
+nofile	issue closing comment	-	gh issue close 24 --comment "done"
+nofile	GitHub API post	-	gh api repos/julianbieber/hobby-tooling/issues/24/comments -f body=hi
+nofile	GitHub API post	-	gh api --input payload.json repos/julianbieber/hobby-tooling/issues/24/comments
+
+# --- redirections, subshells, pipes ------------------------------------------
+gate	commit message	-	git commit -m "x" > /dev/null
+gate	commit message	-	git commit -m "x" 2>&1
+gate	commit message	-	(git commit -m "x")
+gate	PR comment	-	gh pr comment 5 -b "y"
+allow	-	-	echo 'git commit -m x' | tee snippet.txt
+chain	-	-	cat <<EOF > n.md\ngit commit -m "noted"\nEOF\ngit commit -m "real"
+
+# --- no message flag ---------------------------------------------------------
+bare	commit message	-	git commit
+bare	commit message	-	git commit --amend
+bare	commit message	-	git commit -a

@@ -42,9 +42,13 @@ notes, and optionally a GitHub issue.
       - `gh issue list --search "<parent task name>"` in the project repo
    b. Create the issue from the project's main checkout so `gh` picks the right
       repo. **No `--title`, no `--body`** — the `human-authored-text` gate opens a
-      buffer so I write both:
+      buffer so I write both. Two calls, not a chain: the gate refuses a gated
+      command that shares a call with anything else.
       ```bash
-      cd ~/fun_repos/{project} && gh issue create
+      cd ~/fun_repos/{project}
+      ```
+      ```bash
+      gh issue create
       ```
       Re-issue exactly as the gate instructs. Tell me the parent reference and the
       parent issue number (`#<n>`, so GitHub cross-links them) so I can put them in

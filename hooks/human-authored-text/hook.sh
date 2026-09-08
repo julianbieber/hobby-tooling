@@ -43,79 +43,48 @@ deny() {
     exit 0
 }
 
-# --- Pass 1: a command that only references already-authored files -----------
-# TODO(jb-comment): what the .sha file is for, and what re-checking it prevents
-
-referenced_files=$(printf '%s\n' "$CMD" \
-    | grep -oE -- '(-F|--file|--body-file|--notes-file|--body-file=|--file=)[= ]?[^ "'"'"']+' \
-    | sed -E 's/^(-F|--file|--body-file|--notes-file)[= ]?//' || true)
-
-if [ -n "$referenced_files" ]; then
-    all_approved=1
-    while read -r f; do
-        [ -n "$f" ] || continue
-        case "$f" in "$GATE_DIR"/*) ;; *) all_approved=0; continue ;; esac
-        if [ ! -f "$f" ] || [ ! -f "$f.sha" ]; then all_approved=0; continue; fi
-        if [ "$(sha256sum "$f" | cut -d' ' -f1)" != "$(cat "$f.sha")" ]; then
-            deny "The authored file $f changed after you were given it. Nothing may edit it — re-run the original command to reopen the editor."
-        fi
-    done <<< "$referenced_files"
-    [ "$all_approved" = "1" ] && exit 0
-fi
-
-# --- Pass 2: classify --------------------------------------------------------
+# --- Pass 1: classify --------------------------------------------------------
+# Verdict, kind, file flag and template all come from parsed argv; see
+# policy_classify_command in githooks/policy-lib.sh.
+#
 # KIND       label shown to me
 # FILEFLAG   the flag Claude must re-issue with; empty means no file form exists
 # NEEDS_AI   the buffer carries a mandatory `## AI use` section
-# TEMPLATE   commit | markdown | pr
+# TEMPLATE   commit | markdown | pr | titled
 
-KIND=""; FILEFLAG=""; NEEDS_AI=0; TEMPLATE="markdown"
+policy_classify_command "$CMD"
 
-case "$CMD" in
-    *"git commit"*)
-        # TODO(jb-comment): why --amend --no-edit and -C are exempt
-        case "$CMD" in
-            *--no-edit*|*--reuse-message*|*" -C "*) exit 0 ;;
-        esac
-        KIND="commit message"; FILEFLAG="-F"; TEMPLATE="commit" ;;
-    *"git merge"*-m*|*"git merge"*--message*)
-        KIND="merge commit message"; FILEFLAG="-F"; TEMPLATE="commit" ;;
-    *"git tag"*-m*|*"git tag"*--message*|*"git tag"*-a*)
-        KIND="tag message"; FILEFLAG="-F"; TEMPLATE="commit" ;;
-    *"git notes"*-m*)
-        KIND="git note"; FILEFLAG="-F"; TEMPLATE="commit" ;;
-    *"gh pr create"*)
-        KIND="pull request"; FILEFLAG="--body-file"; NEEDS_AI=1; TEMPLATE="pr" ;;
-    *"gh pr edit"*--body*)
-        KIND="pull request body"; FILEFLAG="--body-file"; NEEDS_AI=1; TEMPLATE="pr" ;;
-    *"gh pr comment"*)
-        KIND="PR comment"; FILEFLAG="--body-file" ;;
-    *"gh pr review"*)
-        KIND="PR review"; FILEFLAG="--body-file" ;;
-    *"gh issue create"*)
-        KIND="issue"; FILEFLAG="--body-file"; TEMPLATE="titled" ;;
-    *"gh issue edit"*--body*)
-        KIND="issue body"; FILEFLAG="--body-file" ;;
-    *"gh issue comment"*)
-        KIND="issue comment"; FILEFLAG="--body-file" ;;
-    *"gh issue close"*--comment*)
-        KIND="issue closing comment"; FILEFLAG="" ;;
-    *"gh release create"*)
-        KIND="release notes"; FILEFLAG="--notes-file" ;;
-    *"gh gist create"*)
-        KIND="gist"; FILEFLAG="" ;;
-    *"gh api"*)
-        # TODO(jb-comment): why gh api is matched at all, and only on a write
-        case "$CMD" in
-            *-f\ body=*|*--field\ body=*|*-F\ body=*|*--input*)
-                KIND="GitHub API post"; FILEFLAG="" ;;
-            *) exit 0 ;;
-        esac ;;
-    *) exit 0 ;;
+KIND="$POLICY_KIND"
+FILEFLAG="$POLICY_FILEFLAG"
+NEEDS_AI="$POLICY_NEEDS_AI"
+TEMPLATE="$POLICY_TEMPLATE"
+
+case "$POLICY_VERDICT" in
+    allow) exit 0 ;;
+    chain)
+        # TODO(jb-comment): why a chain is refused instead of gated, given the
+        # editor could open on the one segment that needs it
+        deny "This command runs a $KIND alongside other commands. Issue the $KIND as its own Bash call, and the rest as another." ;;
+    nofile)
+        deny "A $KIND has no --*-file form, so it cannot be routed through the authoring gate. Run it yourself: type \`! <command>\` in the prompt, with text you wrote. Bevy AI policy norm 6: public writing is synthesized by me, not revised from yours." ;;
+    bare)
+        deny "\`git commit\` with no message flag carries no text for the gate to take, and no editor opens here. Re-issue it with -m and the authoring buffer opens." ;;
 esac
 
-if [ -z "$FILEFLAG" ]; then
-    deny "A $KIND has no --*-file form, so it cannot be routed through the authoring gate. Run it yourself: type \`! <command>\` in the prompt, with text you wrote. Bevy AI policy norm 6: public writing is synthesized by me, not revised from yours."
+# --- Pass 2: a command that already points at an authored file ---------------
+# TODO(jb-comment): what the .sha file is for, and what re-checking it prevents
+
+if [ -n "$POLICY_FILE_ARG" ]; then
+    case "$POLICY_FILE_ARG" in
+        "$GATE_DIR"/*)
+            if [ -f "$POLICY_FILE_ARG" ] && [ -f "$POLICY_FILE_ARG.sha" ]; then
+                if [ "$(sha256sum "$POLICY_FILE_ARG" | cut -d' ' -f1)" \
+                    = "$(cat "$POLICY_FILE_ARG.sha")" ]; then
+                    exit 0
+                fi
+                deny "The authored file $POLICY_FILE_ARG changed after you were given it. Nothing may edit it — re-run the original command to reopen the editor."
+            fi ;;
+    esac
 fi
 
 # --- Pass 3: build the buffer ------------------------------------------------

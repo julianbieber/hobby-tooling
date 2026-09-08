@@ -14,6 +14,17 @@ Enforces Bevy's AI policy ([bevy-website#2551]) in git itself.
 (`TODO(jb-comment)` / `TODO(jb-doc)`) and the expected commit email. It is also
 sourced by the Claude-side `hooks/human-authored-text` gate.
 
+It also holds the command tokenizer that gate classifies with:
+
+| Function | Gives |
+|---|---|
+| `policy_tokenize CMD` | `POLICY_SEGMENTS[]` — one simple command per element, words tagged literal or expanded |
+| `policy_seg_words SEG` | `POLICY_WORDS[]` / `POLICY_LIT[]` for one segment |
+| `policy_segments CMD` | the same, with a literal `sh -c '…'` unwrapped |
+| `policy_classify_command CMD` | `POLICY_VERDICT` ∈ `allow` `gate` `chain` `nofile` `bare`, plus `POLICY_KIND`, `POLICY_FILEFLAG`, `POLICY_TEMPLATE`, `POLICY_NEEDS_AI`, `POLICY_FILE_ARG` |
+
+Fixtures: `just test-hooks`.
+
 Bypass: `git commit --no-verify`, `git push --no-verify`.
 
 ## TODO(jb-doc): why this layer exists at all
