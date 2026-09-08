@@ -19,7 +19,8 @@
 
 const WORKTREE_BASE = "~/fun_worktrees" | path expand
 const PROJECTS_BASE = "~/fun_repos" | path expand
-const NOTES_BASE = "~/fun_repos/hobby-mimisbrunnr/notes" | path expand
+const NOTES_REPO = "~/fun_repos/hobby-mimisbrunnr" | path expand
+const NOTES_BASE = $NOTES_REPO | path join "notes"
 
 # `hwt sessions` opens hcdev sessions, so it needs the session name for a task.
 # Imported rather than re-derived: the name is clamped to what zellij's socket
@@ -45,7 +46,7 @@ export def main [] {
     print "  hwt tree                                       Tree view: project / topic / task"
     print "  hwt go <task> [-p <proj>]                      Navigate to a worktree"
     print "  hwt status                                     Git status of all worktrees"
-    print "  hwt sync [--pull] [--push] [--wip]             Report/sync state no remote has"
+    print "  hwt sync [-p <proj>]                           Pull repos, rebase+push worktrees, /sync-notes"
     print "  hwt orphans                                    Worktrees with no task.json"
     print "  hwt rm <task> [-p <proj>] [-f]                 Remove worktree (keeps notes)"
     print "  hwt restore <task>                             Re-create a removed worktree"
@@ -1427,20 +1428,22 @@ export def "hwt sessions" [
 
 # --- sync -------------------------------------------------------------------
 
-# Every git checkout on this disk, as one list: the main repos, the task worktrees,
-# and the orphans.
+# Every git checkout on this disk that `hwt sync` acts on: the main repos, the
+# task worktrees, and the orphans.
 #
 # Three sources, not one directory walk. Worktrees come from `known-tasks`, which
 # reads `notes/*/*/*/task.json` — the notes repo is what makes a task exist — so a
 # directory under ~/fun_worktrees with no task.json behind it is not a worktree
 # here but an orphan, gathered separately by `orphan-worktrees`.
 #
-# `hwt status` covers only the middle group, which is the half the PR flow already
-# keeps pushed. An unsynced main checkout is invisible to it, and that is where
-# every unsynced byte turned out to be.
+# The notes checkout is left out of all three: it is synced by a Claude session
+# rather than by git commands, so `sync-notes-session` owns it end to end and the
+# mechanical path never sees it.
 def sync-checkouts [project?: string] {
     let repos = try {
-        ls $PROJECTS_BASE | where type == dir | get name | where { is-git-repo $in }
+        ls $PROJECTS_BASE | where type == dir | get name
+        | where { $in != $NOTES_REPO }
+        | where { is-git-repo $in }
         | each {|p| { kind: "repo", project: ($p | path basename), name: "", path: $p } }
     } catch { [] }
 
@@ -1470,14 +1473,15 @@ def git-out [path: path, args: list<string>] {
 # otherwise — the same variable `link-dotfile.sh` uses to pick a per-machine
 # variant, because a hostname is not always short or stable.
 #
-# This is a collision key, not a label. It is in every wip ref name, so two
-# machines snapshotting the same branch write two refs instead of one overwriting
-# the other; and `sync-incoming-wip` reads it again to filter this machine's own
-# snapshots out of the waiting list, which would otherwise report every push back
-# as incoming work.
+# It is in the subject of every wip commit, which is the only place a reader finds
+# out which disk the uncommitted work was sitting on when the sync picked it up.
 def sync-host [] {
     let h = ($env.HOBBY_MACHINE? | default "")
     if ($h | is-not-empty) { $h } else { (sys host).hostname | split row "." | get 0 }
+}
+
+def plural [n: int, word: string] {
+    if $n == 1 { $"($n) ($word)" } else { $"($n) ($word)s" }
 }
 
 # Unsynced state for one checkout.
@@ -1488,7 +1492,7 @@ def sync-host [] {
 #
 # The states are ordered by what blocks the fix, not by severity: an unborn or
 # remote-less checkout needs a decision (a first commit, a `gh repo create`)
-# before --push or --wip can reach it at all, so those outrank `unsynced`.
+# before anything can be pushed at all, so those outrank `unsynced`.
 def sync-scan-one [c: record] {
     let p = $c.path
     let opted_out = ((git-out $p ["config" "--get" "hobby.sync"]) == "false")
@@ -1519,116 +1523,13 @@ def sync-scan-one [c: record] {
     }
 }
 
-# Push every local branch holding commits no remote has.
-#
-# `push.autoSetupRemote` is on globally, so a branch that has never been pushed
-# gains its upstream here rather than needing a separate --set-upstream pass.
-def sync-push-one [row: record] {
-    let p = $row.path
-    let branches = (git-out $p ["for-each-ref" "--format=%(refname:short)" "refs/heads"] | lines
-        | where { $in | is-not-empty })
-
-    for b in $branches {
-        # `$b` must precede `--not`: everything after `--not` is excluded, so
-        # naming the branch there subtracts it from itself and always gives 0.
-        let n = (git-out $p ["log" "--format=%H" $b "--not" "--remotes"] | lines
-            | where { $in | is-not-empty } | length)
-        if $n == 0 { continue }
-        let r = (do -i { ^git -C $p push $row.remote $b } | complete)
-        if $r.exit_code == 0 {
-            print $"  pushed ($b) \(($n) commits\)"
-        } else {
-            print $"  FAILED ($b): ($r.stderr | str trim | lines | last)"
-        }
-    }
-}
-
-# Commit the working tree — tracked edits and untracked files alike, minus what
-# .gitignore excludes — to a commit reachable only from refs/wip/<machine>/<branch>,
-# then push that ref.
-#
-# HEAD, the index and the working tree are left exactly as they were: the snapshot
-# is assembled in a throwaway index, so this can run over a checkout that is
-# mid-edit without disturbing it. That is what makes it safe to run without
-# reading the diff first, and it is why the target is a ref rather than a branch —
-# committing on a branch means checking that branch out.
-#
-# The ref lives outside refs/heads/, so a snapshot never shows as a branch and no
-# PR can be opened from one by accident.
-#
-# The message is a file count, the branch and the machine, never a summary of the
-# change: the notes are synced too and are where the prose lives, so it points at
-# them instead of paraphrasing them.
-def sync-wip-one [row: record] {
-    let p = $row.path
-    if ($row.dirty + $row.untracked) == 0 { return }
-
-    let idx = (mktemp --tmpdir "hwt-sync-index-XXXXXXXX")
-    rm --force $idx
-
-    let built = with-env { GIT_INDEX_FILE: $idx } {
-        do -i { ^git -C $p read-tree HEAD } | ignore
-        do -i { ^git -C $p add --all } | ignore
-        git-out $p ["write-tree"]
-    }
-    rm --force $idx
-
-    if ($built | is-empty) {
-        print $"  FAILED: could not write a tree"
-        return
-    }
-    if $built == (git-out $p ["rev-parse" "HEAD^{tree}"]) {
-        print $"  nothing to snapshot \(all changes ignored\)"
-        return
-    }
-
-    let notes = ($NOTES_BASE | path join $row.project $row.name)
-    let msg = ([
-        $"wip snapshot: ($row.project)(if ($row.name | is-empty) { '' } else { $'/($row.name)' }) [($row.branch)] @ (sync-host)"
-        ""
-        $"($row.dirty) modified, ($row.untracked) untracked"
-    ] | append (if ($row.kind != "repo") and ($notes | path exists) { [$"notes: ($notes)"] } else { [] })
-      | str join "\n")
-
-    let commit = (do -i { $msg | ^git -C $p commit-tree $built -p HEAD } | complete)
-    if $commit.exit_code != 0 {
-        print $"  FAILED: ($commit.stderr | str trim | lines | last)"
-        return
-    }
-    let sha = ($commit.stdout | str trim)
-    let branch = (if ($row.branch | is-empty) { "detached" } else { $row.branch })
-    let git_ref = $"refs/wip/(sync-host)/($branch)"
-
-    do -i { ^git -C $p update-ref $git_ref $sha } | ignore
-    print $"  snapshot ($sha | str substring 0..7) -> ($git_ref)"
-
-    if ($row.remote | is-empty) {
-        print $"  not pushed \(no remote\)"
-        return
-    }
-    let pushed = (do -i { ^git -C $p push --force $row.remote $"($git_ref):($git_ref)" } | complete)
-    if $pushed.exit_code == 0 {
-        print $"  pushed ($git_ref)"
-    } else {
-        print $"  FAILED to push ($git_ref): ($pushed.stderr | str trim | lines | last)"
-    }
-}
-
-# Fetch one checkout, snapshots included.
-#
-# Remote wip refs land in refs/remote-wip/*, not refs/wip/*: the second namespace
-# is this machine's own snapshots, and a forced fetch into it would rewind one
-# taken but not yet pushed. The split is the one git already makes between
-# refs/heads and refs/remotes.
+# Fetch one checkout.
 def sync-fetch-one [row: record] {
     if ($row.remote | is-empty) { return { ok: false, err: "no remote" } }
     let a = (do -i { ^git -C $row.path fetch --prune $row.remote } | complete)
     if $a.exit_code != 0 {
         return { ok: false, err: ($a.stderr | str trim | lines | last | default "fetch failed") }
     }
-    # `complete` and not `ignore`: git narrates a fetch on stderr, and this command
-    # reports what it did itself rather than letting 44 fetches narrate over it.
-    do -i { ^git -C $row.path fetch $row.remote "+refs/wip/*:refs/remote-wip/*" } | complete | ignore
     { ok: true, err: "" }
 }
 
@@ -1649,30 +1550,13 @@ def sync-tracking [path: path] {
     }
 }
 
-# Snapshots on the remote that some *other* machine took, newest first.
+# Bring one main checkout current, when that can be done without losing anything.
 #
-# This machine's own are filtered out by the <machine> component of the ref name:
-# they are a copy of what is already on this disk, so listing them would report
-# every push back as if it were incoming work.
-def sync-incoming-wip [path: path] {
-    let here = (sync-host)
-    git-out $path ["for-each-ref" "--format=%(refname)\t%(committerdate:relative)\t%(committerdate:unix)" "refs/remote-wip"]
-    | lines
-    | where { $in | is-not-empty }
-    | each {|l|
-        let f = ($l | split row "\t")
-        { git_ref: ($f | get 0), age: ($f | get 1), at: (($f | get -o 2 | default "0") | into int) }
-    }
-    | where {|w| ($w.git_ref | split row "/" | get -o 2 | default "") != $here }
-    | sort-by at --reverse
-}
-
-# Bring one checkout current, when that can be done without losing anything.
-#
-# Fast-forward is the only move: a merge or a rebase can conflict, and a checkout
-# with a dirty tree is left alone entirely. Everything this refuses to do is
-# printed rather than attempted, so the command is safe to run across every repo
-# without reading each one first.
+# Fast-forward is the only move here, and a main checkout is why: it is where a
+# clone is read, tried and scribbled in, so its dirty tree and its local commits
+# belong to whatever was being done there and are nobody's task branch. Everything
+# that is not a fast-forward is therefore printed rather than attempted, and the
+# summary names the ones holding commits.
 def sync-pull-one [row: record] {
     let label = $"  ($row.project)(if ($row.name | is-empty) { '' } else { $'/($row.name)' })"
 
@@ -1707,118 +1591,210 @@ def sync-pull-one [row: record] {
     print $"($label)  ($row.branch)  ff  ($before)..($after) \(($t.behind)\)"
 }
 
-# Report — and optionally sync — every checkout holding state no remote has.
+# Commit the working tree — tracked edits and untracked files alike, minus what
+# .gitignore excludes — onto the branch, and say so. Returns whether it worked.
 #
-# Reports by default and acts only when asked, because all three acting modes
-# change something that cannot be taken back: --push publishes commits, --wip
-# publishes the working tree as it stands, and --pull moves branches.
+# It lands on the branch rather than on a ref beside it because everything after
+# this step needs it there: a rebase refuses to run over a dirty tree, and a push
+# carries branches and nothing else. The price is a commit that has to be squashed
+# or amended before the branch is reviewed, which is what the `wip` first word and
+# the body are for.
+#
+# The message is a file count, the machine, and the path to the task's notes. It
+# never describes the change: the notes are synced too and are where the prose
+# lives, so it points at them instead of paraphrasing them.
+def sync-wip-commit [row: record] {
+    let p = $row.path
+    let staged = (do -i { ^git -C $p add --all } | complete)
+    if $staged.exit_code != 0 {
+        print $"    FAILED to stage: ($staged.stderr | str trim | lines | last)"
+        return false
+    }
+    if (do -i { ^git -C $p diff --cached --quiet } | complete).exit_code == 0 {
+        print $"    nothing to snapshot \(all changes ignored\)"
+        return true
+    }
+
+    let notes = ($NOTES_BASE | path join $row.project $row.name)
+    let msg = ([
+        $"wip @ (sync-host): ($row.dirty) modified, ($row.untracked) untracked"
+        ""
+        "Uncommitted work picked up by `hwt sync` so it survives the machine."
+        "Squash or amend it before this branch is reviewed."
+    ] | append (if ($row.kind != "repo") and ($notes | path exists) { ["" $"notes: ($notes)"] } else { [] })
+      | str join "\n")
+
+    # --no-verify: a repo's commit hooks lint what a person wrote, and this commit
+    # is a machine picking up a tree mid-edit. A failing hook here would block the
+    # sync on work that was never claimed to be finished.
+    let c = (do -i { ^git -C $p commit --no-verify -m $msg } | complete)
+    if $c.exit_code != 0 {
+        print $"    FAILED to commit: ($c.stderr | str trim | lines | last)"
+        return false
+    }
+    let sha = (git-out $p ["rev-parse" "--short" "HEAD"])
+    print $"    wip ($sha) \(($row.dirty) modified, ($row.untracked) untracked\)"
+    true
+}
+
+# Publish one worktree: commit whatever is uncommitted, rebase onto the upstream,
+# push.
+#
+# A task branch is the one population that is meant to travel — it exists to
+# become a PR — so all three steps run without asking. A failed rebase is aborted
+# rather than left mid-flight, because the next thing to touch this checkout is a
+# Claude session or an editor and neither expects to arrive in a conflict.
+def sync-worktree-one [row: record] {
+    let p = $row.path
+    let label = (if ($row.name | is-empty) { $row.project } else { $"($row.project)/($row.name)" })
+
+    if ($row.branch | is-empty) {
+        print $"  ($label)  skipped — detached HEAD"
+        return
+    }
+
+    let t0 = (sync-tracking $p)
+    let dirt = ($row.dirty + $row.untracked)
+    if $dirt == 0 and $t0.behind == 0 and $t0.ahead == 0 and ($t0.upstream | is-not-empty) {
+        return
+    }
+    print $"  ($label) [($row.branch)]"
+
+    if $dirt > 0 {
+        if not (sync-wip-commit $row) { return }
+    }
+
+    let t = (sync-tracking $p)
+    if ($t.upstream | is-not-empty) and ($t.behind > 0) {
+        let r = (do -i { ^git -C $p rebase $t.upstream } | complete)
+        if $r.exit_code != 0 {
+            do -i { ^git -C $p rebase --abort } | ignore
+            print $"    rebase onto ($t.upstream) failed, aborted — ($r.stderr | str trim | lines | last)"
+            return
+        }
+        print $"    rebased onto ($t.upstream) \(($t.behind) commits\)"
+    }
+
+    let t2 = (sync-tracking $p)
+    let ahead = if ($t2.upstream | is-not-empty) { $t2.ahead } else {
+        (git-out $p ["log" "--format=%H" $row.branch "--not" "--remotes"] | lines
+            | where { $in | is-not-empty } | length)
+    }
+    if $ahead == 0 { return }
+
+    # -u only when there is no upstream yet: push.autoSetupRemote covers the same
+    # case globally, and saying it here keeps a fresh task branch working on a
+    # machine whose git config has not been through `just bootstrap`.
+    let args = if ($t2.upstream | is-empty) {
+        ["push" "-u" $row.remote $row.branch]
+    } else {
+        ["push" $row.remote $row.branch]
+    }
+    let pushed = (do -i { ^git -C $p ...$args } | complete)
+    if $pushed.exit_code == 0 {
+        print $"    pushed ($row.branch) \(($ahead) commits\)"
+    } else {
+        print $"    FAILED to push ($row.branch): ($pushed.stderr | str trim | lines | last)"
+    }
+}
+
+# Hand the notes checkout to a Claude session running `/sync-notes`.
+#
+# It is the one checkout `hwt sync` does not touch itself, and it is the one where
+# the mechanical treatment is wrong in both directions: a conflict there is a
+# journal entry written twice rather than two edits to one program, and the commit
+# carrying a day of notes needs a message that a file count cannot write.
+#
+# The skill is project-scoped to that repo (`.claude/commands/sync-notes.md` in
+# hobby-mimisbrunnr), not installed from here, which is why the session has to
+# start in that directory rather than anywhere with the config dir set.
+def sync-notes-session [] {
+    print ""
+    if not ($NOTES_REPO | path exists) {
+        print $"notes: no checkout at ($NOTES_REPO) — run `just clone-notes` in hobby-tooling"
+        return
+    }
+    if (which chobby | is-empty) {
+        print "notes: `chobby` is not on PATH — run `just install-chobby` in hobby-tooling"
+        return
+    }
+    # A `claude` started from inside a Claude session would nest one agent in
+    # another, so the session that ran `hwt sync` is told the command instead.
+    if ($env.CLAUDECODE? | default "") == "1" {
+        print "notes: already inside a Claude session, so not starting a second one. Run:"
+        print $"  cd ($NOTES_REPO); chobby '/sync-notes'"
+        return
+    }
+    print $"notes: starting a hobby Claude session on /sync-notes in ($NOTES_REPO)"
+    cd $NOTES_REPO
+    ^chobby "/sync-notes"
+}
+
+# Bring every checkout on this disk into line with its remote.
+#
+# Three populations, three treatments, and that split is what the flags used to
+# be — the command acts, and there is no report-only mode, because the report was
+# the thing being replaced:
+#
+#   main checkouts   fetch and fast-forward, nothing else. A clone under
+#                    ~/fun_repos is where things are read and tried, so its local
+#                    commits and its dirty tree are scratch rather than work in
+#                    flight; anything that is not a fast-forward is named in the
+#                    summary for a decision.
+#   worktrees        wip-commit the working tree, rebase onto the upstream, push.
+#                    A task branch exists to become a PR, so it is meant to
+#                    travel, and the wip commit is what lets the rebase run over a
+#                    tree that is mid-edit.
+#   the notes repo   a Claude session running `/sync-notes`, because its conflicts
+#                    and its commit messages are prose.
 export def "hwt sync" [
-    --pull          # Fetch every checkout, then fast-forward what can be fast-forwarded
-    --push          # Push local branches holding commits no remote has
-    --wip           # Snapshot dirty working trees to refs/wip/<host>/<branch> and push
     --project (-p): string@project-completions   # Limit to one project
-    --all (-a)      # Include checkouts that are already in sync
 ] {
     let rows = (sync-checkouts $project | each {|c| sync-scan-one $c })
-    let interesting = if $all { $rows } else { $rows | where state != "ok" and state != "skipped" }
+    let live = ($rows | where state != "skipped")
+    let fetchable = ($live | where {|r| ($r.remote | is-not-empty) and $r.state != "unborn" })
 
-    if (not $push) and (not $wip) and (not $pull) {
-        let unborn = ($rows | where state == "unborn")
-        let no_remote = ($rows | where state == "no-remote")
+    print $"fetching ($fetchable | length) checkouts..."
 
-        print ($interesting | each {|r|
-            {
-                checkout: (if ($r.name | is-empty) { $r.project } else { $"($r.project)/($r.name)" })
-                kind: (if $r.kind == "repo" { "" } else { $r.kind })
-                branch: $r.branch
-                state: $r.state
-                unpushed: $r.unpushed
-                dirty: $r.dirty
-                untracked: $r.untracked
-            }
-        })
+    # In parallel because this is the one phase that is network-bound; the results
+    # are collected before anything prints, so the report stays ordered.
+    let fetched = ($fetchable | par-each {|r| { row: $r, res: (sync-fetch-one $r) } })
+    for f in ($fetched | where {|f| not $f.res.ok }) {
+        print $"  ($f.row.project): fetch failed — ($f.res.err)"
+    }
 
-        if ($unborn | is-not-empty) {
-            print ""
-            print $"($unborn | length) checkouts have no commits at all — every file is untracked:"
-            for r in $unborn { print $"  ($r.project) — ($r.path)" }
-        }
-        if ($no_remote | is-not-empty) {
-            print ""
-            print $"($no_remote | length) checkouts have commits but no remote; --push and --wip cannot reach them:"
-            for r in $no_remote { print $"  ($r.project) — gh repo create julianbieber/($r.project) --private --source ($r.path)" }
-        }
+    let repos = ($fetchable | where kind == "repo")
+    let trees = ($fetchable | where kind != "repo")
+
+    print ""
+    print $"main checkouts \(($repos | length)\) — fast-forward only:"
+    for r in $repos { sync-pull-one $r }
+
+    print ""
+    print $"worktrees \(($trees | length)\) — wip, rebase, push:"
+    for r in $trees { sync-worktree-one $r }
+
+    # What is left needs a decision rather than a command: a first commit, a
+    # `gh repo create`, or a look at what those local commits are. Naming them is
+    # the whole of what the old report-only mode still had to offer.
+    let held = ($repos | where unpushed > 0)
+    if ($held | is-not-empty) {
         print ""
-        print "  hwt sync --pull        fetch all, fast-forward what can be, list waiting snapshots"
-        print "  hwt sync --push        push branches holding commits no remote has"
-        print "  hwt sync --wip         snapshot dirty trees to refs/wip/<host>/<branch>"
-        print "  git config hobby.sync false    (in a repo) drop it from this report"
+        print $"(plural ($held | length) 'main checkout') holding commits no remote has \(sync only pulls these\):"
+        for r in $held { print $"  ($r.project) — ($r.unpushed) commits; git -C ($r.path) push" }
+    }
+    let unborn = ($live | where state == "unborn")
+    if ($unborn | is-not-empty) {
         print ""
-        print "`hwt sync --pull` fetches snapshots into refs/remote-wip/ and lists them."
-        print "One is read like any other commit:"
-        print "  git log --oneline refs/remote-wip/<machine>/<branch>   what was in flight"
-        print "  git diff HEAD refs/remote-wip/<machine>/<branch>       against this checkout"
-        print "  git checkout refs/remote-wip/<machine>/<branch> -- .   take it into the tree"
-        return
+        print $"(plural ($unborn | length) 'checkout') with no commits at all — every file untracked:"
+        for r in $unborn { print $"  ($r.project) — ($r.path)" }
     }
-
-    # --pull runs over every checkout with a remote, not just the unsynced ones:
-    # being behind is invisible to the state column, which measures what this disk
-    # holds that no remote has and says nothing about the reverse direction.
-    if $pull {
-        let fetchable = ($rows | where {|r| ($r.remote | is-not-empty) and $r.state != "skipped" })
-        print $"fetching ($fetchable | length) checkouts..."
-
-        # In parallel because this is the one phase that is network-bound; the
-        # results are collected before anything prints, so the report stays ordered.
-        let fetched = ($fetchable | par-each {|r| { row: $r, res: (sync-fetch-one $r) } })
-        for f in ($fetched | where {|f| not $f.res.ok }) {
-            print $"  ($f.row.project): fetch failed — ($f.res.err)"
-        }
+    let no_remote = ($live | where state == "no-remote")
+    if ($no_remote | is-not-empty) {
         print ""
-
-        for r in $fetchable { sync-pull-one $r }
-
-        let incoming = ($fetchable | each {|r|
-            sync-incoming-wip $r.path
-            | each {|w| $w | merge { project: $r.project, name: $r.name, path: $r.path } }
-        } | flatten)
-
-        if ($incoming | is-not-empty) {
-            print ""
-            print "Wip snapshots waiting from another machine:"
-            for w in $incoming {
-                let where_ = (if ($w.name | is-empty) { $w.project } else { $"($w.project)/($w.name)" })
-                print $"  ($where_)  ($w.git_ref)  ($w.age)"
-                print $"    git -C ($w.path) diff HEAD ($w.git_ref)"
-            }
-        }
+        print $"(plural ($no_remote | length) 'checkout') with commits but nowhere to push them:"
+        for r in $no_remote { print $"  ($r.project) — gh repo create julianbieber/($r.project) --private --source ($r.path)" }
     }
 
-    if (not $push) and (not $wip) { return }
-
-    # Only "unsynced" can be acted on by --push/--wip. An unborn or remote-less
-    # checkout needs a first commit or a `gh repo create` — a decision, not a push —
-    # and a wip ref that never leaves this disk would back up nothing, so those are
-    # named here rather than silently passed over.
-    let actionable = ($interesting | where state == "unsynced")
-    let unreachable = ($interesting | where state in ["unborn" "no-remote"])
-
-    if ($unreachable | is-not-empty) {
-        if $pull { print "" }
-        print $"Not reachable by --push/--wip \(run `hwt sync` for the fix\):"
-        for r in $unreachable { print $"  ($r.project) — ($r.state)" }
-        print ""
-    }
-
-    if ($actionable | is-empty) {
-        print "Nothing to push."
-        return
-    }
-
-    for row in $actionable {
-        print $"($row.project)(if ($row.name | is-empty) { '' } else { $' / ($row.name)' }) [($row.branch)]"
-        if $push and ($row.unpushed > 0) { sync-push-one $row }
-        if $wip and (($row.dirty + $row.untracked) > 0) { sync-wip-one $row }
-    }
+    sync-notes-session
 }

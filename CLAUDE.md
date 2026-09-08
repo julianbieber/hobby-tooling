@@ -134,13 +134,14 @@ command enumerated. `hwt sync` scans all three populations — main checkouts, t
 worktrees, and orphans — because the last two are cheap to include once the walk
 exists, and an orphan is by definition recorded nowhere else.
 
-Four states, and only one of them is a sync problem:
+Four states, and they now say what a checkout needs rather than what flag reaches
+it:
 
-| state | means | fix |
+| state | means | what happens |
 |---|---|---|
-| `unsynced` | commits no remote has, or a dirty tree | `--push` / `--wip` |
-| `no-remote` | commits, but nowhere to push them | `gh repo create` |
-| `unborn` | zero commits; every file untracked | a first commit |
+| `unsynced` | commits no remote has, or a dirty tree | a worktree is committed and pushed; a main checkout is reported |
+| `no-remote` | commits, but nowhere to push them | reported, with the `gh repo create` |
+| `unborn` | zero commits; every file untracked | reported; a first commit is a decision |
 | `skipped` | `hobby.sync=false` in that repo | — |
 
 `unborn` is its own state because it is not a degree of `unsynced`: five repos here
@@ -153,84 +154,101 @@ as untracked, i.e. as the thing it is meant to silence. It does not travel betwe
 machines, which is correct: whether a scratch checkout exists at all is a fact
 about one disk.
 
-### A snapshot is a ref, not a branch, and not a stash
+### Three populations, three treatments, and no flags
 
-`--wip` writes the working tree — tracked edits and untracked files alike, minus
-what `.gitignore` excludes — to a commit reachable only from
-`refs/wip/<machine>/<branch>`, then pushes that ref.
+The first version had `--pull`, `--push` and `--wip`, and a bare `hwt sync` that
+only reported. That put the decision in the wrong place. **Which of those a
+checkout needs is a fact about the checkout, not a thing to be chosen at the
+prompt** — a main checkout wants exactly a fast-forward, a task worktree wants
+exactly commit-rebase-push, every time, in both directions of a trip. Choosing
+per run meant choosing wrong: `--push --wip` on leaving would push a main
+checkout's scratch commits, and `--pull` on arriving never rebased a worktree at
+all.
 
-**HEAD, the index and the working tree are untouched.** The snapshot is assembled
-in a throwaway index (`GIT_INDEX_FILE` → `read-tree` → `add --all` → `write-tree`
-→ `commit-tree`), so it can run over a checkout that is mid-edit without
-disturbing it. That is what makes it safe to run without reading the diff first,
-and it is why the target is a ref rather than a branch: committing on a branch
-means checking that branch out.
+So the treatment is keyed on the population and the only flag left is
+`-p <project>`:
 
-The ref lives outside `refs/heads/`, so a snapshot never appears as a branch in the
-GitHub UI and no PR can be opened from one by accident. GitHub accepts the push —
-verified, not assumed.
+| | treatment | because |
+|---|---|---|
+| `~/fun_repos/<project>` | fetch, fast-forward, nothing else | a clone here is read, tried and scribbled in; its local commits and dirty files are scratch, not work in flight |
+| a task worktree or orphan | wip-commit the tree, rebase onto the upstream, push | a task branch exists to become a PR, so it is meant to travel |
+| the notes repo | a `chobby` session running `/sync-notes` | its commit messages and its conflicts are prose |
 
-`<machine>` is `$HOBBY_MACHINE`, falling back to the short hostname. It is in the
-ref name so that snapshotting the same branch on both machines produces two refs
-rather than one machine silently overwriting the other's in-flight work.
+Anything a main checkout cannot fast-forward — dirty, diverged, detached, holding
+local commits — is named in the summary with the command that would fix it. That
+is all that survives of the old report-only mode, and it is the part that was
+load-bearing: it is where every unsynced byte turned out to be.
 
-**Stashes are deliberately out of scope.** They cannot be pushed at all, so no
-amount of tooling reaches them, and `CLAUDE.md` already treats the shared stash
-stack as a hazard rather than a place to keep things.
+### The wip commit is on the branch, and the refs are gone
 
-### The message is a pointer, not a summary
+`--wip` used to write the working tree to `refs/wip/<machine>/<branch>`, outside
+`refs/heads/` so a snapshot could never become a branch or a PR by accident, and
+`--pull` fetched the other machine's into `refs/remote-wip/` and listed them with
+a diff command.
 
-A wip commit message is a file count, the branch, the machine, and — for a task
-worktree — the path to that task's notes directory. It never describes the change.
-The notes are synced too and are where the prose lives, so the message points at
-them instead of paraphrasing them; and under the AI policy a factual list is
-writable where a summary is not.
+**That is deleted, and a dirty worktree is now committed onto its own branch**,
+with `wip` as the first word of the subject. The reason is that the ref could not
+participate in the rest of the treatment: a rebase refuses to run over a dirty
+tree and a push carries branches and nothing else, so a snapshot beside the branch
+left the branch exactly as unsynced as before and required a person to notice a
+list, read a diff, and apply it by hand. Every step of that was optional, and the
+optional steps are what does not happen on the day you switch machines.
 
-### The other direction: `--pull` fast-forwards, and nothing else
+The price is real and is stated where it will be read: a `wip` commit is in the
+branch's history and has to be squashed or amended before review. It is
+`--no-verify`, because a repo's commit hooks lint what a person wrote and this is
+a machine picking up a tree mid-edit; a failing hook must not block the sync.
 
-Arriving at a machine is the other half, and it was covered worse than leaving.
-`hwt refresh` exists but pulls `main`/`master` on **main checkouts only** — not the
-branch you were actually on, not any worktree, and it never sees a snapshot. So
-`hwt sync` on a freshly-opened machine could report everything clean while the
-other machine's work sat on the remote, unmentioned.
+Nothing was lost in the deletion — a sweep of every checkout found zero refs under
+`refs/wip` or `refs/remote-wip`. The mechanism was built, documented, and never
+once used, which is itself the argument: the path that needs a person to run a
+second command after reading a report does not get run.
 
-`--pull` fetches every checkout that has a remote (in parallel — it is the one
-network-bound phase), then **fast-forwards, and only fast-forwards**. A merge or a
-rebase can conflict; fast-forward is the single move that cannot lose work, so
-everything else is printed rather than attempted:
+A rebase that conflicts is **aborted**, not left in progress. What touches a
+worktree next is an editor or a Claude session, and neither expects to arrive
+mid-rebase.
 
-```
-  wusel                  main       ff  a1b2c3d..e4f5a6b (3)
-  sdf-flood              sunset     skipped — behind 4, dirty (2 files)
-  hackathon_game         main       skipped — diverged (2 local / 5 remote)
-```
+**Stashes remain out of scope.** They cannot be pushed at all, so no amount of
+tooling reaches them, and `CLAUDE.md` already treats the shared stash stack as a
+hazard rather than a place to keep things. Uncommitted work in a worktree is now
+covered by the wip commit; in a main checkout it is reported and left alone.
 
-It runs over **every** checkout with a remote, not just the ones the report calls
-`unsynced`: that column measures what this disk holds and no remote has, which
-says nothing about the reverse direction.
+### The wip message is a pointer, not a summary
 
-Snapshots fetch into `refs/remote-wip/*`, deliberately not `refs/wip/*`. The second
-namespace is *this* machine's own snapshots, and a forced fetch into it would rewind
-one taken but not yet pushed — the same split git already makes between `refs/heads`
-and `refs/remotes`. Snapshots whose `<machine>` component is this machine are then
-filtered out of the "waiting" list, or every push would be reported back as incoming
-work. What remains is listed newest first, with the diff command:
+A wip commit's subject is a file count and the machine; its body says the commit
+is a snapshot and must be squashed, and — for a task worktree — names that task's
+notes directory. It never describes the change. The notes are synced too and are
+where the prose lives, so the message points at them instead of paraphrasing them.
 
-```
-Wip snapshots waiting from another machine:
-  zig_survivor  refs/remote-wip/desktop/laptop  2 hours ago
-    git -C ~/fun_repos/zig_survivor diff HEAD refs/remote-wip/desktop/laptop
-```
+`<machine>` is `$HOBBY_MACHINE`, falling back to the short hostname. In the ref
+scheme it was a collision key; here it is the only thing in the commit that says
+which disk the uncommitted work was sitting on when the sync picked it up.
 
-Applying one is left to you. It writes files you have not read yet, which is a
-different kind of act from fast-forwarding a clean branch.
+### The notes repo is a session, not a git command
 
-### Reports by default, acts only when asked
+Every other checkout is synced by rules that need no judgement — fast-forward or
+don't, rebase or abort. The notes repo breaks that in both directions, so
+`hwt sync` hands it to `chobby` running `/sync-notes` and touches it no further.
 
-`--push` publishes commits, `--wip` publishes the working tree as it stands, and
-`--pull` moves branches. None can be un-published, and one of these repos is public,
-so the bare command prints and changes nothing. The report ends with the exact
-command for each state it cannot act on itself.
+**Its commit messages read the files.** The convention is
+`<project>/<topic>/<task>: <what these notes are>`, one commit per task
+directory, which makes `git log --format=%s` the list of what has been worked on.
+A tree of `wip @ laptop: 3 modified` would destroy exactly that, and a file count
+is all a shell function can honestly write.
+
+**Its conflicts are prose, and the skill refuses them.** Two machines writing a
+journal entry for the same day produce a both-modified file that no merge driver
+can resolve, so `/sync-notes` stops and reports rather than auto-resolving. That
+is the right call for the same reason the wip commit is not: a wrong resolution
+here loses work with no test failing and no compiler complaining.
+
+**The skill is not in this repo.** It is `.claude/commands/sync-notes.md` in
+`hobby-mimisbrunnr`, project-scoped to the repo it operates on, which is the one
+place it is ever invoked from — `hwt sync` starts the session in that directory.
+Nothing here installs it, and `install-skills` does not see it.
+
+Run from inside a Claude session, `hwt sync` prints the command rather than
+nesting a second agent in the first.
 
 ### The identity leak this surfaced
 

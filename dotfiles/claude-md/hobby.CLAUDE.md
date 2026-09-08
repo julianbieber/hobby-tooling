@@ -285,25 +285,39 @@ git config user.email julian.bieber.1992@gmail.com
 
 ## Syncing two machines
 
-`hwt sync` reports every checkout holding state no remote has — main checkouts,
-task worktrees and orphans alike. It changes nothing without a flag:
+`hwt sync` is the whole of it, and it takes no flag but `-p <project>`. It acts —
+run it on arriving at a machine and on leaving one, and it does the same thing
+both times.
+
+Three populations, three treatments:
 
 ```
-hwt sync                touch nothing, just report
-hwt sync --pull         fetch all, fast-forward what can be, list waiting snapshots
-hwt sync --push         push branches holding commits no remote has
-hwt sync --wip          snapshot dirty trees to refs/wip/<machine>/<branch>
+~/fun_repos/<project>       fetch, fast-forward. Nothing else.
+a task worktree             commit the dirty tree as `wip`, rebase onto the
+                            upstream, push.
+the notes repo              a chobby session running /sync-notes.
 ```
 
-Arriving at a machine is `--pull`; leaving it is `--push --wip`.
+A main checkout is scratch — read, tried, scribbled in — so anything that is not
+a fast-forward (dirty, diverged, detached, local commits) is printed for a
+decision rather than attempted. A task branch is meant to travel, so it is
+committed and pushed without asking; **the wip commit is a real commit on the
+branch and has to be squashed or amended before the branch is reviewed.** Its
+subject starts with `wip` so it is visible in `git log --oneline`.
 
-`--wip` leaves HEAD, the index and the working tree exactly as they were; the
-snapshot is a ref outside `refs/heads/`, so it is never a branch and never a PR.
-`--pull` only ever fast-forwards — a dirty or diverged checkout is reported, not
-touched — and lists the other machine's snapshots from `refs/remote-wip/` with the
-diff command for each. Applying one is yours to do.
+A rebase that conflicts is aborted, and the checkout is left as it was found —
+except that the working tree is now the wip commit. Resolving it is yours.
 
-Stashes are out of scope — they cannot be pushed. Use a wip snapshot instead.
+The notes repo is handed to `/sync-notes` because its commit messages and its
+conflicts are prose — it commits one commit per task directory and stops on a
+conflict rather than resolving it. The skill lives in that repo
+(`.claude/commands/sync-notes.md`), not in `hobby-tooling`. If `hwt sync` is run
+from inside a Claude session it prints the command instead of nesting a second
+one.
+
+Stashes are out of scope — they cannot be pushed, and the shared stash stack is a
+hazard here anyway. Uncommitted work in a worktree is covered by the wip commit;
+in a main checkout it is not, and is reported.
 
 ## Tooling
 
