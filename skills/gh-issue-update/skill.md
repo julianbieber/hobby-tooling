@@ -1,5 +1,5 @@
 ---
-description: Decide whether the task's GitHub issue warrants a progress comment, gather the evidence for one, and open the authoring buffer so I write it
+description: Decide whether the task's GitHub issue warrants a progress comment, gather the evidence for one, and write it for me to edit
 allowed-tools: Bash(git branch:*), Bash(git -C:*), Bash(ls:*), Bash(pwd:*), Bash(mkdir:*), Bash(git log:*), Bash(gh:*), Read, Write
 ---
 
