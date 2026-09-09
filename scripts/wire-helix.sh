@@ -30,6 +30,7 @@
 # Usage: wire-helix.sh [helix-checkout]
 #        HELIX_REPO=/path/to/helix wire-helix.sh
 #        TREE_SITTER_MML=/path/to/tree-sitter-mml wire-helix.sh
+#        TREE_SITTER_ORAC=/path/to/tree-sitter-orac wire-helix.sh
 
 set -euo pipefail
 
@@ -62,6 +63,7 @@ INSTALLED="$CFG/languages.toml"
 QUERIES="$REPO/runtime/queries/hmml"
 HSTRUCT_QUERIES="$REPO/runtime/queries/hstruct"
 LEGACY_QUERIES="$REPO/runtime/queries/mml-hobby"
+ORAC_QUERIES="$REPO/runtime/queries/orac"
 
 echo "  Helix checkout: $REPO (via $HELIX_REPO_WHY)"
 
@@ -256,6 +258,16 @@ else
     echo "                 (.hmml is unaffected; it has its own grammar now)"
 fi
 
+# Same deal for the work `orac` language: the grammar lives beside tree-sitter-mml
+# in the work checkout, so a hobby-only machine has neither.
+if resolve_grammar_orac; then
+    grammars=$(printf '%s\n[[grammar]]\nname = "orac"\nsource = { path = "%s" }\n' \
+        "$grammars" "$ORAC_GRAMMAR_RESOLVED")
+    echo "  local overlay: orac grammar -> $ORAC_GRAMMAR_RESOLVED"
+else
+    echo "  local overlay: no tree-sitter-orac — .orac files keep orac-lsp and lose colour"
+fi
+
 block=$(printf '%s\n%s\n%s' "$BEGIN" "$grammars" "$END")
 if [ -n "$local_body" ]; then
     new_local=$(printf '%s\n\n%s' "$local_body" "$block")
@@ -322,6 +334,23 @@ else
     cp "$HSTRUCT_GRAMMAR/queries/highlights.scm" "$HSTRUCT_QUERIES/highlights.scm"
     echo "  queries: installed hstruct/highlights.scm from the grammar"
     changed=1
+fi
+
+# The orac grammar ships two query files, not one: `.orac` embeds Vega-Lite JSON
+# and CSV, and injections.scm is what hands those regions to the json and csv
+# grammars. Installed only when the grammar resolved — a query directory naming a
+# grammar Helix does not have is dead weight.
+if resolve_grammar_orac; then
+    mkdir -p "$ORAC_QUERIES"
+    for q in highlights injections; do
+        if cmp -s "$ORAC_GRAMMAR_RESOLVED/queries/$q.scm" "$ORAC_QUERIES/$q.scm"; then
+            echo "  queries: orac/$q.scm up to date"
+        else
+            cp "$ORAC_GRAMMAR_RESOLVED/queries/$q.scm" "$ORAC_QUERIES/$q.scm"
+            echo "  queries: installed orac/$q.scm from the work checkout"
+            changed=1
+        fi
+    done
 fi
 
 # --- 7. runtime symlink ------------------------------------------------------

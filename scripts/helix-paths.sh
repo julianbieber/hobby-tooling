@@ -11,6 +11,7 @@
 #   helix-paths.sh repo          absolute path to the Helix checkout   (exit 1 if none)
 #   helix-paths.sh repo --why    same, plus how it was found, on stderr
 #   helix-paths.sh grammar-mml   absolute path to a tree-sitter-mml checkout (exit 1 if none)
+#   helix-paths.sh grammar-orac  absolute path to a tree-sitter-orac checkout (exit 1 if none)
 #
 # Sourcing it instead gives the two resolvers as functions. They set variables
 # rather than printing, because a caller that captured them with $(...) would get
@@ -18,8 +19,10 @@
 #
 #   resolve_repo         -> $HELIX_REPO_RESOLVED, $HELIX_REPO_WHY
 #   resolve_grammar_mml  -> $MML_GRAMMAR_RESOLVED
+#   resolve_grammar_orac -> $ORAC_GRAMMAR_RESOLVED
 #
-# Overrides: HELIX_REPO, TREE_SITTER_MML — from the environment, or from the
+# Overrides: HELIX_REPO, TREE_SITTER_MML, TREE_SITTER_ORAC — from the environment,
+# or from the
 # machine-local paths file below, which is where a path that must not be committed
 # (anything under the work checkout) belongs. `just local-paths` writes a template.
 
@@ -30,17 +33,20 @@ HOBBY_PATHS="${HOBBY_TOOLING_PATHS:-${XDG_CONFIG_HOME:-$HOME/.config}/hobby-tool
 if [ -f "$HOBBY_PATHS" ]; then
     _env_helix_repo="${HELIX_REPO:-}"
     _env_tree_sitter_mml="${TREE_SITTER_MML:-}"
+    _env_tree_sitter_orac="${TREE_SITTER_ORAC:-}"
     # shellcheck disable=SC1090
     . "$HOBBY_PATHS"
     [ -n "$_env_helix_repo" ] && HELIX_REPO="$_env_helix_repo"
     [ -n "$_env_tree_sitter_mml" ] && TREE_SITTER_MML="$_env_tree_sitter_mml"
-    unset _env_helix_repo _env_tree_sitter_mml
+    [ -n "$_env_tree_sitter_orac" ] && TREE_SITTER_ORAC="$_env_tree_sitter_orac"
+    unset _env_helix_repo _env_tree_sitter_mml _env_tree_sitter_orac
 fi
 
 HELIX_CFG="${XDG_CONFIG_HOME:-$HOME/.config}/helix"
 HELIX_REPO_RESOLVED=""
 HELIX_REPO_WHY=""
 MML_GRAMMAR_RESOLVED=""
+ORAC_GRAMMAR_RESOLVED=""
 
 # A directory only counts as the checkout if it has the file we install from.
 _is_helix_repo() { [ -f "$1/languages.toml" ] && [ -d "$1/helix-term" ]; }
@@ -113,6 +119,34 @@ resolve_grammar_mml() {
     return 1
 }
 
+# tree-sitter-orac highlights the ORA conversation format (`.orac`). Same story as
+# mml: work code, outside the hobby tree, so its path is machine-local. It sits
+# beside tree-sitter-mml in that checkout, so TREE_SITTER_MML's directory is tried
+# before giving up — one entry in paths.env then covers both grammars.
+#
+# Callers must treat "not found" as a normal outcome, never an error.
+resolve_grammar_orac() {
+    local cand
+    ORAC_GRAMMAR_RESOLVED=""
+    if [ -n "${TREE_SITTER_ORAC:-}" ]; then
+        if [ -d "$TREE_SITTER_ORAC/src" ] || [ -f "$TREE_SITTER_ORAC/grammar.js" ]; then
+            ORAC_GRAMMAR_RESOLVED="$TREE_SITTER_ORAC"
+            return 0
+        fi
+        printf 'TREE_SITTER_ORAC=%s does not look like a grammar checkout — ignoring it\n' \
+            "$TREE_SITTER_ORAC" >&2
+    fi
+    for cand in "$HOME/fun_repos/tree-sitter-orac" "$HOME/outside_repos/tree-sitter-orac" \
+        "${TREE_SITTER_MML:+$(dirname "$TREE_SITTER_MML")/tree-sitter-orac}"; do
+        [ -n "$cand" ] || continue
+        if [ -d "$cand/src" ] || [ -f "$cand/grammar.js" ]; then
+            ORAC_GRAMMAR_RESOLVED="$cand"
+            return 0
+        fi
+    done
+    return 1
+}
+
 # Only run the CLI when executed, so the functions can also be sourced.
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     case "${1:-repo}" in
@@ -125,6 +159,10 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
             if [ "${2:-}" = "--why" ]; then
                 printf 'via %s\n' "$HELIX_REPO_WHY" >&2
             fi
+            ;;
+        grammar-orac)
+            resolve_grammar_orac || exit 1
+            printf '%s\n' "$ORAC_GRAMMAR_RESOLVED"
             ;;
         grammar-mml)
             resolve_grammar_mml || exit 1
