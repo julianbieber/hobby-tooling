@@ -108,6 +108,11 @@ the rule disallows, relocates comments that carried real information, and writes
 the module headers, public contracts and test justifications that are missing. It
 runs as the `comments` phase of `/task:build`.
 
+It may assert a reason it verified in the code, or one it read in
+`business-context.md` — the same two written sources the commit-message rule
+below allows, and no third. A contract that needs a *why* neither supplies is
+reported as a gap with its `file:line`, never invented.
+
 ## Commit messages
 
 **You write them.** I edit what I disagree with.
@@ -124,6 +129,13 @@ already in the commit. No file lists.
 1. something I said, in this task's prompts;
 2. something we settled in discussion before the change was made;
 3. a fact you verified in the code, the diff, or test output.
+
+The first two have a written form: `business-context.md` in the task's notes
+directory, which `/task:build` fills from my own words before the change is
+designed. A passage there counts as having been given the justification, and a
+resumed session that has lost the conversation can still read it. Nothing else
+does — not the issue, not an earlier journal entry, not your own summary of what
+I probably meant.
 
 The third is an *observation* and you may state it freely — what was broken, what
 the error was, what a test now covers. The first two are *justifications*, and you

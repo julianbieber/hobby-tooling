@@ -61,6 +61,7 @@ module.exports = grammar({
         $.type_definition,
         $.marker_declaration,
         $.module_entry,
+        $.api_entry,
         $.where_clause,
         $.access_entry,
         $.binding,
@@ -96,13 +97,15 @@ module.exports = grammar({
         alias(token(/##+/), $.section_marker),
         field("name", $.section_name),
       ),
-    // The classic four (v1) plus the Bevy sections (v2, grammar.md §8). Which
-    // of these a given `kind:` may use is the LSP's business, not the grammar's.
+    // The classic four (v1) plus the Bevy sections (v2, grammar.md §8) and the
+    // module dialect's `api` (§11). Which of these a given `kind:` may use is
+    // the LSP's business, not the grammar's.
     section_name: ($) =>
       choice(
         "modules",
         "data",
         "behavior",
+        "api",
         "invariants",
         "components",
         "resources",
@@ -268,12 +271,31 @@ module.exports = grammar({
         optional($.spec_annotation),
       ),
     separator: ($) => token(choice("—", "--")),
+
+    // A module spec's public function (grammar §11):
+    // `fn [Type::]name(param: Type, …) [-> Type] [@ path] [@ spec ref]`.
+    // The bullets describing it are ordinary `bullet` items nested beneath.
+    api_entry: ($) =>
+      seq(
+        "fn",
+        optional(seq(field("receiver", $.identifier), "::")),
+        field("name", $.identifier),
+        "(",
+        sepBy(",", $.param),
+        ")",
+        optional(seq("->", field("return", $.type))),
+        optional(seq("@", field("path", $.path))),
+        optional($.spec_annotation),
+      ),
+    param: ($) => seq(field("name", $.identifier), ":", field("type", $.type)),
     responsibility: ($) => token(prec(1, /[^@\r\n]+/)),
     path: ($) => token(prec(1, /[^@\r\n]+/)),
 
     // Cross-spec reference: `@ spec system/unit` or `@ spec unit` (grammar
-    // §5.4). The keyword token requires trailing whitespace and outranks the
-    // free-text tokens, so `@ spec_utils/x.py` still lexes as a `path`.
+    // §5.4), optionally naming one member of it — `@ spec unit::function` or
+    // `@ spec unit::Type::method` (§11). The keyword token requires trailing
+    // whitespace and outranks the free-text tokens, so `@ spec_utils/x.py`
+    // still lexes as a `path`.
     spec_annotation: ($) =>
       seq(
         "@",
@@ -282,7 +304,10 @@ module.exports = grammar({
           "target",
           alias(
             token.immediate(
-              prec(2, /[A-Za-z][A-Za-z0-9._-]*(\/[A-Za-z][A-Za-z0-9._-]*)?/),
+              prec(
+                2,
+                /[A-Za-z][A-Za-z0-9._-]*(\/[A-Za-z][A-Za-z0-9._-]*)?(::[A-Za-z_][A-Za-z0-9_]*){0,2}/,
+              ),
             ),
             $.spec_ref,
           ),

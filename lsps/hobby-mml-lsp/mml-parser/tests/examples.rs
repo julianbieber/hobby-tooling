@@ -423,3 +423,50 @@ fn spec_refs_include_system_entries() {
         .collect();
     assert_eq!(refs, ["spawn-enemies"]);
 }
+
+/// The detail layer's worked pair (grammar §11): a module spec whose bullets
+/// call into a second module spec by `unit::Type::method`.
+#[test]
+fn wave_table_module_spec_is_clean() {
+    assert_clean(
+        "wave-table",
+        include_str!("fixtures/examples/wave-table.hmml"),
+    );
+}
+
+#[test]
+fn wave_rng_module_spec_is_clean() {
+    assert_clean("wave-rng", include_str!("fixtures/examples/wave-rng.hmml"));
+}
+
+/// A module spec carries its public surface in `## api`, addressed the way a
+/// `@ spec unit::member` ref names it, and its entries' `@ path`s join the
+/// source paths so goto reaches the real function.
+#[test]
+fn module_kind_produces_api_entries() {
+    use mml_parser::ast::Kind;
+
+    let src = include_str!("fixtures/examples/wave-table.hmml");
+    let (doc, _) = analyze(src);
+    assert_eq!(doc.header.kind.as_ref().unwrap().value, Kind::Module);
+    assert!(doc.behavior.is_empty());
+
+    let members: Vec<String> = doc.api.iter().map(|e| e.member()).collect();
+    assert_eq!(members, ["entry_for", "WaveEntry::offsets"]);
+    assert_eq!(
+        doc.api[0].signature(),
+        "fn entry_for(index: u32) -> Option<WaveEntry>"
+    );
+
+    let refs: Vec<&str> = mml_parser::validate::collect_spec_refs(&doc)
+        .into_iter()
+        .map(|r| r.value.as_str())
+        .collect();
+    assert_eq!(refs, ["wave-rng", "wave-rng::WaveRng::next_u32"]);
+
+    let paths: Vec<&str> = mml_parser::validate::collect_source_paths(&doc)
+        .into_iter()
+        .map(|p| p.value.as_str())
+        .collect();
+    assert!(paths.contains(&"src/waves/table.rs:31"), "{paths:?}");
+}

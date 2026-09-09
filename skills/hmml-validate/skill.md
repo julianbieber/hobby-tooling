@@ -212,10 +212,40 @@ representing the change.
    - **`@ spec` cross-refs** — each ref (bare `<unit>`) must resolve to a
      sibling `<unit>.hmml` in the **same task directory** as this spec. A
      dangling ref is **SPEC-AHEAD** (the referenced spec was renamed/removed, or
-     never written). Do **not** validate the referenced unit's own conformance
-     here — that is its own validate run; only check that delegating to that
-     unit still matches what the code does (the step really does hand off to
-     that queue/endpoint/job).
+     never written). A **member** ref (`@ spec unit::function`) must also name an
+     `## api` entry that spec defines — `hobby-mml-parser --lint` reports a
+     missing one as an `unknown-spec-member` **error**, and it is SPEC-AHEAD
+     here too. Do **not** validate the referenced unit's own conformance here —
+     that is its own validate run; only check that delegating to that unit still
+     matches what the code does (the step really does hand off to that
+     queue/endpoint/job).
+   - **`## api`** (a `kind: module` spec, grammar §11) — the verdict is **per
+     entry**, not per section: one row per `fn`, so "which function drifted" is
+     answerable directly. For each entry:
+     - the function **exists** and is **public** in the routed code (a spec entry
+       the code no longer exposes is **SPEC-AHEAD**);
+     - its **signature** matches — parameter names/types in order and the return
+       type, read through the same type-mapping tables translate inverts, and
+       ignoring `&`, `&mut` and lifetimes. A renamed parameter is prose-level; a
+       changed *type* or arity is **SPEC-AHEAD**;
+     - its **bullets** still describe what the body does, at the altitude rule
+       above (a reworded-but-equivalent bullet CONFORMS);
+     - its **call graph** holds: every collaborator a bullet references with
+       `@ spec <unit>::<function>` is actually called by that function
+       (`call_path` / `get_neighbors`), and a call the bullets do not mention
+       *to another module in `## modules`* is **CODE-AHEAD**. A call into a
+       private helper of this module is **not** drift — see below;
+     - **private helpers are never drift.** A module spec describes the public
+       surface only, so a private function the code has and the spec does not is
+       correct by design: translate is allowed to factor a bullet (or a nested
+       tree) into a helper. Never report one as CODE-AHEAD; follow it and judge
+       the *behaviour* it implements against the bullet that owns it;
+     - **completeness is a warning, not a verdict on the code.** A public
+       function in the code with no `## api` entry is **CODE-AHEAD** — the spec's
+       own rule is that the whole surface is present — but report it as one line
+       per missing function, not as a failed section: a module with sixty
+       accessors should not read as sixty drifts. Say plainly that the fix is a
+       re-extract, not a code change.
    - **`where:` bindings** — for each `Symbol = value [@ config-source]`, read
      the value at the `@ config-source` site (env-var default, constant,
      parameter default) and confirm it equals the bound `value`. A drifted value
@@ -229,7 +259,9 @@ representing the change.
    because at most one side can match the code.
 
 4. **Report a conformance verdict and stop.** Emit a per-section table:
-   `section → verdict → specifics (what, where, which direction)`. Then an
+   `section → verdict → specifics (what, where, which direction)` — for a
+   `kind: module` spec, `## api` expands to **one row per `fn` entry**, plus a
+   final row listing public functions missing from the spec. Then an
    overall verdict — **CONFORMS** (every claim holds) or **DRIFTED** (with the
    count and the most important items first). For each drift, recommend the
    remediation **without performing it**:
@@ -255,8 +287,11 @@ representing the change.
     `components`, `resources`, `events` optional; no `access`.
   - `system` — `access`, `behavior`, `invariants` required; `modules`, `data`,
     `components`, `resources`, `events` optional; no `systems`.
+  - `module` — exactly `modules`, `data`, `api`, `invariants`; no `behavior`,
+    no Bevy section.
 - Header keys: `system` (req), `unit` (req), `kind` (req: `endpoint`|`workflow`|
-  `job`|`plugin`|`system`), `method` (opt, endpoints: `GET`|`POST`|…), `base`
+  `job`|`plugin`|`system`|`module`), `method` (opt, endpoints: `GET`|`POST`|…),
+  `base`
   (opt: subdir the `source.paths` resolve against), `source` (opt: `repo` +
   `paths` list). `system`/`unit` are identifiers.
 - `#` at column 0 is a comment; `##` at column 0 is always a section header.
@@ -265,7 +300,8 @@ representing the change.
 - `## data`: `struct Name { field: Type [@ source], ... }`,
   `enum Name { Variant, ... }` (unit variants, no payloads), then `in: <Type>` /
   `out: <Type>`. Types: primitives, `Uuid`/`Money`/`DateTime`,
-  `Option<T>`/`Vec<T>`/`Map<K,V>`/ `Queue<T>`/`Stream<T>`, or a defined
+  `Option<T>`/`Vec<T>`/`Map<K,V>`/`Queue<T>`/`Stream<T>`/`Handle<T>`/
+  `Future<T>`/`Result<T,E>`/`Either<L,R>`/`Tuple<A,B>`, or a defined
   struct/enum, or a type brought in by a `use` import. A field's optional
   `@ source` is `path`|`query`|`body`|`header` (endpoints).
 - Type imports (grammar §4.5): `## data` may start with `use unit: Type, …`
@@ -290,10 +326,23 @@ representing the change.
   `Symbol = value [@ config-source]`.
 - `## invariants`: flat `-` bullets, each a checkable claim.
 - Cross-spec refs (grammar §5.4): a module line, **system entry**, behavior step,
-  or invariant may end with `@ spec unit` (bare unit) — "more specification
-  under" that unit's `.hmml`. At most one per line, always the last annotation
-  (after an `@ path`); it resolves to a sibling `<unit>.hmml` in the same task
-  directory. Unresolved target = warning, not error.
+  `## api` entry, or invariant may end with `@ spec unit` (bare unit) — "more
+  specification under" that unit's `.hmml` — or `@ spec unit::function` /
+  `@ spec unit::Type::method` naming one `## api` entry of a module spec. At most
+  one per line, always the last annotation (after an `@ path`); it resolves to a
+  sibling `<unit>.hmml` in the same task directory. A missing target file =
+  warning; a member the target file does not define = **error**.
+
+**Detail dialect (grammar §11):**
+
+- `kind: module` writes `## api` where every other kind writes `## behavior`;
+  writing the other spelling is a `section-not-allowed-for-kind` error.
+- Entries are `fn [Type::]name(param: Type, …) [-> Type] [@ path] [@ spec ref]`
+  at **column 0**, each owning the bullets indented beneath it — ordinary steps,
+  same closed keyword set.
+- `## data` holds the public types the module owns. `in:`/`out:` and `where:`
+  are errors on this kind. An empty `## api` is an `empty-api` warning.
+- Four containers exist for signatures: `Future`, `Result`, `Either`, `Tuple`.
 
 **Bevy dialect (grammar §8):**
 

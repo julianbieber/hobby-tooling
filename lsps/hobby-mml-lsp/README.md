@@ -63,6 +63,16 @@ the checks; the reason it is worth a convention is that the delta then survives
 being committed, and `/hmml-translate` is told what to add and remove instead of
 inferring it from git.
 
+v2.4 adds the **detail layer**: `kind: module`, whose third section is `## api` —
+one `fn` signature per public function, the bullets describing it nested beneath
+(grammar §11). An `@ spec` ref may name one of those entries
+(`wave-table::entry_for`, `wave-rng::WaveRng::next_u32`), and the two ref
+failures get different severities on purpose: a missing target file stays a
+warning because the spec may be planned and not yet written, while a member the
+target file does not define is an error — the file is right there to check the
+name against. `Future`, `Result`, `Either` and `Tuple` join the containers so a
+signature can stay faithful to the code it is read beside.
+
 That divergence ends any prospect of re-merging with the work binary, and makes
 upstream `mml-parser` cherry-picks a manual job — a cost accepted deliberately,
 since the Bevy dialect has no business in a work repo.
@@ -84,6 +94,7 @@ docs and parser cannot drift:
 | `get-map-tile.hmml` | `kind: endpoint` — `method`, param sources |
 | `mesh-terrain-chunks.hmml` | `kind: workflow` — `Queue`/`Stream` |
 | `shared-data-imports.hmml` / `cross-spec-refs.hmml` | `use` imports, `@ spec` refs |
+| `wave-table.hmml` / `wave-rng.hmml` | `kind: module` — `## api`, a method entry, a `unit::Type::method` member ref between the two |
 
 ### Change annotations (grammar §10)
 

@@ -1,5 +1,5 @@
 ---
-title: "Hobby HMML — language specification (v2.3, Bevy dialect)"
+title: "Hobby HMML — language specification (v2.4, Bevy dialect)"
 created: 2026-07-25
 tags:
   - spec
@@ -99,6 +99,26 @@ head, one review, one diff. You edit the `.hmml`; Claude translates spec → cod
 > member change the way it writes every other change
 > ([§4.7](#47-referencing-a-rust-type--path)).
 
+> **v2.4 (2026-09-09) — the detail layer (`kind: module`).** The behavioural
+> kinds describe a unit at mental-model altitude: a handful of collaborators and
+> a dozen steps. That is right for *what does this plugin do*, and it stays. It
+> says nothing about what a collaborator can actually **do** — `WaveRng — draws
+> the spawn offsets` and no more — so the moment a change is about a module's
+> API rather than a unit's flow, the spec has nothing to offer and translation
+> falls back to prose → code.
+>
+> v2.4 adds the layer underneath: `kind: module` ([§11](#11-the-module-dialect-kind-module)),
+> whose third section is **`## api`** — one `fn` signature per public function,
+> each owning the bullets that describe it. With it come the
+> **`unit::function`** / `unit::Type::method` member form of an `@ spec` ref
+> ([§5.4](#54-cross-spec-references--spec)) and four containers so a signature
+> can stay faithful to the code it describes: `Future`, `Result`, `Either`,
+> `Tuple` ([§4.3](#43-type-expressions)).
+>
+> Additive: every v2.3 spec is still valid. The new kind is opt-in, and `## api`
+> on a non-module — or `## behavior` on a module — is a
+> `section-not-allowed-for-kind` error rather than a silent reinterpretation.
+
 ## 1. File shape
 
 An `.hmml` file is **line-oriented, UTF-8**, and has two parts in a fixed order:
@@ -109,8 +129,11 @@ An `.hmml` file is **line-oriented, UTF-8**, and has two parts in a fixed order:
 The canonical section order across both dialects is:
 
 ```
-modules, data, components, resources, events, systems, access, behavior, invariants
+modules, data, components, resources, events, systems, access, api, behavior, invariants
 ```
+
+`## api` and `## behavior` are alternative spellings of one slot — a spec has
+one or the other, never both ([§11](#11-the-module-dialect-kind-module)).
 
 Which of them are **required**, and which are even **allowed**, depends on the
 header `kind` — see [§7](#7-kinds-and-the-section-schema).
@@ -132,7 +155,7 @@ A block of `key: value` lines before the first `##` section.
 | Key | Required | Meaning |
 |---|---|---|
 | `unit` | yes | Unique identifier (kebab-case). **This is the filename** (`<unit>.hmml`). |
-| `kind` | yes | One of `endpoint`, `workflow`, `job`, `plugin`, `system`. |
+| `kind` | yes | One of `endpoint`, `workflow`, `job`, `plugin`, `system`, `module`. |
 | `system` | yes | Free-text label for the conceptual product grouping (`bevy-survivor`). Not a path component. |
 | `method` | no | HTTP verb; `kind: endpoint` only. |
 | `base` | no | Directory that relative `source.paths` and `@ path` entries resolve against. |
@@ -203,7 +226,14 @@ An identifier with optional generic arguments. A type must resolve to one of:
 - **opaque atoms** — `Uuid`, `Money`, `DateTime`, `Entity`, `Duration`, `Vec2`,
   `Vec3`, `Vec4`, `Quat`, `Color`, `Timer`, `Rect`
 - **containers** — `Option<T>`, `Vec<T>`, `Map<K,V>`, `Queue<T>`, `Stream<T>`,
-  `Handle<T>`
+  `Handle<T>`, `Future<T>`, `Result<T,E>`, `Either<L,R>`, `Tuple<A,B>`
+
+  The last four exist for `## api` signatures
+  ([§11](#11-the-module-dialect-kind-module)): a module spec is read next to the
+  code it describes, so a fallible or effectful return is written the way the
+  code writes it — `Result<Wave, TableError>` — rather than normalized down to
+  `Wave` plus an `on error` bullet. A tuple is spelled as the container
+  `Tuple<A, B>`, not `(A, B)`, so the type grammar stays `Ident<args…>`.
 - a struct/enum/marker defined or imported in this file
 
 Anything else is an `undefined-type` error.
@@ -216,7 +246,9 @@ out: Tile
 ```
 
 Each is a single type expression. **Illegal in the Bevy dialect** — a Bevy unit's
-interface is its access block, not an input and an output.
+interface is its access block, not an input and an output — and **illegal in a
+`kind: module`**, whose inputs and outputs are its functions' parameters and
+return types ([§11](#11-the-module-dialect-kind-module)).
 
 ### 4.5 Importing types (`use`)
 
@@ -418,9 +450,36 @@ Use literal `X` / `Y` / `N` in prose for abstract quantities and bind them here.
 
 ### 5.4 Cross-spec references (`@ spec`)
 
-A module line, **system entry**, behavior step, or invariant may end with
-`@ spec <unit>` — "more specification under that unit". At most one per line,
-always the last annotation (after any `@ path`). Unresolved target → warning.
+A module line, **system entry**, behavior step, `## api` entry, or invariant may
+end with `@ spec <unit>` — "more specification under that unit". At most one per
+line, always the last annotation (after any `@ path`).
+
+A ref may name a **member** of the target: `@ spec <unit>::<function>`, or
+`@ spec <unit>::<Type>::<method>` for a method — one `## api` entry of a
+`kind: module` spec ([§11](#11-the-module-dialect-kind-module)). Unit segments
+follow the header ident rule ([§2](#2-header)); member segments are
+`[A-Za-z_][A-Za-z0-9_]*` and there are at most two of them. A malformed ref is
+an error.
+
+`::` rather than `.` or `#`: `.` already means field access in behavior prose
+([§5.2](#52-cross-references)) and is a legal ident character, and `::` extends
+to `Type::method` without a second rule. A `use` line names a spec file and
+imports **types** out of it, so a member on its ref is a `malformed-import`
+error ([§4.5](#45-importing-types-use)).
+
+**Two severities, because the two failures differ.** A well-formed ref whose
+target **file** does not exist is a warning (`unresolved-spec-ref`) — the target
+spec may be planned but not written yet. A ref whose file *does* exist but
+defines no such member is an **error** (`unknown-spec-member`): the file is right
+there to check the name against, so the name is simply wrong. That is what makes
+a member ref worth navigating by — and it means whatever writes an overview's
+member refs must write the module specs in the same pass.
+
+The LSP completes members after `@ spec <unit>::`, jumps to the named function's
+own line on goto-definition, hovers a member ref as that one entry (signature
+plus bullets), and answers find-references from an `## api` entry's own name with
+"who calls this function?". A member request matches only the refs naming that
+member; a unit request matches every ref into the unit.
 
 ## 6. `## invariants`
 
@@ -438,6 +497,7 @@ idempotency claim, a component-exclusivity rule.
 | `job` | One scheduled job |
 | `plugin` | One Bevy `Plugin` — what it registers, and in what order |
 | `system` | One Bevy system, split out of a plugin |
+| `module` | One module's public surface, function by function ([§11](#11-the-module-dialect-kind-module)) |
 
 ### 7.2 Which sections each kind takes
 
@@ -446,6 +506,7 @@ idempotency claim, a component-exclusivity rule.
 | `endpoint` / `workflow` / `job` | `modules`, `data`, `behavior`, `invariants` | — | every Bevy section |
 | `plugin` | `systems`, `behavior`, `invariants` | `modules`, `data`, `components`, `resources`, `events` | `access` |
 | `system` | `access`, `behavior`, `invariants` | `modules`, `data`, `components`, `resources`, `events` | `systems` |
+| `module` | `modules`, `data`, `api`, `invariants` | — | `behavior` and every Bevy section |
 
 A required section that is absent is a `missing-section` error. A grammatical
 section that is wrong for the kind is a `section-not-allowed-for-kind` error —
@@ -642,7 +703,10 @@ line in `## data` (a marker is a component; see [§4.6](#46--data--in-the-bevy-d
 **Behavior:** `dangling-else`, `dangling-on-error`, `malformed-binding`.
 
 **Cross-spec:** `malformed-spec-ref`, `duplicate-spec-ref`, `unresolved-spec-ref`
-(warn).
+(warn), `unknown-spec-member` (error, filesystem-aware only).
+
+**Api entries** ([§11](#11-the-module-dialect-kind-module)):
+`malformed-api-entry`, `duplicate-api-entry`, `empty-api` (warn).
 
 **Source linkage:** `unresolved-source-path` (warn).
 
@@ -731,7 +795,11 @@ The rules that make the convention worth having:
 
 Annotations apply in **every** section, and to every line shape: a removed
 struct field, an added component, a new `## systems` entry with its whole access
-block, a changed behavior step, an added invariant. There is no second spelling
+block, a changed behavior step, an added invariant. In `## api`
+([§11](#11-the-module-dialect-kind-module)) a marker on a `fn` line covers the
+**whole entry**, its nested bullets included, the way it covers a control-flow
+step's subtree — so a changed signature is a `# -` of the old `fn` line plus a
+`# +` of the new one with its bullets beneath. There is no second spelling
 for any of them — including a `@ <path>` type body, whose v2.2 inline `+` / `-`
 markers §10 supersedes ([§4.7](#47-referencing-a-rust-type--path)).
 
@@ -742,7 +810,132 @@ exactly what the markers say and never edits the spec; `/hmml-validate` expects
 `# +` claims to be absent from the code before implementation and `# -`
 behaviour to be gone from it after.
 
-## 11. Worked examples
+## 11. The module dialect (`kind: module`)
+
+The behavioural kinds describe a **flow**: a handful of collaborators and a
+dozen steps. A `kind: module` spec is the layer underneath — **one module's
+public surface**, function by function, linked from the overview's `## modules`
+line.
+
+```
+system: bevy-survivor
+unit: wave-table
+kind: module
+source:
+  repo: bevy_survivor
+  paths:
+    - src/waves/table.rs
+
+## modules
+WaveRng — draws the spawn offsets @ src/waves/rng.rs @ spec wave-rng
+
+## data
+use wave-rng: WaveRng
+struct WaveEntry {
+  index: u32,
+  count: u32,
+}
+
+## api
+fn entry_for(index: u32) -> Option<WaveEntry> @ src/waves/table.rs:31
+  - look the index up in the table
+  - if the index is past the last authored wave:
+    - answer nothing, and let the caller scale the last entry
+
+fn WaveEntry::offsets(rng: WaveRng) -> Vec<Vec2>
+  - for each spawn slot in the entry:
+    - draw a jitter for it @ spec wave-rng::WaveRng::next_u32
+    - place the slot on the entry's pattern, displaced by the jitter
+
+## invariants
+- entry_for never answers an entry whose index differs from the one asked for
+```
+
+### 11.1 Sections
+
+| Section | Holds |
+|---|---|
+| `## modules` | the collaborators this module **calls**, each linkable with `@ spec` |
+| `## data` | the public types this module **owns** — no `in:` / `out:` ([§4.4](#44-in--out)) |
+| `## api` | one entry per public function, its behaviour nested underneath |
+| `## invariants` | properties of the module, as [§6](#6--invariants) |
+
+`## api` sits in the slot a behavioural kind writes `## behavior` in. Writing the
+other dialect's spelling — `## behavior` on a module, `## api` on anything else —
+is a `section-not-allowed-for-kind` error: the two sections hold structurally
+different content, so reinterpreting one as the other would silently discard it.
+
+A module is **not** a Bevy kind. It declares no components, resources, events,
+systems or access block; those describe what the World holds and who touches it,
+and a module is a body of code with an API.
+
+### 11.2 The `fn` entry
+
+```
+fn [<Type>::]<name>(<param>: <Type>, …) [-> <Type>] [@ <path>] [@ spec <ref>]
+  - <bullet>
+  - <bullet>
+```
+
+- **`fn`** opens the line at **column 0**. Both halves of that are checked: a
+  bullet not nested under an entry is a `malformed-api-entry` error (every bullet
+  in `## api` describes some function), and so is a `fn` line indented *under*
+  another entry — otherwise the step parser takes it for a bullet and the
+  function vanishes from the api with nothing to say so.
+- **`<name>`** is snake_case; a leading **`<Type>::`** makes the entry a
+  **method** on a type this module's `## data` declares or imports. The module
+  itself is never the receiver — a function of the module is a plain `fn`,
+  because the file *is* the module. An entry is addressed by its `name`, or
+  `Type::name` for a method ([§5.4](#54-cross-spec-references--spec)), and those
+  must be unique within the file (`duplicate-api-entry`).
+- **Parameters** are `name: Type`, comma-separated. **`-> Type`** is optional (a
+  function that returns nothing omits it). Every type resolves per
+  [§4.3](#43-type-expressions).
+- **`@ path`** (optional) locates the function in the source, repo-relative and
+  optionally `:line`, exactly as a module's `@ path` does ([§3](#3--modules)) —
+  so goto-definition reaches the real function.
+- **`@ spec <ref>`** stays the last annotation on the line.
+- **The bullets** are ordinary steps ([§5](#5--behavior)): the same closed
+  control-flow set, the same 2-space nesting, the same trailing `@ spec` refs. A
+  bullet that calls a collaborator carries `@ spec <unit>::<function>` at the
+  step where the call happens, which is what makes the call graph readable from
+  the spec.
+- An `## api` section with no entries is a warning (`empty-api`): a module spec's
+  whole job is to carry the public surface.
+
+### 11.3 What a module spec deliberately leaves out
+
+- **Private functions.** The bullets describe what the *public* functions do; if
+  the implementation wants a private helper, `/hmml-translate` factors one out.
+  So "the code resembles the spec" is a claim about behaviour and about the
+  public surface — **not** that every bullet is a statement or every nested tree
+  its own function. Conformance checking tolerates helper extraction rather than
+  reporting it as drift.
+- **Module state and injected dependencies.** `## modules` names the
+  collaborators; how they are held is implementation.
+- **`where:` bindings.** They belong to `## behavior`, so a threshold inside an
+  `## api` bullet is not bindable.
+- **Completeness is not lintable.** "Every public function is present" is an
+  authoring rule ([§13](#13-authoring-checklist)), not a parser check — the
+  parser cannot see the code. A public function missing from the spec is reported
+  by `/hmml-validate` as a warning.
+
+### 11.4 Which module gets a spec
+
+The ones the overview's `## modules` section lists **that have a public surface**
+— a module spec is 1:1 with a behavioural collaborator, not with a file, type, or
+directory. That keeps the overview's `@ spec` module-line ref as the single spine
+between the two layers, and `/hmml-extract` writes both in one pass so a member
+ref never dangles ([§5.4](#54-cross-spec-references--spec)).
+
+A collaborator that exposes nothing gets **no** spec and no `@ spec` ref: there is
+nothing for `## api` to hold, and a spec written anyway would be an empty one
+(`empty-api`). That is the normal case for a binary crate, where every function
+is private to it, and for a collaborator that is one private helper of the unit —
+the implementation §11.3 leaves out, one level up. It still belongs in
+`## modules`, because it still does work in the behaviour.
+
+## 12. Worked examples
 
 The canonical, always-parsing examples are the parser's fixtures — they are
 compiled into the test suite, so they cannot drift:
@@ -755,13 +948,21 @@ compiled into the test suite, so they cannot drift:
 | `mml-parser/tests/fixtures/examples/mesh-terrain-chunks.hmml` | `kind: workflow` — `Queue`/`Stream` in/out |
 | `mml-parser/tests/fixtures/examples/shared-data-imports.hmml` | `use` type imports |
 | `mml-parser/tests/fixtures/examples/cross-spec-refs.hmml` | `@ spec` annotations |
+| `mml-parser/tests/fixtures/examples/wave-table.hmml` | `kind: module` — `## api`, a method entry, a member ref into a second module spec |
+| `mml-parser/tests/fixtures/examples/wave-rng.hmml` | `kind: module` — the target of that member ref, entries carrying `@ path` |
 
-## 12. Authoring checklist
+## 13. Authoring checklist
 
 - Filename equals the `unit:` header value, plus `.hmml`.
 - `kind:` set, and only that kind's sections present — in canonical order.
 - Indentation is 2 spaces, no tabs.
 - **Classic kinds:** every type in a field / `in:` / `out:` resolves.
+- **`kind: module`:** `## api` lists **every** public function, standalone or
+  method; each entry is a real signature whose types resolve; a bullet that calls
+  a collaborator carries `@ spec <unit>::<function>`; `## data` holds the public
+  types this module owns, and the units that use them `use`-import from here
+  rather than redeclaring them; no `in:` / `out:`, no private functions, no
+  module state — those are implementation.
 - **Bevy kinds:** every access-list name resolves to a declared, imported, or
   built-in item, in a role that fits its key; every system has a `schedule:`.
   Shapes no system accesses directly live in `## data`, not in a world section.

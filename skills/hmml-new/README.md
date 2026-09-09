@@ -5,7 +5,7 @@
 | Type         | skill                                                                                                                                                           |
 | Install path | `~/.claude-hobby/commands/hmml-new.md`                                                                                                                                             |
 | Owner        | @julianbieber                                                                                                                                                   |
-| Dependencies | HMML grammar (`lsps/hobby-mml-lsp/grammar.md`), notes repo `~/fun_repos/hobby-mimisbrunnr`, `template{,-plugin,-system}.hmml` (skill assets), `hmml-translate` |
+| Dependencies | HMML grammar (`lsps/hobby-mml-lsp/grammar.md`), notes repo `~/fun_repos/hobby-mimisbrunnr`, `template{,-plugin,-system,-module}.hmml` (skill assets), `hmml-translate` |
 | Status       | experimental                                                                                                                                                    |
 
 ## Description
@@ -20,7 +20,7 @@ sibling `hmml-extract` is the "adjusting an existing feature" entry (code
 Two paths, chosen from what I give it:
 
 - **Blank template** — I want to write the spec by hand; the skill drops a
-  correctly-structured empty spec (from the skill asset matching the `kind`: `template.hmml`, `template-plugin.hmml`, or `template-system.hmml`) at the
+  correctly-structured empty spec (from the skill asset matching the `kind`: `template.hmml`, `template-plugin.hmml`, `template-system.hmml`, or `template-module.hmml`) at the
   right path so I start well-formed.
 - **Draft from a rough idea** — I describe the feature in a sentence or two and
   the skill drafts a first-pass `.hmml` (best-guess modules / data / behavior /

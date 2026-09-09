@@ -32,6 +32,7 @@ task, and the main checkout it derives from is `~/fun_repos/<project>`.
 | Done/blocked state | same dir, `task.json` (tracked — `{ done, blocked }`, nothing else) |
 | PRs opened | same dir, `prs.json` (written by the track-pr hook) |
 | HMML specs | same dir, `<unit>.hmml` |
+| Business context | same dir, `business-context.md` (my own words, recorded verbatim) |
 
 Derive topic and task from the path: they are the **second and third** components
 under `~/fun_worktrees`, with the project first.

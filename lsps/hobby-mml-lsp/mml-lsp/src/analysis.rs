@@ -41,6 +41,7 @@ pub const SECTION_HEADERS: &[&str] = &[
     "## events",
     "## systems",
     "## access",
+    "## api",
     "## behavior",
     "## invariants",
 ];
@@ -154,6 +155,8 @@ pub enum SectionKind {
     Systems,
     Access,
     Behavior,
+    /// `## api` — the third section of a `kind: module` spec (grammar §11).
+    Api,
     Invariants,
     Unknown,
 }
@@ -181,6 +184,7 @@ fn section_kind_from_name(name: &str) -> SectionKind {
         "systems" => SectionKind::Systems,
         "access" => SectionKind::Access,
         "behavior" => SectionKind::Behavior,
+        "api" => SectionKind::Api,
         "invariants" => SectionKind::Invariants,
         _ => SectionKind::Unknown,
     }
@@ -299,11 +303,27 @@ pub struct SystemSym {
     pub path: Option<Spanned<String>>,
 }
 
+/// One `## api` entry, as the editor addresses it (grammar §11).
+#[derive(Debug, Clone)]
+pub struct ApiSym {
+    /// How a `@ spec unit::member` ref names it: `spawn_wave`, or
+    /// `Wave::advance`.
+    pub member: String,
+    /// The signature as written, for hover and completion detail.
+    pub signature: String,
+    /// Span of the entry's name, receiver included — the goto-definition
+    /// target, and what a cursor must sit in to be on this function.
+    pub name_span: Span,
+    /// Span of the whole entry, signature line through its last bullet.
+    pub def_span: Span,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Symbols {
     pub modules: Vec<ModuleSym>,
     pub types: Vec<TypeSym>,
     pub systems: Vec<SystemSym>,
+    pub api: Vec<ApiSym>,
 }
 
 impl Symbols {
@@ -363,10 +383,22 @@ pub fn symbols(doc: &Document) -> Symbols {
         })
         .collect();
 
+    let api = doc
+        .api
+        .iter()
+        .map(|e| ApiSym {
+            member: e.member(),
+            signature: e.signature(),
+            name_span: e.member_span(),
+            def_span: e.span,
+        })
+        .collect();
+
     Symbols {
         modules,
         types,
         systems,
+        api,
     }
 }
 
@@ -380,6 +412,15 @@ pub fn type_named<'a>(s: &'a Symbols, name: &str) -> Option<&'a TypeSym> {
 
 pub fn system_named<'a>(s: &'a Symbols, name: &str) -> Option<&'a SystemSym> {
     s.systems.iter().find(|sy| sy.name == name)
+}
+
+/// The `## api` entry under a cursor at `offset`: the one whose signature line
+/// carries it. Matches on the name span, so a cursor in the bullets below does
+/// not count as being "on" the function.
+pub fn api_entry_at(s: &Symbols, offset: usize) -> Option<&ApiSym> {
+    s.api
+        .iter()
+        .find(|e| offset >= e.name_span.start && offset <= e.name_span.end)
 }
 
 // ---- access blocks (grammar §8.3) -------------------------------------------
@@ -508,7 +549,7 @@ fn in_spec_ref(prefix: &str) -> bool {
     };
     partial
         .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/'))
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/' | ':'))
 }
 
 // ---- completion context ----------------------------------------------------
@@ -587,6 +628,11 @@ pub enum CompletionContext {
     TypePath,
     /// After `@ spec ` on a module/behavior/invariant line — offer spec refs.
     SpecRef,
+    /// After `@ spec <unit>::` — offer the `## api` members of that unit
+    /// (grammar §5.4).
+    SpecMember,
+    /// Start of an `## api` line — offer the `fn` entry form (grammar §11).
+    ApiEntry,
     /// Start of a behavior bullet — offer control-flow keywords + names.
     BehaviorKeyword,
     /// Mid-prose in behavior/invariants — offer module + type names.
@@ -699,38 +745,112 @@ pub fn completion_context(text: &str, offset: usize) -> CompletionContext {
                 None => CompletionContext::AccessKey,
             }
         }
-        section @ (SectionKind::Behavior | SectionKind::Invariants) => {
+        SectionKind::Api => {
             if in_spec_ref(prefix) {
-                return CompletionContext::SpecRef;
+                return spec_ref_context(prefix);
             }
-            let body = trimmed
-                .strip_prefix("- ")
-                .or_else(|| trimmed.strip_prefix('-'))
-                .unwrap_or(trimmed);
-            let body_start = line.len() - body.len(); // leading ws + dash bytes
-            let cursor_in_line = offset - line_start;
-            if section == SectionKind::Invariants {
-                return CompletionContext::BehaviorProse;
+            // A signature line takes types inside an open parameter list or
+            // after the `->`; anything indented under it is an ordinary bullet.
+            let indented = line.starts_with(' ');
+            if !indented && (trimmed.starts_with("fn") || trimmed.is_empty()) {
+                let in_params = prefix
+                    .rfind('(')
+                    .is_some_and(|p| !prefix[p..].contains(')'));
+                if in_params || prefix.trim_end().ends_with("->") {
+                    return CompletionContext::Type;
+                }
+                return CompletionContext::ApiEntry;
             }
-            if cursor_in_line <= body_start {
-                return CompletionContext::BehaviorKeyword;
-            }
-            let body_prefix = &line[body_start..cursor_in_line];
-            if body_prefix.contains(' ') {
-                CompletionContext::BehaviorProse
+            if indented {
+                behavior_body_context(line, offset - line_start)
             } else {
-                CompletionContext::BehaviorKeyword
+                CompletionContext::ApiEntry
             }
         }
-        SectionKind::Modules if in_spec_ref(prefix) => CompletionContext::SpecRef,
+        SectionKind::Behavior => {
+            if in_spec_ref(prefix) {
+                return spec_ref_context(prefix);
+            }
+            behavior_body_context(line, offset - line_start)
+        }
+        SectionKind::Invariants => {
+            if in_spec_ref(prefix) {
+                return spec_ref_context(prefix);
+            }
+            CompletionContext::BehaviorProse
+        }
+        SectionKind::Modules if in_spec_ref(prefix) => spec_ref_context(prefix),
         _ => CompletionContext::Other,
     }
 }
 
+/// Bullet-line classification, shared by `## behavior` and the bullets nested
+/// under an `## api` entry (grammar §11): the control-flow slot at the start of
+/// the bullet, prose once a word has been typed.
+fn behavior_body_context(line: &str, cursor_in_line: usize) -> CompletionContext {
+    let trimmed = line.trim_start();
+    let body = trimmed
+        .strip_prefix("- ")
+        .or_else(|| trimmed.strip_prefix('-'))
+        .unwrap_or(trimmed);
+    let body_start = line.len() - body.len(); // leading ws + dash bytes
+    if cursor_in_line <= body_start {
+        return CompletionContext::BehaviorKeyword;
+    }
+    let body_prefix = &line[body_start..cursor_in_line.min(line.len())];
+    if body_prefix.contains(' ') {
+        CompletionContext::BehaviorProse
+    } else {
+        CompletionContext::BehaviorKeyword
+    }
+}
+
+/// Whether the `@ spec` ref being typed has already reached its `::member`
+/// part, which is completed from the target spec rather than from the
+/// directory.
+fn spec_ref_context(prefix: &str) -> CompletionContext {
+    match spec_ref_partial(prefix) {
+        Some(partial) if partial.contains(mml_parser::ast::MEMBER_SEP) => {
+            CompletionContext::SpecMember
+        }
+        _ => CompletionContext::SpecRef,
+    }
+}
+
+/// The partial `@ spec` ref on the line before the cursor — everything after
+/// the marker, so `wave-table::sp` while a member is being typed.
+pub fn spec_ref_partial(prefix: &str) -> Option<&str> {
+    let pos = prefix.rfind("@ spec")?;
+    if pos > 0 && prefix.as_bytes()[pos - 1] != b' ' {
+        return None;
+    }
+    prefix[pos + "@ spec".len()..].strip_prefix(' ')
+}
+
+/// The partial ref at `offset` in the whole document text — the completion
+/// handler works from `(text, offset)` rather than from a line prefix.
+pub fn spec_ref_partial_at(text: &str, offset: usize) -> Option<&str> {
+    let offset = offset.min(text.len());
+    let line_start = text[..offset].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    spec_ref_partial(&text[line_start..offset])
+}
+
 // ---- mentions (references) -------------------------------------------------
 
-/// All whole-word occurrences of `name` in the behavior step tree, as absolute
-/// spans. Whole-word so `Proxy` does not match inside `ProxyPool`.
+/// All whole-word occurrences of `name` across every step tree in the document
+/// — `## behavior`, plus the bullets of each `## api` entry (grammar §11).
+///
+/// Whole-word so `Proxy` does not match inside `ProxyPool`.
+pub fn find_mentions_in_doc(doc: &Document, name: &str) -> Vec<Span> {
+    let mut out = find_mentions(&doc.behavior, name);
+    for entry in &doc.api {
+        out.extend(find_mentions(&entry.steps, name));
+    }
+    out.sort_by_key(|s| s.start);
+    out
+}
+
+/// All whole-word occurrences of `name` in one step tree, as absolute spans.
 pub fn find_mentions(steps: &[Step], name: &str) -> Vec<Span> {
     let mut out = Vec::new();
     collect_mentions(steps, name, &mut out);

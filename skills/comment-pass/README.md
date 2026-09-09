@@ -5,7 +5,7 @@
 | Type         | skill                                                   |
 | Install path | `~/.claude-hobby/commands/comment-pass.md`              |
 | Owner        | @julianbieber                                           |
-| Dependencies | `scripts/comment-candidates.py`, python3                |
+| Dependencies | `scripts/comment-candidates.py`, python3, `business-context.md` (optional) |
 | Status       | experimental                                            |
 | Supersedes   | `comment-review`, `explain-back`'s comment pass         |
 
@@ -28,7 +28,26 @@ decides both.
 | 0 | run `comment-candidates.py`, report counts, set vendored crates to report-only |
 | 1 | resolve the five mechanical categories — delete, relocate, or write |
 | 2 | read the legal comments against the code; rewrite the wrong ones |
-| 3 | report, including shape-decision notes pulled out for the commit message |
+| 3 | report, including shape-decision notes for the commit message and the context gaps |
+
+## Two sources for a sentence, and no third
+
+The pass may assert a reason it **verified in the code**, or one it **read in
+the recorded business context** — the `business-context.md` the `/task:build`
+pipeline writes at GATE C, in my own words, before the delta was designed. A
+site that needs a *why* neither supplies is reported as a **context gap** with
+its `file:line`, never filled in.
+
+That is what makes the pass able to write a contract at all. Most of what a
+caller needs is in the code; the part that is not — which rule sets the bound,
+what an upstream system guarantees, why the obvious shape was rejected — is
+something only I know, and asking for it after the code exists is asking me to
+judge code I did not write. So it is collected first and matched here.
+
+A gap is closed by extending the context, which is `/task:build context`. It is
+never closed by the pass writing the sentence itself: a confident, plausible,
+wrong comment is load-bearing for the next reader and invisible, where a missing
+one is merely missing.
 
 ## The detector
 
@@ -62,6 +81,7 @@ Installed by `just install-skills` from `~/fun_repos/hobby-tooling`.
 /comment-pass main             # diff against an explicit base
 /comment-pass tools/hdash      # sweep a path
 /comment-pass . --report-only  # count without changing anything
+/comment-pass --no-context     # no recorded context exists, and that is deliberate
 ```
 
 ## Known Limitations

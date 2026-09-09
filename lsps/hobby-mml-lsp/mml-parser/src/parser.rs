@@ -44,6 +44,7 @@ pub fn parse(src: &str) -> Document {
     let mut systems: Vec<SystemDef> = Vec::new();
     let mut access: Option<AccessBlock> = None;
     let mut behavior = Vec::new();
+    let mut api: Vec<ApiEntry> = Vec::new();
     let mut bindings = Vec::new();
     let mut invariants = Vec::new();
 
@@ -119,7 +120,7 @@ pub fn parse(src: &str) -> Document {
                 seen[oi] = true;
                 match name {
                     "modules" => modules.extend(p.parse_modules(body)),
-                    "data" => p.parse_data(body, &mut data, kind.is_some_and(Kind::is_bevy)),
+                    "data" => p.parse_data(body, &mut data, kind),
                     "components" => p.parse_world(body, &mut components),
                     "resources" => p.parse_world(body, &mut resources),
                     "events" => p.parse_world(body, &mut events),
@@ -132,6 +133,18 @@ pub fn parse(src: &str) -> Document {
                         let (steps, binds) = p.parse_behavior(body);
                         behavior.extend(steps);
                         bindings.extend(binds);
+                    }
+                    "api" => {
+                        let entries = p.parse_api(body);
+                        if entries.is_empty() {
+                            p.push(Diagnostic::warning(
+                                Span::new(s, e),
+                                code::EMPTY_API,
+                                "`## api` lists no functions; a module spec exists to carry its \
+                                 whole public surface (grammar §11)",
+                            ));
+                        }
+                        api.extend(entries);
                     }
                     _ => invariants.extend(p.parse_invariants(body)),
                 }
@@ -192,6 +205,7 @@ pub fn parse(src: &str) -> Document {
         systems,
         access,
         behavior,
+        api,
         bindings,
         invariants,
         diagnostics,
@@ -445,12 +459,266 @@ impl Parser {
         modules
     }
 
+    // ---- api (grammar §11) --------------------------------------------------
+
+    /// Parse a `## api` body: `fn` signature lines at column 0, each owning the
+    /// bullets indented beneath it. The bullets are ordinary steps, so
+    /// [`Self::parse_steps`] handles them — it stops at the next line back at
+    /// column 0, which is the next signature.
+    fn parse_api(&mut self, body: &[Line]) -> Vec<ApiEntry> {
+        let mut entries = Vec::new();
+        let mut i = 0;
+        while i < body.len() {
+            let line = &body[i];
+            if matches!(line.kind, LineKind::Blank | LineKind::Comment) {
+                i += 1;
+                continue;
+            }
+            if !keyword_at(line.content, "fn") {
+                let (s, e) = line.content_span();
+                self.push(Diagnostic::error(
+                    Span::new(s, e),
+                    code::MALFORMED_API_ENTRY,
+                    if line.content.starts_with('-') {
+                        "a bullet in `## api` describes one function; indent it under a `fn` entry"
+                    } else {
+                        "expected a `fn name(param: Type) -> Type` entry"
+                    },
+                ));
+                i += 1;
+                continue;
+            }
+
+            let mut entry = self.parse_api_signature(line);
+            let indent = line.indent;
+            i += 1;
+            entry.steps = self.parse_steps(body, &mut i, indent + 1);
+            self.check_nested_entries(&entry.steps);
+            let end = entry
+                .steps
+                .last()
+                .map(|s| s.span.end)
+                .unwrap_or(entry.span.end);
+            entry.span = Span::new(entry.span.start, end);
+            entries.push(entry);
+        }
+        entries
+    }
+
+    /// Flag a `fn` signature that ended up nested under another entry, where
+    /// [`Self::parse_steps`] has already taken it for a prose bullet. Left
+    /// silent it would drop a public function from the api with no diagnostic,
+    /// and the mistake would surface as an `unknown-spec-member` error in
+    /// whichever *other* spec references it.
+    fn check_nested_entries(&mut self, steps: &[Step]) {
+        for step in steps {
+            if keyword_at(step.text.value.as_str(), "fn") {
+                self.push(Diagnostic::error(
+                    step.text.span,
+                    code::MALFORMED_API_ENTRY,
+                    "a `fn` entry opens at column 0; nested here it reads as a bullet of the entry \
+                     above and is not part of the module's api (grammar §11.2)",
+                ));
+            }
+            self.check_nested_entries(&step.children);
+        }
+    }
+
+    /// Parse one `fn` signature line: `fn [Type::]name(param: Type, …)
+    /// [-> Type] [@ path] [@ spec ref]`. Always yields an entry, however
+    /// malformed — the bullets beneath it still need somewhere to attach.
+    fn parse_api_signature(&mut self, line: &Line) -> ApiEntry {
+        let c = line.content;
+        let (cs, ce) = line.content_span();
+        let kw_len = "fn".len();
+        let rest = &c[kw_len..];
+        let rest_abs = line.content_start + kw_len;
+
+        // `@ spec` is always the last annotation (§5.4), so strip it before the
+        // `@ path` split — exactly as a module line does.
+        let (rest, spec) = self.split_spec_annotation(rest, rest_abs);
+        let (sig, path) = match rest.rfind(" @ ") {
+            Some(at) => {
+                let path_str = rest[at + 3..].trim();
+                let path_abs = rest_abs + at + 3 + leading_ws(&rest[at + 3..]);
+                let path = Spanned::new(
+                    path_str.to_owned(),
+                    Span::new(path_abs, path_abs + path_str.len()),
+                );
+                (&rest[..at], Some(path))
+            }
+            None => (rest, None),
+        };
+        let sig_abs = rest_abs;
+
+        let (name_part, name_part_abs, params, ret) = match sig.find('(') {
+            None => {
+                self.push(Diagnostic::error(
+                    Span::new(cs, ce),
+                    code::MALFORMED_API_ENTRY,
+                    "expected `(` after the function name",
+                ));
+                (sig, sig_abs, Vec::new(), None)
+            }
+            Some(open) => {
+                let name_part = &sig[..open];
+                let (params_raw, params_abs, after, after_abs) = match sig.rfind(')') {
+                    Some(close) if close > open => (
+                        &sig[open + 1..close],
+                        sig_abs + open + 1,
+                        &sig[close + 1..],
+                        sig_abs + close + 1,
+                    ),
+                    _ => {
+                        self.push(Diagnostic::error(
+                            Span::new(sig_abs + open, sig_abs + sig.len()),
+                            code::MALFORMED_API_ENTRY,
+                            "unterminated parameter list; expected `)`",
+                        ));
+                        (
+                            &sig[open + 1..],
+                            sig_abs + open + 1,
+                            "",
+                            sig_abs + sig.len(),
+                        )
+                    }
+                };
+                let params = self.parse_params(params_raw, params_abs);
+                let ret = self.parse_return_type(after, after_abs);
+                (name_part, sig_abs, params, ret)
+            }
+        };
+
+        let name_trim = name_part.trim();
+        let name_lead = name_part_abs + leading_ws(name_part);
+        let (receiver, name, name_abs) = match name_trim.split_once(MEMBER_SEP) {
+            Some((recv, fname)) => {
+                let recv_span = Span::new(name_lead, name_lead + recv.len());
+                if recv.is_empty() {
+                    self.push(Diagnostic::error(
+                        recv_span,
+                        code::MALFORMED_API_ENTRY,
+                        "expected a receiver type before `::`; a function of the module itself is \
+                         written as a plain `fn`",
+                    ));
+                } else if !is_pascal(recv) {
+                    self.push(Diagnostic::warning(
+                        recv_span,
+                        code::MALFORMED_API_ENTRY,
+                        format!("receiver type `{recv}` should be PascalCase"),
+                    ));
+                }
+                (
+                    Some(Spanned::new(recv.to_owned(), recv_span)),
+                    fname,
+                    name_lead + recv.len() + MEMBER_SEP.len(),
+                )
+            }
+            None => (None, name_trim, name_lead),
+        };
+        let name_span = Span::new(name_abs, name_abs + name.len());
+        if name.is_empty() {
+            self.push(Diagnostic::error(
+                name_span,
+                code::MALFORMED_API_ENTRY,
+                "expected a function name after `fn`",
+            ));
+        } else if !is_lower_id(name) {
+            self.push(Diagnostic::warning(
+                name_span,
+                code::MALFORMED_API_ENTRY,
+                format!("function name `{name}` should be snake_case or camelCase"),
+            ));
+        }
+
+        ApiEntry {
+            receiver,
+            name: Spanned::new(name.to_owned(), name_span),
+            params,
+            ret,
+            path,
+            spec,
+            steps: Vec::new(),
+            span: Span::new(cs, ce),
+        }
+    }
+
+    /// Parse a signature's comma-separated `name: Type` parameter list.
+    fn parse_params(&mut self, raw: &str, abs: usize) -> Vec<Param> {
+        let mut params = Vec::new();
+        for (item_abs, item) in split_commas(raw, abs) {
+            let item_trim = item.trim();
+            if item_trim.is_empty() {
+                continue;
+            }
+            let item_abs = item_abs + leading_ws(item);
+            let Some(colon) = item_trim.find(':') else {
+                self.push(Diagnostic::error(
+                    Span::new(item_abs, item_abs + item_trim.len()),
+                    code::MALFORMED_API_ENTRY,
+                    format!("expected `name: Type` for parameter `{item_trim}`"),
+                ));
+                continue;
+            };
+            let pname = item_trim[..colon].trim();
+            let pname_abs = item_abs + leading_ws(&item_trim[..colon]);
+            let pname_span = Span::new(pname_abs, pname_abs + pname.len());
+            if !is_lower_id(pname) {
+                self.push(Diagnostic::error(
+                    pname_span,
+                    code::MALFORMED_API_ENTRY,
+                    format!("parameter name `{pname}` must be snake_case or camelCase"),
+                ));
+            }
+            let type_part = &item_trim[colon + 1..];
+            let type_abs = item_abs + colon + 1 + leading_ws(type_part);
+            let ty = self.parse_type_expr(type_part.trim(), type_abs);
+            let span = Span::new(pname_abs, ty.span.end);
+            params.push(Param {
+                name: Spanned::new(pname.to_owned(), pname_span),
+                ty,
+                span,
+            });
+        }
+        params
+    }
+
+    /// Parse what follows a signature's `)`: either nothing, or `-> Type`.
+    fn parse_return_type(&mut self, after: &str, abs: usize) -> Option<TypeExpr> {
+        let trimmed = after.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let Some(ty_raw) = trimmed.strip_prefix("->") else {
+            self.push(Diagnostic::error(
+                Span::new(abs + leading_ws(after), abs + after.len()),
+                code::MALFORMED_API_ENTRY,
+                format!("expected `-> Type` after the parameter list, not `{trimmed}`"),
+            ));
+            return None;
+        };
+        if ty_raw.trim_start().starts_with("->") {
+            self.push(Diagnostic::error(
+                Span::new(abs + leading_ws(after), abs + after.len()),
+                code::MALFORMED_API_ENTRY,
+                "expected one `->` before the return type",
+            ));
+            return None;
+        }
+        let ty_abs = abs + leading_ws(after) + "->".len() + leading_ws(ty_raw);
+        Some(self.parse_type_expr(ty_raw.trim(), ty_abs))
+    }
+
     // ---- data --------------------------------------------------------------
 
     /// Parse a `## data` body. `bevy` is whether the file's `kind` is a Bevy one
     /// (grammar §4.6): there the section declares role-less shapes only, so
     /// `in:`/`out:` are rejected — a Bevy unit's interface is its access block.
-    fn parse_data(&mut self, body: &[Line], data: &mut DataSection, bevy: bool) {
+    fn parse_data(&mut self, body: &[Line], data: &mut DataSection, kind: Option<Kind>) {
+        // Only the classic kinds have a slot for an input and an output type
+        // (grammar §4.4); a missing `kind:` is treated as one so a file being
+        // typed top-down does not reject its own `in:` line.
+        let io = kind.map(Kind::takes_io).unwrap_or(true);
         let mut j = 0;
         while j < body.len() {
             let line = &body[j];
@@ -468,17 +736,17 @@ impl Parser {
                 data.types.push(def);
                 j = next;
             } else if let Some(rest) = c.strip_prefix("in:") {
-                if bevy {
-                    self.reject_io_in_data(line);
-                } else {
+                if io {
                     data.input = self.parse_io_type(line, "in:", rest);
+                } else {
+                    self.reject_io_in_data(line, kind);
                 }
                 j += 1;
             } else if let Some(rest) = c.strip_prefix("out:") {
-                if bevy {
-                    self.reject_io_in_data(line);
-                } else {
+                if io {
                     data.output = self.parse_io_type(line, "out:", rest);
+                } else {
+                    self.reject_io_in_data(line, kind);
                 }
                 j += 1;
             } else if keyword_at(c, "use") {
@@ -502,10 +770,10 @@ impl Parser {
                 self.push(Diagnostic::error(
                     Span::new(s, e),
                     code::MALFORMED_STRUCT,
-                    if bevy {
-                        "expected a `struct`/`enum` definition or a `use` import"
-                    } else {
+                    if io {
                         "expected a `struct`/`enum` definition, a `use` import, or an `in:`/`out:` line"
+                    } else {
+                        "expected a `struct`/`enum` definition or a `use` import"
                     },
                 ));
                 j += 1;
@@ -513,15 +781,21 @@ impl Parser {
         }
     }
 
-    /// The `in:`/`out:` rejection for a Bevy `## data` section, worded like the
-    /// world sections' (grammar §4.6, §8.1).
-    fn reject_io_in_data(&mut self, line: &Line) {
+    /// The `in:`/`out:` rejection for a `## data` section whose kind has no
+    /// input and output slot — a Bevy kind (grammar §4.6, §8.1) or a module
+    /// (§11). The message names what carries the interface instead.
+    fn reject_io_in_data(&mut self, line: &Line, kind: Option<Kind>) {
         let (s, e) = line.content_span();
         self.push(Diagnostic::error(
             Span::new(s, e),
             code::MALFORMED_STRUCT,
-            "`in:`/`out:` have no meaning in the Bevy dialect; a plugin or system's interface is \
-             its access block, not an input and output type",
+            if kind == Some(Kind::Module) {
+                "`in:`/`out:` have no meaning in a module spec; a module's inputs and outputs are \
+                 its functions' parameters and return types"
+            } else {
+                "`in:`/`out:` have no meaning in the Bevy dialect; a plugin or system's interface \
+                 is its access block, not an input and output type"
+            },
         ));
     }
 
@@ -993,7 +1267,10 @@ impl Parser {
         let rest_abs = line.content_start + kw_len;
         let (cs, ce) = line.content_span();
 
-        let (had_colon, ref_raw, ref_abs, types_raw, types_abs) = match rest.find(':') {
+        // The separating colon is the first `:` that is not part of a `::`, so a
+        // ref carrying a member (grammar §5.4) reaches validation whole rather
+        // than being split down the middle of the separator.
+        let (had_colon, ref_raw, ref_abs, types_raw, types_abs) = match find_path_colon(rest) {
             Some(colon) => (
                 true,
                 &rest[..colon],

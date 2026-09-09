@@ -9,6 +9,12 @@ no code yet — so I can edit it into the shape I want before
 entry to the HMML loop (its sibling `hmml-extract` is the "adjusting an
 existing feature" entry: it goes code → `.hmml`; this skill goes idea → `.hmml`).
 
+It scaffolds both dialects: the **behavioural** kinds — `endpoint` / `workflow`
+/ `job` / `plugin` / `system` — and the **detail** kind, `module` (grammar §11):
+one module's public surface, `## api` in place of `## behavior`. Usually the
+module specs come from `/hmml-extract`, which writes a unit's alongside its
+overview; scaffold one here when the module is as new as the unit.
+
 There are two paths, and you pick from what I give you:
 
 - **Blank template** — I want to write the spec by hand. Your job is minimal:
@@ -65,9 +71,10 @@ that is where the shapes with **no** ECS role go (grammar §4.6).
      (`reload-shader-batch`, `prune-stale-chunk-cache`). This is the
      filename (`<unit>.hmml`), so it must be unique within the task dir.
    - `kind` — exactly one of `endpoint` | `workflow` | `job` | `plugin` |
-     `system`. A Bevy feature is a `plugin`; a single system worth its own file
-     is a `system`. When I describe a game feature and say nothing about the
-     shape, assume `plugin`.
+     `system` | `module`. A Bevy feature is a `plugin`; a single system worth its
+     own file is a `system`; a plain-Rust helper described by what it should
+     *expose* — a table, a generator, a solver — is a `module`. When I describe a
+     game feature and say nothing about the shape, assume `plugin`.
    - `system` — optional free-text label for the conceptual product grouping
      (e.g. `bevy-survivor`, `terrain-erosion`). It is **not** a path component and
      no longer needs to be kebab-case; omit it if there is nothing useful to
@@ -92,6 +99,7 @@ that is where the shapes with **no** ECS role go (grammar §4.6).
    | `endpoint` / `workflow` / `job` | `~/fun_repos/hobby-tooling/skills/hmml-new/template.hmml` |
    | `plugin` | `~/fun_repos/hobby-tooling/skills/hmml-new/template-plugin.hmml` |
    | `system` | `~/fun_repos/hobby-tooling/skills/hmml-new/template-system.hmml` |
+   | `module` | `~/fun_repos/hobby-tooling/skills/hmml-new/template-module.hmml` |
 
    Copy it to `{topic}/{task}/<unit>.hmml`, then replace only the placeholder
    header values (`my-system` / `my-unit` / the sample `kind`) with the real
@@ -186,8 +194,17 @@ that is where the shapes with **no** ECS role go (grammar §4.6).
 7. **Sanity-check the structure.** Confirm: header has `unit`/`kind` (kind in
    the closed set, `system` optional) and the filename equals `<unit>.hmml`; the
    four `##` sections are present **in order** (`modules`, `data`, `behavior`,
-   `invariants`); indentation is uniform 2-space; behavior control flow uses
-   only the closed keyword set; every `## data` type resolves.
+   `invariants` — or `api` in place of `behavior` for a `kind: module`);
+   indentation is uniform 2-space; behavior control flow uses only the closed
+   keyword set; every `## data` type resolves.
+
+   **A member ref needs its module spec in the same run.** If the draft's steps
+   carry `@ spec <unit>::<function>` refs (grammar §11), a target spec that does
+   not exist yet makes the draft fail to lint — a missing member is an *error*,
+   not a warning. So either scaffold each referenced module spec too (from
+   `template-module.hmml`, with the `## api` entries the refs name), or drop
+   back to a plain `@ spec <unit>` ref and let `/hmml-extract` fill the detail in
+   once the code exists. Never leave a draft whose refs cannot resolve.
 
 8. **Write, lint, stop.** Write to
    `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/<unit>.hmml`,
@@ -212,8 +229,10 @@ that is where the shapes with **no** ECS role go (grammar §4.6).
     `components`, `resources`, `events` optional; no `access`.
   - `system` — `access`, `behavior`, `invariants` required; `modules`, `data`,
     `components`, `resources`, `events` optional; no `systems`.
+  - `module` — exactly `modules`, `data`, `api`, `invariants`; no `behavior`,
+    no Bevy section.
 - Header keys: `unit` (req, identifier), `kind` (req: `endpoint`|`workflow`|
-  `job`|`plugin`|`system`), `system` (opt: free-text label, not a path
+  `job`|`plugin`|`system`|`module`), `system` (opt: free-text label, not a path
   component), `source` (opt: `repo` + `paths` list).
 - `#` at column 0 is a comment; `##` at column 0 is always a section header.
 - Indent = spaces only, 2 spaces per nesting level.
@@ -221,7 +240,8 @@ that is where the shapes with **no** ECS role go (grammar §4.6).
 - `## data`: `struct Name { field: Type, ... }`, `enum Name { Variant, ... }`
   (unit variants, no payloads), then `in: <Type>` / `out: <Type>`. Types:
   primitives, `Uuid`/`Money`/`DateTime`, `Option<T>`/`Vec<T>`/`Map<K,V>`/
-  `Queue<T>`/`Stream<T>`, or a defined struct/enum. Undefined type = hard error.
+  `Queue<T>`/`Stream<T>`/`Handle<T>`/`Future<T>`/`Result<T,E>`/`Either<L,R>`/
+  `Tuple<A,B>`, or a defined struct/enum. Undefined type = hard error.
 - Type imports (grammar §4.5): `## data` may start with `use unit: Type, …`
   lines that bring a data model defined by another unit into scope. The target
   is a bare `<unit>` resolving to a sibling `<unit>.hmml` in the same task dir.
@@ -243,10 +263,24 @@ that is where the shapes with **no** ECS role go (grammar §4.6).
   nested); everything else prose; declared names cross-link.
 - `## invariants`: flat `-` bullets, each a checkable claim.
 - Cross-spec refs (grammar §5.4): a module line, **system entry**, behavior step,
-  or invariant may end with `@ spec <unit>` — "more specification under" that
-  unit's `.hmml`. At most one per line, always the last annotation (after an
-  `@ path`); the target is a bare `<unit>` resolving to a sibling `<unit>.hmml` in
-  the same task dir. Unresolved target = warning, not error.
+  `## api` entry, or invariant may end with `@ spec <unit>` — "more specification
+  under" that unit's `.hmml` — or `@ spec <unit>::<function>` /
+  `@ spec <unit>::<Type>::<method>` naming one `## api` entry of a module spec.
+  At most one per line, always the last annotation (after an `@ path`); the
+  target is a bare `<unit>` resolving to a sibling `<unit>.hmml` in the same task
+  dir. A missing target file = warning; a member the target file does not define
+  = **error**.
+
+**Detail dialect (grammar §11):**
+
+- `kind: module` writes `## api` where every other kind writes `## behavior`;
+  writing the other spelling is a `section-not-allowed-for-kind` error.
+- Entries are `fn [Type::]name(param: Type, …) [-> Type] [@ path] [@ spec ref]`
+  at **column 0**, each owning the bullets indented beneath it — ordinary steps,
+  same closed keyword set.
+- `## data` holds the public types the module owns. `in:`/`out:` and `where:`
+  are errors on this kind. An empty `## api` is an `empty-api` warning.
+- Four containers exist for signatures: `Future`, `Result`, `Either`, `Tuple`.
 
 **Bevy dialect (grammar §8):**
 

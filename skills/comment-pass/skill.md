@@ -1,6 +1,6 @@
 ---
 description: Enforce the comment rule over a diff or a path — delete comments the rule disallows, relocate the ones carrying real information, and write the module headers, public doc comments and test justifications that are missing
-argument-hint: '[<base> | <path>…] [--report-only]'
+argument-hint: '[<base> | <path>…] [--context <path>] [--no-context] [--report-only]'
 allowed-tools: Bash(python3 */comment-candidates.py:*), Bash(git diff:*), Bash(git log:*), Bash(git -C:*), Bash(git rev-parse:*), Bash(git merge-base:*), Bash(pwd:*), Bash(ls:*), Read, Grep, Glob, Edit
 ---
 
@@ -31,7 +31,23 @@ fewer comments and no new ones has probably failed.
    every rewrite here widens the drift a re-sync has to reconcile. List their
    findings, change nothing, unless I say otherwise.
 
-3. `--report-only` stops after the report everywhere. It is this skill's flag —
+3. **Load the recorded business context.** `--context <path>` names it; with no
+   flag, look for `business-context.md` beside the task's notes
+   (`~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/`). It is a
+   file of `## <handle>` blocks holding the human's own words about why the
+   change is shaped as it is — collected before the code existed, by
+   `/task:build` at GATE C. Read it whole before writing anything.
+
+   It is the **only** source, besides the code itself, for a sentence you write
+   here. Everything in Stage 1 and Stage 2 that needs a reason may take it from
+   the code you verified or from a passage in this file, compressed to fit and
+   never extended, and from nowhere else.
+
+   With `--no-context`, or when the file is absent, the pass runs on verified
+   facts alone: the sites that would have needed it become gaps in the report
+   rather than sentences.
+
+4. `--report-only` stops after the report everywhere. It is this skill's flag —
    never pass it through to the detector, which rejects unknown flags.
 
 ## Stage 1 — What the detector found
@@ -92,11 +108,19 @@ stops checking.
 
 ## The rule that governs every sentence you write here
 
-**Never assert a reason you have not verified in the code.** If you cannot establish
-why a function returns an error, what a precondition really is, or why a test exists,
-write what you can see or write nothing — and put the gap in the report. A confident,
-plausible, wrong comment is the single worst output of this pass: it is load-bearing
-for the next reader and it is invisible, where a missing comment is merely missing.
+**Never assert a reason you have not verified in the code or read in the recorded
+context.** Those are the two sources, and there is no third. If you cannot establish
+why a function returns an error, what a precondition really is, or why a test exists
+— and no `## <handle>` block covers it — write what you can see or write nothing, and
+put the site in the report as a **context gap**. A confident, plausible, wrong
+comment is the single worst output of this pass: it is load-bearing for the next
+reader and it is invisible, where a missing comment is merely missing.
+
+When a passage does cover the site, use **the human's wording**, compressed to the
+length the comment wants. Never paraphrase it into something smoother, never extend
+it past what the passage says, and name the handle it came from in the report so the
+claim can be traced back to the sentence that licensed it. A `skipped — no context to
+give` block is an answer: that site is a gap, not a prompt to look harder.
 
 Same applies to the module headers: "responsible for X" is a claim. Verify it against
 what the file actually contains before writing it.
@@ -105,6 +129,11 @@ what the file actually contains before writing it.
 
 - counts per category, before and after;
 - every comment **relocated**, with where it went;
+- every comment written from the recorded context, with the handle behind it;
+- every **context gap**: a site the rule wants a comment at, where the code cannot
+  supply the reason and no recorded passage covers it, with its `file:line` and the
+  question it raises. A gap is closed by extending the context, never by writing the
+  comment;
 - every shape-decision note pulled out for the commit message, verbatim — this is
   output I need, not a side effect;
 - every finding you deliberately did not act on, with the reason: a test whose

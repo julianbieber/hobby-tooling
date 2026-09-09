@@ -210,6 +210,25 @@ end of this file are the reference.
        the spec is lossy (extract drops detail), so absence ≠ dead code — when
        in doubt, **flag it for the human** instead of deleting;
      - **reorder** only when the order is genuinely semantic.
+   - **`## api`** (a `kind: module` spec, grammar §11) — the strongest mapping
+     in the language, and the one that makes the code resemble the spec:
+     - a **`fn` entry added** (`# +`, which covers its whole nested tree) → add
+       that public function to the module, with exactly that signature, and
+       implement it from its bullets;
+     - a **signature changed** (`# -` old line + `# +` new one) → change the
+       signature and every call site (`find_references`), including out-of-unit
+       ones — report those you do not edit;
+     - a **bullet changed inside an entry** → change that function's body, and
+       only that function's;
+     - a **`fn` entry removed** (`# -`) → remove the public function if nothing
+       still calls it; when callers remain, flag rather than delete;
+     - **the bullets drive the body 1:1 in behaviour, not in structure.** You
+       decide how the body is factored: extracting a private helper for a bullet
+       (or for a nested tree) is correct and expected — a module spec describes
+       the public surface only, so a helper is never "undescribed drift". Say in
+       the report which helpers you introduced.
+     - Route the whole entry via its `@ path` when it has one; otherwise via the
+       module spec's `source.paths`.
    - **`## modules`** responsibility change → may mean moving code between
      files.
    - **`## components` / `## resources` / `## events`** (Bevy) → the derived
@@ -264,13 +283,20 @@ end of this file are the reference.
      vs header); a `method` change is a different verb/route, not a body change.
    - **`@ spec` cross-ref** → a boundary marker, not a work item. The referenced
      unit has its own spec and its own translate runs — **never re-implement or
-     edit the referenced unit's code** from this spec. A ref *added* to a step
-     usually means "delegate here": wire the hand-off (enqueue to that queue,
-     call that endpoint, schedule that job) and nothing more. A ref *removed*
-     changes nothing by itself; only the step's own prose delta matters. Read
-     the referenced `.hmml` (a sibling `.hmml` in the **same task dir**; the ref
-     is a bare `<unit>`) when you need the collaborator's contract — its
-     `in:`/`out:` types are the interface to code against.
+     edit the referenced unit's code** from this spec. A **member** ref
+     (`@ spec unit::function`, §11) is the same boundary, one notch sharper: it
+     names the exact function to call, so the step becomes a call to *that*
+     function with the signature its `## api` entry declares — and if the
+     signature does not fit the call, that is a spec conflict to flag, not a
+     signature to change from here. A ref *added* to a step usually means
+     "delegate here": wire the hand-off (enqueue to that queue, call that
+     endpoint, schedule that job) and nothing more. A ref *removed* changes
+     nothing by itself; only the step's own prose delta matters. Read the
+     referenced `.hmml` (a sibling `.hmml` in the **same task dir**; the ref is a
+     bare `<unit>`) when you need the collaborator's contract — for a behavioural
+     target its `in:`/`out:` types or access block are the interface to code
+     against; for a `unit::function` ref into a module spec it is that entry's
+     `## api` signature, since a module spec has no `in:`/`out:` at all.
    - **`where:` binding value change** → this is the payoff for value-only
      edits: a symbol's abstract meaning is unchanged, but its concrete value
      moved, so route the change to the binding's **`@ config-source`** (the
@@ -341,8 +367,11 @@ end of this file are the reference.
     `components`, `resources`, `events` optional; no `access`.
   - `system` — `access`, `behavior`, `invariants` required; `modules`, `data`,
     `components`, `resources`, `events` optional; no `systems`.
+  - `module` — exactly `modules`, `data`, `api`, `invariants`; no `behavior`,
+    no Bevy section.
 - Header keys: `system` (req), `unit` (req), `kind` (req: `endpoint`|`workflow`|
-  `job`|`plugin`|`system`), `method` (opt, endpoints: `GET`|`POST`|…), `base`
+  `job`|`plugin`|`system`|`module`), `method` (opt, endpoints: `GET`|`POST`|…),
+  `base`
   (opt), `source` (opt: `repo` + `paths` list). `system`/`unit` are identifiers.
 - `#` at column 0 is a comment; `##` at column 0 is always a section header.
 - Indent = spaces only, 2 spaces per nesting level.
@@ -350,7 +379,8 @@ end of this file are the reference.
 - `## data`: `struct Name { field: Type [@ source], ... }`,
   `enum Name { Variant, ... }` (unit variants, no payloads), then `in: <Type>` /
   `out: <Type>`. Types: primitives, `Uuid`/`Money`/`DateTime`,
-  `Option<T>`/`Vec<T>`/`Map<K,V>`/ `Queue<T>`/`Stream<T>`, or a defined
+  `Option<T>`/`Vec<T>`/`Map<K,V>`/`Queue<T>`/`Stream<T>`/`Handle<T>`/
+  `Future<T>`/`Result<T,E>`/`Either<L,R>`/`Tuple<A,B>`, or a defined
   struct/enum. Undefined type = hard error. A field's optional `@ source` is
   `path`|`query`|`body`|`header` (endpoints).
 - Type imports (grammar §4.5): `## data` may start with
@@ -375,10 +405,23 @@ end of this file are the reference.
   trailing `where:` block binds symbols: `Symbol = value [@ config-source]`.
 - `## invariants`: flat `-` bullets, each a checkable claim.
 - Cross-spec refs (grammar §5.4): a module line, **system entry**, behavior step,
-  or invariant may end with `@ spec unit` — "more specification under" that
-  unit's `.hmml`. At most one per line, always the last annotation (after an
-  `@ path`); it resolves to a sibling `.hmml` in the same task dir. Unresolved
-  target = warning, not error.
+  `## api` entry, or invariant may end with `@ spec unit` — "more specification
+  under" that unit's `.hmml` — or `@ spec unit::function` /
+  `@ spec unit::Type::method` naming one `## api` entry of a module spec. At most
+  one per line, always the last annotation (after an `@ path`); it resolves to a
+  sibling `.hmml` in the same task dir. A missing target file = warning; a member
+  the target file does not define = **error**.
+
+**Detail dialect (grammar §11):**
+
+- `kind: module` writes `## api` where every other kind writes `## behavior`;
+  writing the other spelling is a `section-not-allowed-for-kind` error.
+- Entries are `fn [Type::]name(param: Type, …) [-> Type] [@ path] [@ spec ref]`
+  at **column 0**, each owning the bullets indented beneath it — ordinary steps,
+  same closed keyword set.
+- `## data` holds the public types the module owns. `in:`/`out:` and `where:`
+  are errors on this kind. An empty `## api` is an `empty-api` warning.
+- Four containers exist for signatures: `Future`, `Result`, `Either`, `Tuple`.
 
 **Bevy dialect (grammar §8):**
 
