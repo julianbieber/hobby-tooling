@@ -1,0 +1,64 @@
+# HMML module-spec template (grammar §11) — the detail layer under a
+# behavioural unit's `## modules` line. Copied to
+# notes/{project}/{topic}/{task}/<unit>.hmml and filled in by hand.
+#
+# Lines starting with # at column 0 are comments and are ignored by the parser.
+# ## at column 0 is always a section header, never a comment.
+# Indentation is spaces only, 2 spaces per nesting level.
+#
+# Naming: kebab-case the module's PascalCase name (WaveTable → wave-table);
+# the file name must equal the `unit` header.
+
+system: my-system
+unit: my-module
+# kind: module — one module's public surface. Its third section is ## api.
+kind: module
+# source:                 # optional — fill in once the target is known
+#   repo: my_repo
+#   paths:
+#     - src/waves/table.rs
+
+## modules
+# The collaborators THIS module calls:
+#   PascalName — responsibility [@ repo-relative-path] [@ spec <unit>]
+# Not its callers, and not the types it owns (those go in ## data).
+
+## data
+# The public types this module OWNS — other units `use`-import them from here
+# rather than redeclaring them. Optional `use` imports first, then definitions.
+# NO in:/out: — a module's inputs and outputs are its functions' parameters and
+# return types.
+#
+# use <sibling-unit>: SharedType
+# struct Thing {
+#   id: u32,
+#   name: String,
+# }
+# enum Shape { ring, scatter }
+#
+# Types: String bool i8..i64 u8..u64 f32 f64 · Uuid Money DateTime Entity
+#        Duration Vec2 Vec3 Vec4 Quat Color Timer Rect ·
+#        Option<T> Vec<T> Map<K, V> Queue<T> Stream<T> Handle<T> ·
+#        Future<T> Result<T, E> Either<L, R> Tuple<A, B> ·
+#        a struct/enum defined above, or a `use`-imported type.
+
+## api
+# One entry per PUBLIC function, in source order:
+#   fn [Type::]name(param: Type, ...) [-> Type] [@ path[:line]] [@ spec <unit>]
+# `Type::` makes it a method on a type this module owns; a function of the
+# module itself is a plain `fn` — the file IS the module.
+#
+# Under each entry, nested `-` bullets say what it does, with the same
+# control-flow keywords as ## behavior (if ...: / else: / for each ...: /
+# while ...: / try: / on error ...:). A bullet that calls a collaborator ends
+# with `@ spec other-unit::function` AT THE STEP WHERE THE CALL HAPPENS.
+#
+# Signatures stay faithful to the code — don't normalize an effect away, and
+# drop &, &mut and lifetimes. Leave out private functions and module state:
+# those are implementation, and /hmml-translate decides them.
+fn my_function(arg: u32) -> Option<String>
+  - describe the first step here
+
+## invariants
+# One `-` bullet per property of this module that must always hold.
+# May end with `@ spec <unit>` when another unit's spec carries the detail.

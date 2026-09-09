@@ -27,10 +27,29 @@ behavior off the source, and writes the file into the current task's notes dir.
 Produces:
 
 - `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/<unit>.hmml` —
-  one spec, header + the four `##` sections, `source.repo`/`source.paths`
-  pointing at the real code.
+  the overview: header + the `##` sections the `kind` takes,
+  `source.repo`/`source.paths` pointing at the real code;
+- one `<module>.hmml` beside it per collaborator with a public surface — a
+  `kind: module` spec carrying that module's `## api`, function by function
+  (grammar §11), with the overview's steps linked into it by member ref.
 
-Emits the `.hmml` and stops — reviewing, editing, and committing it are the
+## Why both layers come out of one run
+
+The overview names its collaborators and stops, so a change about a module's API
+rather than a unit's flow had nothing to translate from. The module specs are
+that missing layer.
+
+They cannot be a second run. A member ref into a spec that does not exist yet is
+an **error**, not a warning — that is what makes the ref worth navigating by — so
+an overview emitted alone hands back a spec that does not lint. One run writes
+the set, then lints the set.
+
+A collaborator that exposes nothing is **skipped and reported**: `## api` would
+be empty, which raises `empty-api`, which the lint step then tells you to fix. It
+keeps its `## modules` line, because it still does work in the behaviour, and it
+gets no `@ spec` ref.
+
+Emits the `.hmml` files and stops — reviewing, editing, and committing it are the
 human's job (that is the point of the artifact).
 
 ## Installation

@@ -38,7 +38,8 @@ in the plan.
 2. **Read the spec** in full. Note the `source:` block and the sections the
    `kind` actually uses — `data` (role-less shapes for a Bevy kind, the whole
    data model for a classic one), `components`/`resources`/`events`,
-   `systems`/`access`, `behaviour`, `invariants` — and **separate baseline from
+   `systems`/`access`, `behaviour` (or `api`, for a `kind: module` spec —
+   grammar §11), `invariants` — and **separate baseline from
    delta**: collect every `# -` (removed) and `# +` block (added), grouped by
    section. State the delta back in a few lines before fanning out. If the spec
    carries no annotations at all, say so and review the whole spec as the intent
@@ -58,6 +59,16 @@ in the plan.
    a field" is a different proposition from adding one to a type being created
    here. A `use extern` type belongs to a dependency and cannot be changed at
    all — only used differently.
+
+   **Read the detail layer with the overview.** A unit's `## modules` lines and
+   its steps may point at sibling `kind: module` specs (`@ spec <unit>`,
+   `@ spec <unit>::<function>`, grammar §11). Read every module spec the unit
+   references and treat the set as one review subject: an annotated delta often
+   spans both layers — a new behaviour step and the `## api` entry it calls — and
+   reviewing either half alone misses the mismatch. Say in the delta summary
+   which layer each change sits in, and include the module specs' own deltas.
+   When the argument names a module spec directly, review it on its own and say
+   so.
 4. **Parse `--min-priority`** (default `low` = all). Strip it from the argument.
 
 ## Step 2 — Fan out parallel lens reviewers

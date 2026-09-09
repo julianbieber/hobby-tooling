@@ -31,6 +31,17 @@ end of this file are the reference — match their **altitude** and formatting.
 The always-parsing examples live in
 `~/fun_repos/hobby-tooling/lsps/hobby-mml-lsp/mml-parser/tests/fixtures/examples/`.
 
+**Kinds this skill emits.** The behavioural kinds — `endpoint` / `workflow` /
+`job` / `plugin` / `system` — plus, in the same run, one **`kind: module`**
+detail spec for each module the overview lists that has a public surface
+(grammar §11, step 7).
+
+**One run writes both layers.** The overview's steps link down into the detail
+specs by member ref (`@ spec wave-table::entry_for`), and a member ref into a
+spec that does not exist yet is an **error**, not a warning — so emitting the
+overview without its module specs hands back a spec that does not lint. Write
+the whole set, then lint the whole set.
+
 **Bevy is the common case here.** Most hobby repos are Bevy games, and a Bevy
 unit does not have an input and an output — data flows through the World. If the
 code you are extracting is a `Plugin` or a system, use `kind: plugin` /
@@ -277,6 +288,12 @@ four sections, and **the derive decides which**.
      and end it with `@ spec unit`, resolving to a sibling `<unit>.hmml` in the
      same task dir. Check the other `.hmml` files in the task dir for an existing
      spec before adding a ref; never invent a ref to a spec that doesn't exist.
+   - **Link down into the detail layer**: when a step's work is one public
+     function of a module you are writing a detail spec for (step 7), end the
+     step with `@ spec <module-unit>::<function>` — the exact function that does
+     it, not just the module. Keep the step's prose at overview altitude: the
+     ref is what carries the detail, so the step still reads as one line of the
+     story.
 
 6. **`## invariants`** — one `-` bullet per property that must always hold, flat
    (not nested), each a **checkable claim**. Surface: concurrency/parallelism
@@ -284,12 +301,74 @@ four sections, and **the derive decides which**.
    auth preconditions. Read them off the code (a semaphore, a prefetch count, a
    unique index, a max-requeue constant), not off intuition.
 
-7. **Assemble and write the file.** Header first (`system`, `unit`, `kind`,
+7. **The detail layer — one `kind: module` spec per module (grammar §11).** The
+   overview says what the unit does; a detail spec says what one collaborator
+   *can* do. Emit one per `## modules` line, with three exceptions:
+
+   - a line that already carries `@ spec` to an existing sibling spec — that
+     module is specced elsewhere, leave the ref alone;
+   - a module whose spec already exists in the task dir — reuse that file rather
+     than rewriting it (step 8's clobber rule);
+   - **a module with no public surface** — skip it, and say which ones you
+     skipped and why. A collaborator that exposes nothing has nothing for
+     `## api` to hold: emitting the spec anyway earns an `empty-api` warning
+     that step 9 then tells you to fix, so the instruction would contradict the
+     lint. This is the normal case for a **binary** crate, where every function
+     is private to it (`rg '^pub (fn|async fn)' <path>` finds nothing), and for
+     a collaborator that is one private helper of the unit itself. Those are the
+     implementation the detail layer deliberately leaves out (§11.3), one level
+     up. The module still belongs in `## modules` — it does work in the
+     behaviour — it just gets no `@ spec` ref.
+
+   For each spec you do write:
+
+   - **Name it** by kebab-casing the module's PascalCase name: `WaveTable` →
+     `wave-table.hmml`, `WaveRng` → `wave-rng.hmml`. The mapping has to be
+     stable — it is what the overview's member refs resolve through. Add
+     `@ spec <that-unit>` to the module line in the overview.
+   - **Enumerate the public surface, don't guess it.** `document_symbol` on the
+     module's `@ path` (plus `get_symbol` / `get_neighbors` for what it calls),
+     then keep the **public** ones: Rust `pub` / `pub(crate)` items — free
+     functions and inherent-`impl` methods alike. **All** of them go in — a
+     module spec's job is to carry the whole surface, and a missing one is what
+     `/hmml-validate` reports as code ahead of the spec.
+   - **One `## api` entry per public function**, in **source order** (so a later
+     re-extraction diffs cleanly):
+     `fn [Type::]name(param: Type, …) -> Type @ path:line`. A method on a type
+     the module owns takes the `Type::` receiver; a function of the module
+     itself is a plain `fn` — the file *is* the module.
+   - **A Bevy system is not an api entry.** A system is called by the schedule,
+     not by a caller, and its interface is its access block — it belongs in a
+     `kind: plugin` / `kind: system` spec. A module spec is for the plain-Rust
+     helpers a system calls into: a table, a generator, a mesher, a solver.
+   - **Signatures stay faithful.** Translate types with the same table as
+     `## data`, plus the containers this layer adds: `Result<T, E>` →
+     `Result<T, E>`, an `impl Future<Output = T>` → `Future<T>`, a tuple
+     `(A, B)` → `Tuple<A, B>`. Do not normalize an effect away — the point of
+     this layer is that it can be read next to the code. Drop `&`, `&mut` and
+     lifetimes; they are implementation.
+   - **Bullets under each entry** describe what that function does, at the same
+     altitude rules as `## behavior` (same control-flow keywords, 2-space
+     nesting) — one notch more concrete, since the subject is one function. A
+     bullet that calls a collaborator ends with `@ spec <other-unit>::<function>`
+     **at the step where the call happens**.
+   - **`## data` holds the types this module owns**, and the overview then
+     `use`-imports them from here instead of declaring them itself
+     (`use wave-table: WaveEntry`). One home per type.
+   - **`## modules`** lists the collaborators this module calls, with `@ spec`
+     where they have a spec. **`## invariants`** states properties of the module.
+   - **Leave out**: `in:`/`out:` (an error on this kind), every Bevy section,
+     private functions, module state, and `where:` bindings. Those are
+     implementation — `/hmml-translate` decides them, and a bullet that calls a
+     private helper is simply written as the work it does.
+
+8. **Assemble and write the file.** Header first (`system`, `unit`, `kind`,
    `method` for endpoints, then the `source` block), then the `##` sections
    **in canonical order**: `## modules`, `## data`, `## components`,
    `## resources`, `## events`, `## systems`, `## access`, `## behavior`,
    `## invariants` — a classic kind uses the four it takes, a Bevy kind the ones
-   it has anything to say in. Then write to the current task's notes dir:
+   it has anything to say in, and a `kind: module` writes `## api` in place of
+   `## behavior`. Then write to the current task's notes dir:
 
    ```
    ~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/<unit>.hmml
@@ -316,15 +395,25 @@ four sections, and **the derive decides which**.
    Do **not** put a sha or timestamp anywhere in the `.hmml` — the grammar stays
    pure.
 
-   **If `<unit>.hmml` already exists in the task dir, do not clobber it.** An
-   existing file carrying `# +` / `# -` annotations is a baseline someone has
-   already annotated with an intended change; overwriting it destroys that work
-   (and a re-extraction is exactly the diff `hmml-translate` refuses to apply).
-   Say what is there and ask whether to refresh the baseline, extract under a
-   different `unit`, or stop.
+   **If any file this run would write already exists in the task dir, do not
+   clobber it** — the overview `<unit>.hmml` *and* every module spec from step
+   7. An existing file carrying `# +` / `# -` annotations is a baseline someone
+   has already annotated with an intended change; overwriting it destroys that
+   work (and a re-extraction is exactly the diff `hmml-translate` refuses to
+   apply). A module spec is the likely casualty: two units in one task dir
+   routinely share a collaborator, so extracting the second unit would land on
+   the `wave-rng.hmml` the first unit's extraction wrote. For an existing
+   **module** spec, reuse it — leave the file untouched and just add the
+   `@ spec <that-unit>` ref to your overview's module line — and say you did,
+   noting any `## api` entry your unit calls that the existing spec lacks rather
+   than adding it yourself. Say what is there and ask whether to refresh the
+   baseline, extract under a different `unit`, or stop.
 
-8. **Lint the written file.** Run `hobby-mml-parser <written-path> --lint` and fix
-   every diagnostic until it exits clean. An `unresolved-source-path` warning
+9. **Lint every written file.** Run `hobby-mml-parser <path> --lint` on the
+   overview *and* each module spec, and fix every diagnostic until each exits
+   clean. An `unknown-spec-member` error means a member ref names a function its
+   target spec does not define — fix the ref or the missing entry; it is the
+   check that keeps the two layers honest. An `unresolved-source-path` warning
    means a `source.paths` entry or module `@ path` names a file that does not
    exist — go back to the checkout and find the real path; **never delete the
    reference just to silence the warning** (a spec without working linkage is
@@ -333,10 +422,12 @@ four sections, and **the derive decides which**.
    (`cargo install --path ~/fun_repos/hobby-tooling/lsps/hobby-mml-lsp/mml-parser`),
    fall back to verifying each path with `ls` against the checkout root.
 
-9. **Stop.** Report the path you wrote and a one-line summary. Do **not**
-   iterate on the spec, and do **not** run `git add` / `git commit` in the notes
-   repo or the tooling repo — reviewing and editing the `.hmml`, and committing
-   it, are the human's job.
+10. **Stop.** Report every path you wrote (overview first, then the module
+    specs), the modules you skipped for having no public surface and the ones
+    whose existing spec you reused, and a one-line summary. Do **not** iterate
+    on the spec, and do **not** run `git add` / `git commit` in the notes repo
+    or the tooling repo — reviewing and editing the `.hmml`, and committing it,
+    are the human's job.
 
 ## Grammar cheat-sheet
 
@@ -349,16 +440,20 @@ four sections, and **the derive decides which**.
     `components`, `resources`, `events` optional; no `access`.
   - `system` — `access`, `behavior`, `invariants` required; `modules`, `data`,
     `components`, `resources`, `events` optional; no `systems`.
+  - `module` — exactly `modules`, `data`, `api`, `invariants`; no `behavior`,
+    no Bevy section.
 - Header keys: `system` (req), `unit` (req), `kind` (req: `endpoint`|`workflow`|
-  `job`|`plugin`|`system`), `method` (opt, endpoints: `GET`|`POST`|…), `base`
-  (opt), `source` (opt: `repo` + `paths` list). `system`/`unit` are identifiers.
+  `job`|`plugin`|`system`|`module`), `method` (opt, endpoints: `GET`|`POST`|…),
+  `base` (opt), `source` (opt: `repo` + `paths` list). `system`/`unit` are
+  identifiers.
 - `#` at column 0 is a comment; `##` at column 0 is always a section header.
 - Indent = spaces only, 2 spaces per nesting level.
 - `## modules`: `PascalName — responsibility [@ repo-relative-path]`.
 - `## data`: `struct Name { field: Type [@ source], ... }`,
   `enum Name { Variant, ... }` (unit variants, no payloads), then `in: <Type>` /
   `out: <Type>`. Types: primitives, `Uuid`/`Money`/`DateTime`,
-  `Option<T>`/`Vec<T>`/`Map<K,V>`/ `Queue<T>`/`Stream<T>`, or a defined
+  `Option<T>`/`Vec<T>`/`Map<K,V>`/`Queue<T>`/`Stream<T>`/`Handle<T>`/
+  `Future<T>`/`Result<T,E>`/`Either<L,R>`/`Tuple<A,B>`, or a defined
   struct/enum. Undefined type = hard error. A field's optional `@ source` is
   `path`|`query`|`body`|`header` (endpoints).
 - Type imports (grammar §4.5): `## data` may start with `use unit: Type, …`
@@ -389,10 +484,25 @@ four sections, and **the derive decides which**.
   — they are the next step's job, and a baseline that already carries them is not
   a baseline.
 - Cross-spec refs (grammar §5.4): a module line, **system entry**, behavior step,
-  or invariant may end with `@ spec unit` — "more specification under" a sibling
-  `.hmml` in the same task directory. At most one per line, always the last
-  annotation (after an `@ path`); it resolves to `<unit>.hmml` in the referencing
-  file's own directory. Unresolved target = warning, not error.
+  `## api` entry, or invariant may end with `@ spec unit` — "more specification
+  under" a sibling `.hmml` in the same task directory — or
+  `@ spec unit::function` / `@ spec unit::Type::method` naming one `## api`
+  entry of a module spec. At most one per line, always the last annotation
+  (after an `@ path`); it resolves to `<unit>.hmml` in the referencing file's
+  own directory. A missing target file = warning; a member the target file does
+  not define = **error**.
+
+**Detail dialect (grammar §11):**
+
+- `kind: module` writes `## api` where every other kind writes `## behavior`;
+  writing the other spelling is a `section-not-allowed-for-kind` error.
+- Entries are `fn [Type::]name(param: Type, …) [-> Type] [@ path] [@ spec ref]`
+  at **column 0**, each owning the bullets indented beneath it — ordinary steps,
+  same closed keyword set. A bullet at column 0, or a `fn` nested under another
+  entry, is a `malformed-api-entry` error.
+- `## data` holds the public types the module owns. `in:`/`out:` and `where:`
+  are errors on this kind. An empty `## api` is an `empty-api` warning.
+- Four containers exist for signatures: `Future`, `Result`, `Either`, `Tuple`.
 
 **Bevy dialect (grammar §8):**
 
@@ -775,4 +885,57 @@ where:
 - the number of entities spawned equals the wave size, regardless of spawner count
 - every spawned entity carries both EnemyHealth and Wave
 - a spawner already carrying SpawnBudget is skipped, so a wave is never spawned twice
+```
+
+### Module (detail layer) — `wave-table.hmml`
+
+The spec the plugin above links down into: the module's whole public surface,
+one entry per function, with the call into its own collaborator marked at the
+step that makes it.
+
+```
+system: bevy-survivor
+unit: wave-table
+kind: module
+source:
+  repo: bevy_survivor
+  paths:
+    - src/waves/table.rs
+
+## modules
+WaveRng — draws the spawn offsets @ src/waves/rng.rs @ spec wave-rng
+
+## data
+use wave-rng: WaveRng
+struct WaveEntry {
+  index: u32,
+  count: u32,
+  pattern: SpawnPattern,
+}
+
+enum SpawnPattern {
+  ring,
+  scatter,
+  line,
+}
+
+## api
+fn entry_for(index: u32) -> Option<WaveEntry> @ src/waves/table.rs:31
+  - look the index up in the authored table
+  - if the index is past the last authored wave:
+    - answer nothing, and let the caller scale the last entry
+
+fn scaled(entry: WaveEntry, factor: f32) -> WaveEntry @ src/waves/table.rs:52
+  - multiply the entry's count by the factor, rounded up
+  - keep the pattern unchanged
+
+fn WaveEntry::offsets(rng: WaveRng) -> Vec<Vec2>
+  - for each spawn slot in the entry:
+    - draw a jitter for it @ spec wave-rng::WaveRng::next_u32
+    - place the slot on the entry's pattern, displaced by the jitter
+
+## invariants
+- entry_for never answers an entry whose index differs from the one asked for
+- offsets answers exactly count positions
+- scaled never lowers an entry's count
 ```
