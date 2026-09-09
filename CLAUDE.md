@@ -438,6 +438,50 @@ here, not an info hint. Work's `--lint` does not gate on info severity; this one
 gates on any diagnostic at all, so an info hint would gate anyway while claiming
 not to. A doubled bullet is a one-character fix, so gating on it costs nothing.
 
+### The detail layer says what a collaborator can do (v2.4)
+
+A behavioural spec names its collaborators and stops — `WaveRng — draws the
+spawn offsets` and no more. So the moment a change is about a module's API
+rather than a unit's flow, the spec has nothing to offer and translation is back
+to prose → code. `kind: module` is the layer underneath: **one module's public
+surface**, `## api` in the slot every other kind writes `## behavior` in, one
+`fn` signature per public function with the bullets describing it nested beneath.
+
+**The two failure modes of a ref get different severities, and that is the whole
+design.** A `@ spec unit` whose file is missing stays a warning — the spec may
+be planned and not yet written. A `@ spec unit::function` whose file exists but
+defines no such entry is an **error**: the file is right there to check the name
+against. That is what makes a member ref worth navigating by, and it is why
+`/hmml-extract` writes both layers in one run — emitting the overview alone
+would hand back a spec that does not lint.
+
+**A module with no public surface gets no spec.** `## api` would be empty, which
+raises `empty-api`, which the lint step then tells you to fix — so "one spec per
+`## modules` line" would contradict the linter. The module keeps its line,
+because it still does work in the behaviour; it just gets no `@ spec` ref. The
+normal case is a helper that is private to the unit, which is the same boundary
+the detail layer already draws around private functions, one level up.
+
+**A Bevy system is not an api entry.** A system is called by the schedule rather
+than by a caller, and its interface is its access block — it belongs in a
+`kind: plugin` or `kind: system` spec. A module spec is for the plain-Rust
+helpers a system calls into: a table, a generator, a mesher, a solver. That is
+the one place this dialect and the work v1.5 it came from genuinely differ.
+
+Two smaller consequences. `Future`, `Result`, `Either` and `Tuple` join the
+containers so a signature can stay faithful to the code it is read next to
+instead of normalising an effect away; a tuple stays `Tuple<A, B>` so the type
+grammar remains `Ident<args…>`. And a `use` line's ref may not carry a member —
+a `use` imports types out of a spec file, and a function is not a type — which
+is why the use-line parser now splits on the first colon that is not part of a
+`::`, so the whole ref reaches validation instead of being cut down the middle
+of the separator.
+
+Where work needed a new `kind-mismatched-section` error, this dialect needed
+nothing: sections here are already a named set per kind, so `## behavior` on a
+module and `## api` on anything else are ordinary `section-not-allowed-for-kind`
+errors.
+
 ## HSTRUCT records the standards a repo holds itself to
 
 `lsps/hobby-struct-lsp/grammar.md` is the source of truth. A repo's file is

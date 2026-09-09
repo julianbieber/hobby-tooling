@@ -31,6 +31,66 @@
     "fields": {}
   },
   {
+    "type": "api_entry",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "path": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "path",
+            "named": true
+          }
+        ]
+      },
+      "receiver": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "return": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "type",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "param",
+          "named": true
+        },
+        {
+          "type": "spec_annotation",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "binding",
     "named": true,
     "fields": {
@@ -303,6 +363,32 @@
     }
   },
   {
+    "type": "param",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "type",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "path",
     "named": true,
     "fields": {}
@@ -359,6 +445,10 @@
       "types": [
         {
           "type": "access_entry",
+          "named": true
+        },
+        {
+          "type": "api_entry",
           "named": true
         },
         {
@@ -582,6 +672,14 @@
     "fields": {}
   },
   {
+    "type": "(",
+    "named": false
+  },
+  {
+    "type": ")",
+    "named": false
+  },
+  {
     "type": ",",
     "named": false
   },
@@ -590,7 +688,15 @@
     "named": false
   },
   {
+    "type": "->",
+    "named": false
+  },
+  {
     "type": ":",
+    "named": false
+  },
+  {
+    "type": "::",
     "named": false
   },
   {
@@ -615,6 +721,10 @@
   },
   {
     "type": "after",
+    "named": false
+  },
+  {
+    "type": "api",
     "named": false
   },
   {
@@ -680,6 +790,10 @@
   {
     "type": "extern_keyword",
     "named": true
+  },
+  {
+    "type": "fn",
+    "named": false
   },
   {
     "type": "identifier",

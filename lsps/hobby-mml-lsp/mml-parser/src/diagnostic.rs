@@ -89,6 +89,14 @@ pub mod code {
     pub const DANGLING_ON_ERROR: &str = "dangling-on-error";
     pub const MALFORMED_BINDING: &str = "malformed-binding";
 
+    // Api entries (grammar §11).
+    pub const MALFORMED_API_ENTRY: &str = "malformed-api-entry";
+    pub const DUPLICATE_API_ENTRY: &str = "duplicate-api-entry";
+    /// A `kind: module` spec whose `## api` lists no functions. The section
+    /// exists to carry the module's public surface, so an empty one means the
+    /// surface has not been captured yet (grammar §11).
+    pub const EMPTY_API: &str = "empty-api";
+
     // Cross-spec references (grammar §5.4).
     pub const MALFORMED_SPEC_REF: &str = "malformed-spec-ref";
     pub const DUPLICATE_SPEC_REF: &str = "duplicate-spec-ref";
@@ -96,6 +104,12 @@ pub mod code {
     /// well-formed `@ spec` ref does not resolve to a spec file on disk. The
     /// pure parse/validate passes never produce it.
     pub const UNRESOLVED_SPEC_REF: &str = "unresolved-spec-ref";
+    /// Emitted only by filesystem-aware consumers: a `@ spec unit::member` ref
+    /// whose target spec **does** exist but defines no such `## api` entry
+    /// (grammar §5.4, §11). An error rather than a warning, unlike
+    /// [`UNRESOLVED_SPEC_REF`]: the file is right there to check the name
+    /// against, so the name is simply wrong.
+    pub const UNKNOWN_SPEC_MEMBER: &str = "unknown-spec-member";
 
     // Source linkage (header `source.paths` + module `@ path`).
     /// Emitted only by filesystem-aware consumers (the LSP, the CLI's `--lint`)

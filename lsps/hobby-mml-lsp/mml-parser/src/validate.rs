@@ -22,7 +22,14 @@ pub const OPAQUE: &[&str] = &[
     "Uuid", "Money", "DateTime", "Entity", "Duration", "Vec2", "Vec3", "Vec4", "Quat", "Color",
     "Timer", "Rect",
 ];
-pub const CONTAINERS: &[&str] = &["Option", "Vec", "Map", "Queue", "Stream", "Handle"];
+/// Container idents that need no definition. The last four exist for `## api`
+/// signatures (grammar §11): a module spec is read next to the code it
+/// describes, so a fallible or effectful return is written the way the code
+/// writes it rather than normalized away. A tuple is spelled `Tuple<A, B>` so
+/// the type grammar stays `Ident<args…>`.
+pub const CONTAINERS: &[&str] = &[
+    "Option", "Vec", "Map", "Queue", "Stream", "Handle", "Future", "Result", "Either", "Tuple",
+];
 
 /// Bevy components a spec may name without declaring them — the engine already
 /// defines them, and restating `Transform` in every plugin spec would be noise.
@@ -207,6 +214,17 @@ pub fn validate(doc: &Document) -> Vec<Diagnostic> {
                     import.spec.value
                 ),
             ));
+        } else if let Some(member) = crate::ast::spec_ref_member(import.spec.value.as_str()) {
+            // A `use` line names a spec file and imports types out of it; a
+            // `::member` names a function, which no type can be imported from
+            // (grammar §4.5, §5.4).
+            diags.push(Diagnostic::error(
+                import.spec.span,
+                code::MALFORMED_IMPORT,
+                format!(
+                    "`{member}` names a function; a `use` line imports types from a spec, so drop the `::{member}`"
+                ),
+            ));
         }
         for ty in &import.types {
             let name = ty.value.as_str();
@@ -301,6 +319,38 @@ pub fn validate(doc: &Document) -> Vec<Diagnostic> {
     }
     if let Some(ty) = &doc.data.output {
         check_type(ty, &known, &mut diags);
+    }
+
+    // `## api` signatures (grammar §11): parameter and return types resolve
+    // exactly like a struct field's, and a method's receiver names a type this
+    // module owns or imports.
+    let mut seen_api: HashSet<String> = HashSet::new();
+    for entry in &doc.api {
+        for param in &entry.params {
+            check_type(&param.ty, &known, &mut diags);
+        }
+        if let Some(ret) = &entry.ret {
+            check_type(ret, &known, &mut diags);
+        }
+        if let Some(receiver) = &entry.receiver
+            && !known.contains(receiver.value.as_str())
+        {
+            diags.push(Diagnostic::warning(
+                receiver.span,
+                code::UNDEFINED_TYPE,
+                format!(
+                    "receiver `{}` is not a type declared or imported in this spec; a function of the module itself is written as a plain `fn` (grammar §11)",
+                    receiver.value
+                ),
+            ));
+        }
+        if !seen_api.insert(entry.member()) {
+            diags.push(Diagnostic::error(
+                entry.name.span,
+                code::DUPLICATE_API_ENTRY,
+                format!("duplicate `## api` entry `{}`", entry.member()),
+            ));
+        }
     }
 
     // Bevy dialect: systems and their access blocks.
@@ -482,7 +532,7 @@ pub fn builtin_role(name: &str) -> Option<Role> {
 }
 
 /// All `@ spec` refs in the document: modules, system entries, behavior steps
-/// (recursively), and invariants.
+/// (recursively), `## api` entries and the steps under them, and invariants.
 pub fn collect_spec_refs(doc: &Document) -> Vec<&Spanned<String>> {
     let mut refs = Vec::new();
     refs.extend(doc.modules.iter().filter_map(|m| m.spec.as_ref()));
@@ -494,6 +544,10 @@ pub fn collect_spec_refs(doc: &Document) -> Vec<&Spanned<String>> {
         }
     }
     walk(&doc.behavior, &mut refs);
+    for entry in &doc.api {
+        refs.extend(entry.spec.as_ref());
+        walk(&entry.steps, &mut refs);
+    }
     refs.extend(doc.invariants.iter().filter_map(|i| i.spec.as_ref()));
     refs
 }
@@ -511,6 +565,7 @@ pub fn collect_source_paths(doc: &Document) -> Vec<&Spanned<String>> {
     paths.extend(doc.modules.iter().filter_map(|m| m.path.as_ref()));
     paths.extend(doc.systems.iter().filter_map(|s| s.path.as_ref()));
     paths.extend(doc.all_type_defs().filter_map(TypeDef::path));
+    paths.extend(doc.api.iter().filter_map(|e| e.path.as_ref()));
     paths
 }
 
@@ -521,7 +576,7 @@ fn check_spec_ref(spec: &Spanned<String>, diags: &mut Vec<Diagnostic>) {
             spec.span,
             code::MALFORMED_SPEC_REF,
             format!(
-                "malformed spec reference `{raw}`; expected `system/unit` or `unit` (segments like `[A-Za-z][A-Za-z0-9._-]*`)"
+                "malformed spec reference `{raw}`; expected `unit` (segments like `[A-Za-z][A-Za-z0-9._-]*`), optionally with a member: `unit::function` or `unit::Type::method`"
             ),
         ));
     }

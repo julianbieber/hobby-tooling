@@ -60,14 +60,21 @@
 ; Type expressions.
 (type name: (identifier) @type)
 ((type name: (identifier) @type.builtin)
- (#match? @type.builtin "^(String|bool|i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|Uuid|Money|DateTime|Option|Vec|Map|Queue|Stream)$"))
+ (#match? @type.builtin "^(String|bool|i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|Uuid|Money|DateTime|Entity|Duration|Vec2|Vec3|Vec4|Quat|Color|Timer|Rect|Option|Vec|Map|Queue|Stream|Handle|Future|Result|Either|Tuple)$"))
 
 ; Modules: `Name — responsibility @ path`.
 (module_entry name: (identifier) @namespace)
 (separator) @operator
 (path) @string.special.path
 
-; Cross-spec references: `@ spec system/unit` (grammar §5.4).
+; A module spec's public functions (grammar §11).
+"fn" @keyword.function
+"->" @operator
+(api_entry name: (identifier) @function)
+(api_entry receiver: (identifier) @type)
+(param name: (identifier) @variable.parameter)
+
+; Cross-spec references: `@ spec unit`, `@ spec unit::function` (grammar §5.4).
 (spec_keyword) @keyword.directive
 (spec_ref) @string.special.path
 

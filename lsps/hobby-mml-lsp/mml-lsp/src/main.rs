@@ -19,7 +19,7 @@ use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 use analysis::{CompletionContext, SectionKind, Symbols};
-use mml_parser::ast::{Document, TypeDef};
+use mml_parser::ast::{Document, SECTION_API, SECTION_BEHAVIOR, TypeDef};
 use mml_parser::span::Span;
 use mml_parser::{LineIndex, Severity, analyze, lint, paths};
 
@@ -164,6 +164,22 @@ fn import_type_definition(
     })
 }
 
+/// Goto-definition target for a `unit::member` ref: the `fn` line of that entry
+/// in the module spec that defines it (grammar §11).
+fn member_definition(
+    raw: &str,
+    current_file: &Path,
+    workspace_root: Option<&Path>,
+) -> Option<Location> {
+    let member = mml_parser::ast::spec_ref_member(raw)?;
+    let (target, src, doc) = read_target(raw, current_file, workspace_root)?;
+    let entry = doc.api.iter().find(|e| e.member() == member)?;
+    Some(Location {
+        uri: Url::from_file_path(&target).ok()?,
+        range: range_of(&LineIndex::new(&src), entry.member_span()),
+    })
+}
+
 /// Hover markdown for an imported type: its definition rendered from the owning
 /// spec, with a note where it came from. Unresolved targets get a note instead.
 fn import_type_hover(
@@ -294,6 +310,24 @@ fn hover_at(
         });
     }
 
+    // A `fn` name in this file's own `## api`: show the whole entry, the way a
+    // type name in `## data` shows its definition.
+    if analysis::section_at(&ds.text, offset) == SectionKind::Api
+        && let Some(entry) = analysis::api_entry_at(&ds.symbols, offset)
+    {
+        return Some(Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: format!(
+                    "`{}`\n\n```hmml\n{}\n```",
+                    entry.signature,
+                    &ds.text[entry.def_span.start..entry.def_span.end]
+                ),
+            }),
+            range: Some(ds.range(entry.name_span)),
+        });
+    }
+
     let word = analysis::word_at(&ds.text, offset)?;
     let section = analysis::section_at(&ds.text, offset);
     // A type that lives elsewhere answers for itself before the spec does:
@@ -310,9 +344,11 @@ fn hover_at(
         });
     }
     let markdown = match section {
-        SectionKind::Behavior | SectionKind::Invariants => module_hover(ds, &word.text)
-            .or_else(|| system_hover(ds, &word.text))
-            .or_else(|| type_hover(ds, &word.text)),
+        SectionKind::Behavior | SectionKind::Invariants | SectionKind::Api => {
+            module_hover(ds, &word.text)
+                .or_else(|| system_hover(ds, &word.text))
+                .or_else(|| type_hover(ds, &word.text))
+        }
         SectionKind::Modules => module_hover(ds, &word.text),
         // In an access block a name is a system, a declared world type, or a
         // Bevy built-in the spec never had to declare.
@@ -487,7 +523,27 @@ fn spec_hover(raw: &str, uri: &Url, workspace_root: Option<&Path>) -> String {
         .as_ref()
         .map(|k| format!(" ({:?})", k.value).to_lowercase())
         .unwrap_or_default();
+    // A `unit::member` ref points at one function: show that entry in full —
+    // signature plus the bullets that are the specification under it.
+    if let Some(member) = mml_parser::ast::spec_ref_member(raw) {
+        return match doc.api.iter().find(|e| e.member() == member) {
+            Some(entry) => format!(
+                "```hmml\n{}\n```\n\n_in `{name}`_",
+                &src[entry.span.start..entry.span.end]
+            ),
+            None => format!("_`{member}` is not defined in `{name}`_"),
+        };
+    }
+
     let mut out = format!("**{name}**{kind}");
+    // A module spec's useful summary is its public surface, not its
+    // collaborators.
+    if doc.header.kind.as_ref().map(|k| k.value) == Some(mml_parser::ast::Kind::Module) {
+        for entry in doc.api.iter().take(8) {
+            out.push_str(&format!("\n- `{}`", entry.signature()));
+        }
+        return out;
+    }
     for m in doc.modules.iter().take(8) {
         out.push_str(&format!(
             "\n- **{}** — {}",
@@ -583,9 +639,13 @@ fn definition_at(
         return Some(target);
     }
 
-    // Cross-spec ref: jump to the referenced `.hmml` file.
+    // Cross-spec ref: jump to the referenced `.hmml` — to the named function's
+    // own line when the ref carries a `::member` (grammar §11), else the head.
     if let Some(r) = analysis::spec_ref_at(&ds.doc, offset) {
         let file = uri.to_file_path().ok()?;
+        if let Some(location) = member_definition(&r.value, &file, workspace_root) {
+            return Some(DefTarget::Local(location));
+        }
         let (target, exists) = paths::resolve_spec_ref(&r.value, &file, workspace_root)?;
         if !exists {
             return None;
@@ -695,7 +755,12 @@ fn definition_at(
     // In-spec: module / system / type name → its definition, same document.
     let word = analysis::word_at(&ds.text, offset)?;
     let section = analysis::section_at(&ds.text, offset);
-    let span = if section.declares_types() {
+    let span = if section == SectionKind::Api {
+        analysis::api_entry_at(&ds.symbols, offset)
+            .map(|e| e.name_span)
+            .or_else(|| analysis::module_named(&ds.symbols, &word.text).map(|m| m.name_span))
+            .or_else(|| analysis::type_named(&ds.symbols, &word.text).map(|t| t.name_span))
+    } else if section.declares_types() {
         analysis::type_named(&ds.symbols, &word.text).map(|t| t.name_span)
     } else {
         analysis::module_named(&ds.symbols, &word.text)
@@ -709,8 +774,8 @@ fn definition_at(
     }))
 }
 
-/// If `offset` sits on a module or system `@ path`, or a header `source.paths`
-/// entry, return the raw path string.
+/// If `offset` sits on a module, system, or `## api` entry `@ path`, or a
+/// header `source.paths` entry, return the raw path string.
 fn path_target_at(ds: &DocState, offset: usize) -> Option<&str> {
     let within = |span: Span| offset >= span.start && offset < span.end;
     for m in &ds.doc.modules {
@@ -722,6 +787,13 @@ fn path_target_at(ds: &DocState, offset: usize) -> Option<&str> {
     }
     for s in &ds.doc.systems {
         if let Some(p) = &s.path
+            && within(p.span)
+        {
+            return Some(&p.value);
+        }
+    }
+    for e in &ds.doc.api {
+        if let Some(p) = &e.path
             && within(p.span)
         {
             return Some(&p.value);
@@ -756,7 +828,7 @@ fn references_at(ds: &DocState, uri: &Url, pos: Position, include_decl: bool) ->
 
     // Behavior prose mentions, plus every access list naming it — the latter is
     // what answers "which systems write this component?".
-    let mentions = analysis::find_mentions(&ds.doc.behavior, &word.text)
+    let mentions = analysis::find_mentions_in_doc(&ds.doc, &word.text)
         .into_iter()
         .chain(
             analysis::access_mentions(&ds.doc, &word.text)
@@ -786,16 +858,33 @@ fn references_at(ds: &DocState, uri: &Url, pos: Position, include_decl: bool) ->
     locs
 }
 
-/// The `unit` a references request at `offset` targets: the spec ref under the
-/// cursor, or the current file's own unit when the cursor is on the header
-/// `unit:` value (i.e. "who references this spec?").
+/// What a references request at `offset` targets, as a ref string — `unit`, or
+/// `unit::member` when the request is about one function (grammar §11):
+/// - the spec ref under the cursor ("who else references this?"),
+/// - the current file's own unit, on the header `unit:` value ("who references
+///   this spec?"),
+/// - one of this file's own `## api` entries, on its `fn` name ("who calls this
+///   function?").
 fn spec_reference_target(ds: &DocState, offset: usize) -> Option<String> {
     if let Some(r) = analysis::spec_ref_at(&ds.doc, offset) {
         let (_system, unit) = mml_parser::ast::split_spec_ref(&r.value);
-        return Some(unit.to_string());
+        return Some(match mml_parser::ast::spec_ref_member(&r.value) {
+            Some(member) => format!("{unit}{}{member}", mml_parser::ast::MEMBER_SEP),
+            None => unit.to_string(),
+        });
     }
     let header = &ds.doc.header;
     let within = |sp: Span| offset >= sp.start && offset <= sp.end;
+    if let Some(entry) = analysis::api_entry_at(&ds.symbols, offset)
+        && let Some(unit) = &header.unit
+    {
+        return Some(format!(
+            "{}{}{}",
+            unit.value,
+            mml_parser::ast::MEMBER_SEP,
+            entry.member
+        ));
+    }
     if let Some(unit) = &header.unit
         && within(unit.span)
     {
@@ -804,10 +893,12 @@ fn spec_reference_target(ds: &DocState, offset: usize) -> Option<String> {
     None
 }
 
-/// Scan the spec files under `root` for `@ spec` refs resolving to `target`
-/// (a unit name) and return their locations. Every spec is read and parsed on
-/// demand — the files are tiny, so this stays well under interactive latency.
+/// Scan the spec files under `root` for `@ spec` refs resolving to `target` —
+/// a unit name, or `unit::member` for one function — and return their
+/// locations. Every spec is read and parsed on demand; the files are tiny, so
+/// this stays well under interactive latency.
 fn spec_references(target: &str, root: &Path) -> Vec<Location> {
+    let (want_unit, want_member) = mml_parser::ast::split_member(target);
     let mut out = Vec::new();
     for unit in paths::list_spec_entries(root) {
         let path = root.join(format!("{unit}.{}", mml_parser::SPEC_EXT));
@@ -825,7 +916,10 @@ fn spec_references(target: &str, root: &Path) -> Vec<Location> {
         let li = LineIndex::new(&src);
         for r in refs {
             let (_rsystem, runit) = mml_parser::ast::split_spec_ref(&r.value);
-            if runit == target {
+            let rmember = mml_parser::ast::spec_ref_member(&r.value);
+            // A member request matches only refs naming that member; a plain
+            // unit request matches every ref into the unit, members included.
+            if runit == want_unit && (want_member.is_none() || want_member == rmember) {
                 out.push(Location {
                     uri: uri.clone(),
                     range: range_of(&li, r.span),
@@ -881,6 +975,7 @@ fn document_symbols(ds: &DocState) -> Vec<DocumentSymbol> {
             SectionKind::Systems => ("systems", system_symbols(ds)),
             SectionKind::Access => ("access", Vec::new()),
             SectionKind::Behavior => ("behavior", Vec::new()),
+            SectionKind::Api => ("api", api_symbols(ds)),
             SectionKind::Invariants => ("invariants", Vec::new()),
             SectionKind::Header | SectionKind::Unknown => continue,
         };
@@ -894,6 +989,29 @@ fn document_symbols(ds: &DocState) -> Vec<DocumentSymbol> {
         ));
     }
     out
+}
+
+/// One symbol per `## api` entry (grammar §11), so a module spec's outline is
+/// its public surface. A method is a METHOD, a standalone function a FUNCTION.
+fn api_symbols(ds: &DocState) -> Vec<DocumentSymbol> {
+    ds.doc
+        .api
+        .iter()
+        .map(|e| {
+            doc_symbol(
+                e.member(),
+                Some(e.signature()),
+                if e.receiver.is_some() {
+                    SymbolKind::METHOD
+                } else {
+                    SymbolKind::FUNCTION
+                },
+                ds.range(e.span),
+                ds.range(e.name.span),
+                Vec::new(),
+            )
+        })
+        .collect()
 }
 
 fn module_symbols(ds: &DocState) -> Vec<DocumentSymbol> {
@@ -1060,6 +1178,7 @@ fn completions_at(
     pos: Position,
     spec_entries: Option<&SpecEntries>,
     import_types: &[String],
+    spec_members: &[(String, String)],
 ) -> Vec<CompletionItem> {
     fn item(label: impl Into<String>, kind: CompletionItemKind, detail: &str) -> CompletionItem {
         CompletionItem {
@@ -1098,10 +1217,24 @@ fn completions_at(
 
     let offset = ds.offset(pos);
     match analysis::completion_context(&ds.text, offset) {
-        CompletionContext::SectionHeader => analysis::SECTION_HEADERS
-            .iter()
-            .map(|h| item(*h, CompletionItemKind::KEYWORD, "section"))
-            .collect(),
+        CompletionContext::SectionHeader => {
+            // Only the third-section spelling this kind uses (grammar §11) —
+            // offering the other one suggests the very thing that errors.
+            let expected = ds.doc.header.kind.as_ref().map(|k| k.value.steps_section());
+            analysis::SECTION_HEADERS
+                .iter()
+                .filter(|h| {
+                    let name = h.trim_start_matches('#').trim();
+                    match expected {
+                        Some(expected) if matches!(name, SECTION_BEHAVIOR | SECTION_API) => {
+                            name == expected
+                        }
+                        _ => true,
+                    }
+                })
+                .map(|h| item(*h, CompletionItemKind::KEYWORD, "section"))
+                .collect()
+        }
         CompletionContext::HeaderKey => analysis::HEADER_KEYS
             .iter()
             .map(|k| item(format!("{k}:"), CompletionItemKind::FIELD, "header key"))
@@ -1237,6 +1370,21 @@ fn completions_at(
             }
             out
         }
+        CompletionContext::SpecMember => spec_members
+            .iter()
+            .map(|(member, signature)| {
+                item(
+                    member.clone(),
+                    CompletionItemKind::FUNCTION,
+                    signature.as_str(),
+                )
+            })
+            .collect(),
+        CompletionContext::ApiEntry => vec![item(
+            "fn ",
+            CompletionItemKind::KEYWORD,
+            "public function (grammar §11)",
+        )],
         CompletionContext::Other => Vec::new(),
     }
 }
@@ -1419,11 +1567,33 @@ impl LanguageServer for Backend {
                     Some(paths::defined_type_names(&target))
                 })
                 .unwrap_or_default();
+            // For `@ spec <unit>::` completion, list the target's `## api`
+            // entries (the same filesystem hop as the import types above).
+            let spec_members = analysis::spec_ref_partial_at(&ds.text, offset)
+                .and_then(|partial| {
+                    let (unit, _) = mml_parser::ast::split_member(partial);
+                    let file = p.text_document.uri.to_file_path().ok()?;
+                    let (target, true) =
+                        paths::resolve_spec_ref(unit, &file, workspace_root.as_deref())?
+                    else {
+                        return None;
+                    };
+                    let src = std::fs::read_to_string(&target).ok()?;
+                    Some(
+                        mml_parser::parse(&src)
+                            .api
+                            .iter()
+                            .map(|e| (e.member(), e.signature()))
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .unwrap_or_default();
             CompletionResponse::Array(completions_at(
                 ds,
                 p.position,
                 spec_entries.as_ref(),
                 &import_types,
+                &spec_members,
             ))
         }))
     }
@@ -1703,7 +1873,7 @@ mod tests {
     fn completion_types_include_defined_and_primitives() {
         let ds = state();
         let pos = at(SAMPLE, "out: Stream", "out: ".len() as u32);
-        let items = completions_at(&ds, pos, None, &[]);
+        let items = completions_at(&ds, pos, None, &[], &[]);
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
         assert!(labels.contains(&"ChunkMesh"));
         assert!(labels.contains(&"String"));
@@ -1805,7 +1975,7 @@ mod tests {
         // Cursor right after `@ spec ` on the first behavior line.
         let off = text.find("@ spec other").unwrap() + "@ spec ".len();
         let pos = to_lsp_pos(ds.line_index.position(off));
-        let items = completions_at(&ds, pos, Some(&se), &[]);
+        let items = completions_at(&ds, pos, Some(&se), &[], &[]);
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
         // Bare sibling units are offered; the current file itself is not.
         assert!(labels.contains(&"two"));
@@ -1934,14 +2104,14 @@ mod tests {
         // Cursor right after `use model: ` → offer the owner's types.
         let off = text.find("use model: Offer").unwrap() + "use model: ".len();
         let pos = to_lsp_pos(ds.line_index.position(off));
-        let items = completions_at(&ds, pos, None, &import_types);
+        let items = completions_at(&ds, pos, None, &import_types, &[]);
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
         assert!(labels.contains(&"Offer"));
         // And the ref position offers the sibling units.
         let se = SpecEntries::gather(&Url::from_file_path(&path).unwrap()).expect("entries");
         let off = text.find("use model").unwrap() + "use ".len();
         let pos = to_lsp_pos(ds.line_index.position(off));
-        let items = completions_at(&ds, pos, Some(&se), &[]);
+        let items = completions_at(&ds, pos, Some(&se), &[], &[]);
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
         assert!(labels.contains(&"model"));
     }
@@ -2195,7 +2365,7 @@ mod tests {
         // Key position: the closed access-key set.
         let off = PLUGIN.find("  schedule: FixedUpdate").unwrap() + 2;
         let pos = to_lsp_pos(ds.line_index.position(off));
-        let labels: Vec<String> = completions_at(&ds, pos, None, &[])
+        let labels: Vec<String> = completions_at(&ds, pos, None, &[], &[])
             .into_iter()
             .map(|i| i.label)
             .collect();
@@ -2205,7 +2375,7 @@ mod tests {
         // `emits:` offers events only — never a component or a resource.
         let off = PLUGIN.find("emits:    WaveCleared").unwrap() + "emits:    ".len();
         let pos = to_lsp_pos(ds.line_index.position(off));
-        let labels: Vec<String> = completions_at(&ds, pos, None, &[])
+        let labels: Vec<String> = completions_at(&ds, pos, None, &[], &[])
             .into_iter()
             .map(|i| i.label)
             .collect();
@@ -2217,7 +2387,7 @@ mod tests {
         // `query:` offers components, declared and built-in.
         let off = PLUGIN.find("query:    Transform + Spawner").unwrap() + "query:    ".len();
         let pos = to_lsp_pos(ds.line_index.position(off));
-        let labels: Vec<String> = completions_at(&ds, pos, None, &[])
+        let labels: Vec<String> = completions_at(&ds, pos, None, &[], &[])
             .into_iter()
             .map(|i| i.label)
             .collect();
@@ -2228,7 +2398,7 @@ mod tests {
         // `schedule:` offers the built-in labels.
         let off = PLUGIN.find("schedule: Update\n  query:    Wave").unwrap() + "schedule: ".len();
         let pos = to_lsp_pos(ds.line_index.position(off));
-        let labels: Vec<String> = completions_at(&ds, pos, None, &[])
+        let labels: Vec<String> = completions_at(&ds, pos, None, &[], &[])
             .into_iter()
             .map(|i| i.label)
             .collect();
@@ -2238,7 +2408,7 @@ mod tests {
         // `after:` offers the file's own systems.
         let off = PLUGIN.find("after:    tick_wave_timer").unwrap() + "after:    ".len();
         let pos = to_lsp_pos(ds.line_index.position(off));
-        let labels: Vec<String> = completions_at(&ds, pos, None, &[])
+        let labels: Vec<String> = completions_at(&ds, pos, None, &[], &[])
             .into_iter()
             .map(|i| i.label)
             .collect();
@@ -2253,7 +2423,7 @@ mod tests {
     fn section_header_completion_includes_the_bevy_sections() {
         let ds = plugin_state();
         let pos = at(PLUGIN, "## systems", 3);
-        let labels: Vec<String> = completions_at(&ds, pos, None, &[])
+        let labels: Vec<String> = completions_at(&ds, pos, None, &[], &[])
             .into_iter()
             .map(|i| i.label)
             .collect();
@@ -2294,6 +2464,279 @@ mod tests {
         assert!(diags.is_empty(), "{diags:#?}");
         let fs_diags = lint::lint(&doc, PLUGIN, &spec, Some(dir.path()));
         assert!(fs_diags.is_empty(), "{fs_diags:#?}");
+    }
+
+    // ---- the module dialect (grammar §11) ----------------------------------
+
+    /// A module spec plus the plugin overview that references one of its
+    /// functions, as sibling files in one task dir.
+    fn detail_tree() -> (tempfile::TempDir, std::path::PathBuf, String) {
+        use std::fs;
+        let dir = tempfile::tempdir().unwrap();
+        let module = "system: s\nunit: wave-table\nkind: module\n\n## modules\n\n\
+## data\nstruct WaveEntry {\n  index: u32,\n}\n\n\
+## api\n\
+fn entry_for(index: u32) -> Option<WaveEntry>\n  - look the index up\n  - answer it\n\
+fn WaveEntry::offsets(count: u32) -> Vec<Vec2>\n  - lay the slots out on the pattern\n\n\
+## invariants\n";
+        let overview = "system: s\nunit: spawn-enemies\nkind: system\n\n\
+## modules\nWaveTable — authored wave table @ spec wave-table\n\n\
+## data\nuse wave-table: WaveEntry\n\n\
+## access\n  schedule: FixedUpdate\n\n\
+## behavior\n- look the wave up @ spec wave-table::entry_for\n\
+- place the spawns @ spec wave-table::WaveEntry::offsets\n\n\
+## invariants\n- ok\n";
+        fs::write(dir.path().join("wave-table.hmml"), module).unwrap();
+        fs::write(dir.path().join("spawn-enemies.hmml"), overview).unwrap();
+        let path = dir.path().join("spawn-enemies.hmml");
+        (dir, path, overview.to_string())
+    }
+
+    /// A module spec's outline is its public surface.
+    #[test]
+    fn document_symbols_list_api_entries() {
+        let (dir, _, _) = detail_tree();
+        let text = std::fs::read_to_string(dir.path().join("wave-table.hmml")).unwrap();
+        let ds = state_of(&text);
+        let syms = document_symbols(&ds);
+        let names: Vec<&str> = syms.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["modules", "data", "api", "invariants"]);
+        let api = syms.iter().find(|s| s.name == "api").unwrap();
+        let children = api.children.as_ref().unwrap();
+        let labels: Vec<&str> = children.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(labels, ["entry_for", "WaveEntry::offsets"]);
+        assert_eq!(children[0].kind, SymbolKind::FUNCTION);
+        assert_eq!(children[1].kind, SymbolKind::METHOD);
+        assert_eq!(
+            children[0].detail.as_deref(),
+            Some("fn entry_for(index: u32) -> Option<WaveEntry>")
+        );
+    }
+
+    /// Goto-definition on a `unit::member` ref lands on the function's own
+    /// line, not the top of the file — which is what makes a member ref worth
+    /// writing.
+    #[test]
+    fn goto_member_ref_lands_on_the_function() {
+        let (_dir, path, text) = detail_tree();
+        let ds = state_of(&text);
+        let file_uri = Url::from_file_path(&path).unwrap();
+
+        let off = text.find("@ spec wave-table::entry_for").unwrap() + "@ spec ".len();
+        let pos = to_lsp_pos(ds.line_index.position(off));
+        let DefTarget::Local(loc) = definition_at(&ds, &file_uri, None, pos).expect("goto member")
+        else {
+            panic!("local target")
+        };
+        assert!(loc.uri.path().ends_with("wave-table.hmml"));
+        assert!(loc.range.start.line > 0, "should not be the file head");
+
+        // The method form resolves too, and to a different line.
+        let off = text.find("@ spec wave-table::WaveEntry::offsets").unwrap() + "@ spec ".len();
+        let pos = to_lsp_pos(ds.line_index.position(off));
+        let DefTarget::Local(method_loc) =
+            definition_at(&ds, &file_uri, None, pos).expect("goto method")
+        else {
+            panic!("local target")
+        };
+        assert_ne!(method_loc.range.start.line, loc.range.start.line);
+    }
+
+    /// Hover on a member ref shows that one function in full, signature and
+    /// bullets — the "more specification under" the calling step.
+    #[test]
+    fn hover_member_ref_shows_the_entry() {
+        let (_dir, path, text) = detail_tree();
+        let ds = state_of(&text);
+        let file_uri = Url::from_file_path(&path).unwrap();
+        let off = text.find("@ spec wave-table::entry_for").unwrap() + "@ spec ".len();
+        let pos = to_lsp_pos(ds.line_index.position(off));
+        let hover = hover_at(&ds, &file_uri, None, pos).expect("hover");
+        let HoverContents::Markup(m) = hover.contents else {
+            panic!("markup")
+        };
+        assert!(m.value.contains("fn entry_for(index: u32)"), "{}", m.value);
+        assert!(m.value.contains("look the index up"), "{}", m.value);
+    }
+
+    /// Completion after `@ spec <unit>::` offers that unit's functions; before
+    /// the `::` it is still the unit being completed.
+    #[test]
+    fn member_completion_context_and_items() {
+        let (_dir, path, text) = detail_tree();
+        let ds = state_of(&text);
+        let file_uri = Url::from_file_path(&path).unwrap();
+
+        let off = text.find("wave-table::entry_for").unwrap() + "wave-table::".len();
+        assert_eq!(
+            analysis::completion_context(&text, off),
+            CompletionContext::SpecMember
+        );
+        let members = vec![
+            (
+                "entry_for".to_string(),
+                "fn entry_for(index: u32)".to_string(),
+            ),
+            (
+                "WaveEntry::offsets".to_string(),
+                "fn WaveEntry::offsets(count: u32)".to_string(),
+            ),
+        ];
+        let pos = to_lsp_pos(ds.line_index.position(off));
+        let se = SpecEntries::gather(&file_uri).expect("entries");
+        let items = completions_at(&ds, pos, Some(&se), &[], &members);
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(labels, ["entry_for", "WaveEntry::offsets"]);
+
+        let off = text.find("wave-table::entry_for").unwrap() + "wave-".len();
+        assert_eq!(
+            analysis::completion_context(&text, off),
+            CompletionContext::SpecRef
+        );
+    }
+
+    /// A `## api` line completes the entry form; its bullets complete like
+    /// behavior bullets, and a return-type position offers types.
+    #[test]
+    fn api_section_completion_contexts() {
+        let (dir, _, _) = detail_tree();
+        let text = std::fs::read_to_string(dir.path().join("wave-table.hmml")).unwrap();
+        let api_line = text.find("fn entry_for").unwrap();
+        assert_eq!(
+            analysis::completion_context(&text, api_line),
+            CompletionContext::ApiEntry
+        );
+        let bullet = text.find("  - look the index up").unwrap() + 2;
+        assert_eq!(
+            analysis::completion_context(&text, bullet),
+            CompletionContext::BehaviorKeyword
+        );
+        let prose = text.find("  - look the index up").unwrap() + "  - look ".len();
+        assert_eq!(
+            analysis::completion_context(&text, prose),
+            CompletionContext::BehaviorProse
+        );
+        let ret = text.find("-> Option").unwrap() + "-> ".len();
+        assert_eq!(
+            analysis::completion_context(&text, ret),
+            CompletionContext::Type
+        );
+    }
+
+    /// "Who calls this function?" — find-references from a module spec's own
+    /// `fn` name lists the callers, and only the ones naming that function.
+    #[test]
+    fn references_from_an_api_entry_finds_callers() {
+        let (dir, _, _) = detail_tree();
+        let module_path = dir.path().join("wave-table.hmml");
+        let text = std::fs::read_to_string(&module_path).unwrap();
+        let ds = state_of(&text);
+
+        let off = text.find("fn entry_for").unwrap() + "fn ent".len();
+        let target = spec_reference_target(&ds, off).expect("target");
+        assert_eq!(target, "wave-table::entry_for");
+        let locs = spec_references(&target, dir.path());
+        assert_eq!(locs.len(), 1, "{locs:#?}");
+        assert!(locs[0].uri.path().ends_with("spawn-enemies.hmml"));
+
+        // The method is a separate target, and the unit-level request covers
+        // every ref into the spec — both members plus the module line.
+        let off = text.find("fn WaveEntry::offsets").unwrap() + "fn Wave".len();
+        let method_target = spec_reference_target(&ds, off).expect("method target");
+        assert_eq!(method_target, "wave-table::WaveEntry::offsets");
+        assert_eq!(spec_references(&method_target, dir.path()).len(), 1);
+        assert_eq!(spec_references("wave-table", dir.path()).len(), 3);
+    }
+
+    /// An `## api` entry's `@ path` is a goto target, the same way a module
+    /// line's is — grammar §11.2 promises it reaches the real function.
+    #[test]
+    fn goto_from_an_api_entry_path_reaches_the_source() {
+        use std::fs;
+        let task = tempfile::tempdir().unwrap();
+        let spec_dir = task.path().join("notes/topic/task");
+        fs::create_dir_all(&spec_dir).unwrap();
+        let src_dir = task.path().join("repo/src");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::write(src_dir.join("table.rs"), "x").unwrap();
+
+        let text = "system: s\nunit: wave-table\nkind: module\nsource:\n  repo: repo\n  paths:\n    - src/table.rs\n\n\
+## modules\n\n\
+## data\n\n\
+## api\nfn entry_for(index: u32) -> u32 @ src/table.rs:31\n  - look it up\n\n\
+## invariants\n- ok\n"
+            .to_string();
+        let ds = state_of(&text);
+        let file_uri = Url::from_file_path(spec_dir.join("wave-table.hmml")).unwrap();
+
+        let at = text.find("@ src/table.rs:31").unwrap() + "@ src/ta".len();
+        let pos = to_lsp_pos(ds.line_index.position(at));
+        let DefTarget::Local(loc) = definition_at(&ds, &file_uri, Some(task.path()), pos)
+            .expect("goto from an api entry's @ path")
+        else {
+            panic!("local target")
+        };
+        assert!(loc.uri.path().ends_with("repo/src/table.rs"), "{loc:?}");
+        // The `:31` suffix positions the cursor on the function's line.
+        assert_eq!(loc.range.start.line, 30);
+    }
+
+    /// Hover on a `fn` name inside its own module spec shows the entry.
+    #[test]
+    fn hover_local_api_entry() {
+        let (dir, _, _) = detail_tree();
+        let module_path = dir.path().join("wave-table.hmml");
+        let text = std::fs::read_to_string(&module_path).unwrap();
+        let ds = state_of(&text);
+        let file_uri = Url::from_file_path(&module_path).unwrap();
+        let off = text.find("fn entry_for").unwrap() + "fn ent".len();
+        let pos = to_lsp_pos(ds.line_index.position(off));
+        let hover = hover_at(&ds, &file_uri, None, pos).expect("hover");
+        let HoverContents::Markup(m) = hover.contents else {
+            panic!("markup")
+        };
+        assert!(m.value.contains("fn entry_for(index: u32)"), "{}", m.value);
+    }
+
+    /// A member naming no entry of a spec that exists is an error, not the
+    /// warning a missing file gets: the file is right there to check against.
+    #[test]
+    fn unknown_member_is_an_error_while_a_missing_file_stays_a_warning() {
+        let (dir, path, _) = detail_tree();
+        let text = "system: s\nunit: caller\nkind: job\n\n\
+## modules\n\n## data\n\n\
+## behavior\n- a @ spec wave-table::nope\n- b @ spec no-such-spec::whatever\n\n\
+## invariants\n- ok\n";
+        std::fs::write(dir.path().join("caller.hmml"), text).unwrap();
+        let (doc, _) = analyze(text);
+        let diags = lint::lint(&doc, text, &dir.path().join("caller.hmml"), None);
+        let codes: Vec<&str> = diags.iter().map(|d| d.code).collect();
+        assert_eq!(
+            codes,
+            ["unknown-spec-member", "unresolved-spec-ref"],
+            "{diags:#?}"
+        );
+        assert_eq!(diags[0].severity, Severity::Error);
+        assert_eq!(diags[1].severity, Severity::Warning);
+        assert!(diags[0].message.contains("entry_for"), "{:?}", diags[0]);
+        let _ = path;
+    }
+
+    /// A module spec's `@ spec` hover summarises its public surface; a
+    /// behavioural spec's still lists its collaborators.
+    #[test]
+    fn spec_hover_of_a_module_lists_its_functions() {
+        let (dir, path, text) = detail_tree();
+        let ds = state_of(&text);
+        let file_uri = Url::from_file_path(&path).unwrap();
+        let off = text.find("@ spec wave-table\n").unwrap() + "@ spec ".len();
+        let pos = to_lsp_pos(ds.line_index.position(off));
+        let hover = hover_at(&ds, &file_uri, None, pos).expect("hover");
+        let HoverContents::Markup(m) = hover.contents else {
+            panic!("markup")
+        };
+        assert!(m.value.contains("fn entry_for(index: u32)"), "{}", m.value);
+        let _ = dir;
     }
 }
 

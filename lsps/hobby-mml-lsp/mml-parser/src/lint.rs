@@ -34,9 +34,14 @@ pub fn lint(
     out
 }
 
-/// Warnings for well-formed `@ spec` refs that do not resolve to a spec file
-/// on disk (grammar §5.4). Malformed refs already carry a parse/validate
-/// error and are skipped.
+/// Diagnostics for well-formed `@ spec` refs that do not resolve (grammar
+/// §5.4). Malformed refs already carry a parse/validate error and are skipped.
+///
+/// Two severities, because the two failures differ. A missing target **file**
+/// is an `unresolved-spec-ref` warning — the spec may be planned and not yet
+/// written. A `::member` the target file does not define is an
+/// `unknown-spec-member` error: the file is right there to check the name
+/// against, so the name is simply wrong.
 pub fn unresolved_spec_refs(
     doc: &Document,
     current_file: &Path,
@@ -47,7 +52,18 @@ pub fn unresolved_spec_refs(
         .filter(|s| crate::ast::is_valid_spec_ref(&s.value))
         .filter_map(|s| {
             let message = match paths::resolve_spec_ref(&s.value, current_file, workspace_root) {
-                Some((_, true)) => return None,
+                Some((target, true)) => {
+                    let member = crate::ast::spec_ref_member(&s.value)?;
+                    let (defined, kind) = target_api(&target);
+                    if defined.iter().any(|m| m == member) {
+                        return None;
+                    }
+                    return Some(Diagnostic::error(
+                        s.span,
+                        code::UNKNOWN_SPEC_MEMBER,
+                        unknown_member_message(&s.value, member, kind.as_deref(), &defined),
+                    ));
+                }
                 Some((candidate, false)) => format!(
                     "spec `{}` does not resolve to {}",
                     s.value,
@@ -62,6 +78,49 @@ pub fn unresolved_spec_refs(
             ))
         })
         .collect()
+}
+
+/// The `## api` members of the spec at `target` plus its declared kind, from a
+/// single read and parse — the message needs both when no member matches, and
+/// this runs on every document refresh.
+fn target_api(target: &Path) -> (Vec<String>, Option<String>) {
+    let Ok(src) = std::fs::read_to_string(target) else {
+        return (Vec::new(), None);
+    };
+    let doc = crate::parse(&src);
+    let members = doc.api.iter().map(crate::ast::ApiEntry::member).collect();
+    let kind = doc.header.kind.map(|k| k.value.as_str().to_owned());
+    (members, kind)
+}
+
+/// Why a `unit::member` ref found its file but not its function — the wrong
+/// name, or a target that has no functions to name at all.
+fn unknown_member_message(
+    raw: &str,
+    member: &str,
+    kind: Option<&str>,
+    defined: &[String],
+) -> String {
+    let (_, unit) = crate::ast::split_spec_ref(raw);
+    if defined.is_empty() {
+        return match kind {
+            Some("module") | None => {
+                format!("spec `{unit}` defines no `## api` entries, so it has no `{member}`")
+            }
+            Some(other) => format!(
+                "spec `{unit}` is a `{other}`; only a `kind: module` spec has functions to reference (grammar §11)"
+            ),
+        };
+    }
+    const SHOWN: usize = 8;
+    let mut listed: Vec<&str> = defined.iter().take(SHOWN).map(String::as_str).collect();
+    if defined.len() > SHOWN {
+        listed.push("…");
+    }
+    format!(
+        "spec `{unit}` defines no `{member}`; it has {}",
+        listed.join(", ")
+    )
 }
 
 /// Warnings for `use` type imports (grammar §4.5) whose target spec is missing,

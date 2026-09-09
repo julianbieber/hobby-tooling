@@ -39,6 +39,10 @@ pub struct Document {
     /// `## access` — the lone access block of a `kind: system` file (§8.3).
     pub access: Option<AccessBlock>,
     pub behavior: Vec<Step>,
+    /// `## api` — one entry per public function of a `kind: module` spec
+    /// (grammar §11), each owning the bullet tree that describes it. Empty for
+    /// every other kind, which writes `## behavior` in that slot instead.
+    pub api: Vec<ApiEntry>,
     /// `where:` symbol bindings at the end of `## behavior` (grammar §5.3).
     pub bindings: Vec<Binding>,
     pub invariants: Vec<Invariant>,
@@ -173,10 +177,14 @@ pub enum Kind {
     Plugin,
     /// One Bevy system split out of a plugin, with its own access block.
     System,
+    /// One module's public surface — the types it owns and the functions it
+    /// exposes, each described in full (grammar §11). The detail layer beneath
+    /// a behavioural unit's `## modules` line.
+    Module,
 }
 
 /// Every `kind:` value, in the order the LSP offers them.
-pub const KIND_VALUES: &[&str] = &["endpoint", "workflow", "job", "plugin", "system"];
+pub const KIND_VALUES: &[&str] = &["endpoint", "workflow", "job", "plugin", "system", "module"];
 
 impl Kind {
     pub fn parse(s: &str) -> Option<Kind> {
@@ -186,6 +194,7 @@ impl Kind {
             "job" => Some(Kind::Job),
             "plugin" => Some(Kind::Plugin),
             "system" => Some(Kind::System),
+            "module" => Some(Kind::Module),
             _ => None,
         }
     }
@@ -197,6 +206,26 @@ impl Kind {
             Kind::Job => "job",
             Kind::Plugin => "plugin",
             Kind::System => "system",
+            Kind::Module => "module",
+        }
+    }
+
+    /// Whether this kind's `## data` may carry `in:` / `out:` (grammar §4.4).
+    /// A Bevy kind's interface is its access block; a module's is its
+    /// functions' parameters and return types (§11). Only the classic kinds
+    /// have a slot for an input and an output type.
+    pub fn takes_io(self) -> bool {
+        matches!(self, Kind::Endpoint | Kind::Workflow | Kind::Job)
+    }
+
+    /// The name this kind spells its third section with: `api` for a module
+    /// (grammar §11), `behavior` for everything else. The two are alternative
+    /// spellings of one slot, which is why neither is legal on the other's
+    /// kinds.
+    pub fn steps_section(self) -> &'static str {
+        match self {
+            Kind::Module => SECTION_API,
+            _ => SECTION_BEHAVIOR,
         }
     }
 
@@ -214,6 +243,7 @@ impl Kind {
         match self {
             Kind::Plugin => &["systems", "behavior", "invariants"],
             Kind::System => &["access", "behavior", "invariants"],
+            Kind::Module => MODULE_SECTIONS,
             _ => LEGACY_SECTIONS,
         }
     }
@@ -244,10 +274,21 @@ impl Kind {
                 "behavior",
                 "invariants",
             ],
+            Kind::Module => MODULE_SECTIONS,
             _ => LEGACY_SECTIONS,
         }
     }
 }
+
+/// The `## behavior` section name — the third section of every kind but
+/// `module`.
+pub const SECTION_BEHAVIOR: &str = "behavior";
+/// The `## api` section name — the third section of a `kind: module` (§11).
+pub const SECTION_API: &str = "api";
+
+/// The four sections of a `kind: module` spec (grammar §11) — required and
+/// allowed alike. `## api` takes the slot `## behavior` holds elsewhere.
+pub const MODULE_SECTIONS: &[&str] = &["modules", "data", "api", "invariants"];
 
 /// The four sections of the classic (non-Bevy) dialect — required and allowed
 /// alike, and the fallback schema when `kind:` is missing or unparsable.
@@ -263,6 +304,7 @@ pub const SECTION_ORDER: &[&str] = &[
     "events",
     "systems",
     "access",
+    "api",
     "behavior",
     "invariants",
 ];
@@ -287,26 +329,65 @@ pub struct Module {
     pub span: Span,
 }
 
-/// Split a raw spec ref into `(system, unit)`. A bare ref (no `/`) has no
-/// system — it resolves within the referencing file's own system.
+/// The separator between a spec ref's unit and a member of it:
+/// `unit::function`, `unit::Type::method` (grammar §5.4).
+pub const MEMBER_SEP: &str = "::";
+
+/// Split a raw spec ref into `(system, unit)`, dropping any `::member` path so
+/// the result always names a *file*. A bare ref (no `/`) has no system — it
+/// resolves within the referencing file's own directory.
 pub fn split_spec_ref(raw: &str) -> (Option<&str>, &str) {
-    match raw.split_once('/') {
+    let (unit, _member) = split_member(raw);
+    match unit.split_once('/') {
         Some((system, unit)) => (Some(system), unit),
-        None => (None, raw),
+        None => (None, unit),
     }
 }
 
+/// Split a raw spec ref into its unit part and its optional member path — the
+/// `spawn_wave` of `wave-table::spawn_wave`, or the `Wave::advance` of
+/// `wave-table::Wave::advance` (grammar §5.4).
+pub fn split_member(raw: &str) -> (&str, Option<&str>) {
+    match raw.split_once(MEMBER_SEP) {
+        Some((unit, member)) => (unit, Some(member)),
+        None => (raw, None),
+    }
+}
+
+/// The member path of a spec ref, if it names one.
+pub fn spec_ref_member(raw: &str) -> Option<&str> {
+    split_member(raw).1
+}
+
 /// Whether `raw` is a well-formed spec ref: `system/unit` or `unit`, each
-/// segment matching the header ident rule (grammar §2):
-/// `[A-Za-z][A-Za-z0-9._-]*`.
+/// segment matching the header ident rule (grammar §2)
+/// `[A-Za-z][A-Za-z0-9._-]*`, optionally followed by a `::member` path of one
+/// or two identifier segments (`::function` or `::Type::method`, §5.4).
 pub fn is_valid_spec_ref(raw: &str) -> bool {
-    raw.matches('/').count() <= 1
-        && raw.split('/').all(|seg| {
+    let (unit, member) = split_member(raw);
+    let unit_ok = unit.matches('/').count() <= 1
+        && unit.split('/').all(|seg| {
             seg.starts_with(|c: char| c.is_ascii_alphabetic())
                 && seg
                     .chars()
                     .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-        })
+        });
+    let member_ok = match member {
+        None => true,
+        Some(path) => {
+            let segments: Vec<&str> = path.split(MEMBER_SEP).collect();
+            (1..=2).contains(&segments.len()) && segments.iter().all(|seg| is_member_ident(seg))
+        }
+    };
+    unit_ok && member_ok
+}
+
+/// Whether `s` names a function or a receiver type in a member path:
+/// `[A-Za-z_][A-Za-z0-9_]*`, which covers a snake_case function and a
+/// PascalCase type alike.
+fn is_member_ident(s: &str) -> bool {
+    s.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 // ---- data ------------------------------------------------------------------
@@ -679,6 +760,18 @@ pub struct TypeExpr {
     pub span: Span,
 }
 
+impl TypeExpr {
+    /// The type as written — `Map<String, Vec<Offer>>` — rebuilt from the tree,
+    /// for hover and for an `## api` signature.
+    pub fn render(&self) -> String {
+        if self.args.is_empty() {
+            return self.ident.value.clone();
+        }
+        let args: Vec<String> = self.args.iter().map(TypeExpr::render).collect();
+        format!("{}<{}>", self.ident.value, args.join(", "))
+    }
+}
+
 // ---- behavior --------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -705,6 +798,76 @@ pub enum StepKind {
     While,
     Try,
     OnError,
+}
+
+// ---- api (grammar §11) -----------------------------------------------------
+
+/// One entry of a module spec's `## api` section: a public function's
+/// signature plus the bullet tree describing what it does.
+///
+/// The bullets are ordinary [`Step`]s — same control-flow forms, same nesting,
+/// same trailing `@ spec` refs — so a step that calls a collaborator carries
+/// the ref at the point of the call.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ApiEntry {
+    /// The receiver type of a method: the `Wave` of `fn Wave::advance(…)`.
+    /// `None` for a standalone function.
+    pub receiver: Option<Spanned<String>>,
+    pub name: Spanned<String>,
+    pub params: Vec<Param>,
+    /// The return type after `->`. `None` when the function returns nothing.
+    pub ret: Option<TypeExpr>,
+    /// Trailing ` @ <path>` locating the function in the source, repo-relative
+    /// and optionally `:line` — the annotation a module line carries (§3).
+    pub path: Option<Spanned<String>>,
+    /// Trailing `@ spec` annotation (§5.4) — the last annotation on the line.
+    pub spec: Option<Spanned<String>>,
+    /// The nested bullets describing the function's behaviour.
+    pub steps: Vec<Step>,
+    pub span: Span,
+}
+
+impl ApiEntry {
+    /// How a `@ spec unit::<member>` ref addresses this entry: the bare
+    /// function name, or `Type::method` for a method (grammar §5.4).
+    pub fn member(&self) -> String {
+        match &self.receiver {
+            Some(receiver) => format!("{}{MEMBER_SEP}{}", receiver.value, self.name.value),
+            None => self.name.value.clone(),
+        }
+    }
+
+    /// The span of the entry's whole name, receiver included — what a cursor
+    /// must sit in to be "on" this function.
+    pub fn member_span(&self) -> Span {
+        match &self.receiver {
+            Some(receiver) => Span::new(receiver.span.start, self.name.span.end),
+            None => self.name.span,
+        }
+    }
+
+    /// The signature as written, rebuilt for hover and completion —
+    /// `fn spawn_wave(index: u32) -> Vec<Entity>`.
+    pub fn signature(&self) -> String {
+        let params: Vec<String> = self
+            .params
+            .iter()
+            .map(|p| format!("{}: {}", p.name.value, p.ty.render()))
+            .collect();
+        let ret = match &self.ret {
+            Some(ty) => format!(" -> {}", ty.render()),
+            None => String::new(),
+        };
+        format!("fn {}({}){ret}", self.member(), params.join(", "))
+    }
+}
+
+/// One parameter of an [`ApiEntry`]: `name: Type`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Param {
+    pub name: Spanned<String>,
+    pub ty: TypeExpr,
+    pub span: Span,
 }
 
 // ---- where: bindings -------------------------------------------------------

@@ -120,9 +120,12 @@ pub fn added_lines(src: &str) -> BTreeSet<usize> {
 
 /// Which sections write their content as `- ` bullets, so a removed line —
 /// whose bullet the marker's own `-` stands in for — needs one restored.
-fn bulleted(section: Option<&str>, in_source_paths: bool) -> bool {
+fn bulleted(section: Option<&str>, in_source_paths: bool, removed: &str) -> bool {
     match section {
         Some("behavior") | Some("invariants") => true,
+        // `## api` interleaves `fn` signature lines with the bullets nested
+        // under them, so only the bullets need one restored (grammar §11).
+        Some("api") => !removed.starts_with("fn "),
         // The header's `source.paths:` entries are bullets too.
         None => in_source_paths,
         _ => false,
@@ -209,11 +212,12 @@ pub fn baseline(src: &str) -> Baseline {
                 continue;
             }
             Some((Marker::Removed, removed)) if !removed.is_empty() => {
-                let bullet = if bulleted(section, in_source_paths) && !removed.starts_with("- ") {
-                    "- "
-                } else {
-                    ""
-                };
+                let bullet =
+                    if bulleted(section, in_source_paths, removed) && !removed.starts_with("- ") {
+                        "- "
+                    } else {
+                        ""
+                    };
                 text.push_str(&" ".repeat(line.indent));
                 text.push_str(bullet);
                 text.push_str(removed);

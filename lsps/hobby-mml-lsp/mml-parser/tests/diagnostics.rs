@@ -888,3 +888,279 @@ fn the_baseline_restores_a_bullet_only_where_the_section_has_them() {
     assert!(recovered.contains("\n  stale: u32,\n"), "{recovered}");
     assert!(recovered.contains("\n- do the old thing\n"), "{recovered}");
 }
+
+// ---- the module dialect (grammar §11) --------------------------------------
+
+/// A `kind: module` spec with `api` as its `## api` body.
+fn module_spec(api: &str) -> String {
+    format!(
+        "system: s\nunit: u\nkind: module\n\n\
+## modules\n\n\
+## data\n\
+struct Wave {{\n  index: u32,\n}}\n\n\
+## api\n{api}\n\
+## invariants\n"
+    )
+}
+
+/// A signature with no parameter list is not a signature; the entry still
+/// parses so its bullets have somewhere to attach.
+#[test]
+fn api_entry_without_parens() {
+    let src = module_spec("fn spawn\n  - look it up\n");
+    let d = only(&src, code::MALFORMED_API_ENTRY);
+    assert_eq!(d.severity, Severity::Error);
+    assert!(d.message.contains("expected `(`"), "{}", d.message);
+}
+
+/// An unclosed parameter list is reported as such rather than swallowing the
+/// rest of the line as a type.
+#[test]
+fn api_entry_unterminated_params() {
+    let src = module_spec("fn spawn(index: u32\n  - look it up\n");
+    let d = only(&src, code::MALFORMED_API_ENTRY);
+    assert!(d.message.contains("expected `)`"), "{}", d.message);
+}
+
+/// A return type is introduced by `->`; without it the trailing text is not a
+/// type the checker should try to resolve.
+#[test]
+fn api_return_without_arrow() {
+    let src = module_spec("fn spawn(index: u32) Wave\n  - look it up\n");
+    let d = only(&src, code::MALFORMED_API_ENTRY);
+    assert!(d.message.contains("expected `-> Type`"), "{}", d.message);
+}
+
+/// Every parameter is `name: Type`; a bare name has no type to check.
+#[test]
+fn api_param_without_type() {
+    let src = module_spec("fn spawn(index) -> Wave\n  - look it up\n");
+    let d = only(&src, code::MALFORMED_API_ENTRY);
+    assert!(d.message.contains("name: Type"), "{}", d.message);
+}
+
+/// Every bullet in `## api` describes some function, so one at column 0 belongs
+/// to none.
+#[test]
+fn api_bullet_outside_an_entry() {
+    let src = module_spec("- look it up\n");
+    let d = only(&src, code::MALFORMED_API_ENTRY);
+    assert_eq!(d.severity, Severity::Error);
+    assert!(d.message.contains("under a `fn` entry"), "{}", d.message);
+}
+
+/// An entry is addressed by its member name, so two entries may not share one.
+#[test]
+fn duplicate_api_entry() {
+    let src =
+        module_spec("fn spawn(index: u32) -> Wave\n  - a\nfn spawn(index: u32) -> Wave\n  - b\n");
+    let d = only(&src, code::DUPLICATE_API_ENTRY);
+    assert_eq!(d.severity, Severity::Error);
+    assert_span(&src, &d, "spawn");
+}
+
+/// A method and a standalone function of the same name are different entries —
+/// `Wave::spawn` and `spawn` are addressed differently by a `::` ref.
+#[test]
+fn method_and_function_of_the_same_name_are_distinct() {
+    let src = module_spec(
+        "fn spawn(index: u32) -> Wave\n  - a\nfn Wave::spawn(index: u32) -> Wave\n  - b\n",
+    );
+    let (_doc, diags) = analyze(&src);
+    assert!(
+        !diags.iter().any(|d| d.code == code::DUPLICATE_API_ENTRY),
+        "{diags:#?}"
+    );
+}
+
+/// A signature's parameter types resolve exactly like a struct field's.
+#[test]
+fn undefined_type_in_a_signature() {
+    let src = module_spec("fn spawn(index: Bogus) -> Wave\n  - look it up\n");
+    let d = only(&src, code::UNDEFINED_TYPE);
+    assert_eq!(d.severity, Severity::Error);
+    assert_span(&src, &d, "Bogus");
+}
+
+/// …and so does a return type, nested containers included.
+#[test]
+fn undefined_return_type_in_a_signature() {
+    let src = module_spec("fn spawn(index: u32) -> Option<Bogus>\n  - look it up\n");
+    let d = only(&src, code::UNDEFINED_TYPE);
+    assert_span(&src, &d, "Bogus");
+}
+
+/// The containers a signature needs to stay faithful to real code resolve
+/// without a declaration (grammar §4.3).
+#[test]
+fn new_containers_resolve() {
+    let src = module_spec(
+        "fn spawn(index: u32) -> Future<Result<Option<Wave>, String>>\n  - look it up\n\
+fn pair(index: u32) -> Tuple<Wave, Wave>\n  - look both up\n\
+fn either(index: u32) -> Either<String, Wave>\n  - look it up\n",
+    );
+    let (_doc, diags) = analyze(&src);
+    assert!(diags.is_empty(), "unexpected diagnostics: {diags:#?}");
+}
+
+/// A receiver has to be a type the module owns: a method on the module itself
+/// is written as a plain `fn`.
+#[test]
+fn unknown_receiver_warns() {
+    let src = module_spec("fn Table::spawn(index: u32) -> Wave\n  - look it up\n");
+    let d = only(&src, code::UNDEFINED_TYPE);
+    assert_eq!(d.severity, Severity::Warning);
+    assert_span(&src, &d, "Table");
+}
+
+/// The section exists to carry the public surface, so an empty one means the
+/// surface has not been captured.
+#[test]
+fn empty_api_section_warns() {
+    let src = module_spec("");
+    let d = only(&src, code::EMPTY_API);
+    assert_eq!(d.severity, Severity::Warning);
+    assert_span(&src, &d, "## api");
+}
+
+/// `## api` and `## behavior` are alternative spellings of one slot, so each is
+/// illegal on the other's kinds — reinterpreting one as the other would
+/// silently discard structurally different content.
+#[test]
+fn behavior_section_on_a_module_is_an_error() {
+    let src = "system: s\nunit: u\nkind: module\n\n\
+## modules\n\n\
+## data\n\n\
+## behavior\n- do it\n\n\
+## invariants\n";
+    let d = only(src, code::SECTION_NOT_ALLOWED);
+    assert_eq!(d.severity, Severity::Error);
+    assert_span(src, &d, "## behavior");
+}
+
+#[test]
+fn api_section_on_a_behavioural_kind_is_an_error() {
+    let src = "system: s\nunit: u\nkind: job\n\n\
+## modules\n\n\
+## data\n\n\
+## api\nfn spawn(index: u32) -> u32\n  - look it up\n\n\
+## invariants\n";
+    let d = only(src, code::SECTION_NOT_ALLOWED);
+    assert_eq!(d.severity, Severity::Error);
+    assert_span(src, &d, "## api");
+}
+
+/// A module has no `in:`/`out:` — its surface is its functions' parameters and
+/// return types.
+#[test]
+fn io_line_on_a_module_is_an_error() {
+    let src = "system: s\nunit: u\nkind: module\n\n\
+## modules\n\n\
+## data\nin: String\n\n\
+## api\nfn spawn(index: u32) -> u32\n  - look it up\n\n\
+## invariants\n";
+    let d = only(src, code::MALFORMED_STRUCT);
+    assert_eq!(d.severity, Severity::Error);
+    assert!(d.message.contains("module spec"), "{}", d.message);
+}
+
+/// A member path is one or two identifier segments; a longer one names nothing.
+#[test]
+fn malformed_member_ref() {
+    let src = module_spec("fn spawn(index: u32) -> Wave\n  - look it up @ spec other::a::b::c\n");
+    let d = only(&src, code::MALFORMED_SPEC_REF);
+    assert_eq!(d.severity, Severity::Error);
+    assert_span(&src, &d, "other::a::b::c");
+}
+
+/// A `use` line imports types out of a spec file, so a member on its ref names
+/// something no type can come from.
+#[test]
+fn member_on_an_import_ref_is_an_error() {
+    let src = "system: s\nunit: u\nkind: module\n\n\
+## modules\n\n\
+## data\nuse other::spawn: Wave\n\n\
+## api\nfn go(w: Wave) -> u32\n  - look it up\n\n\
+## invariants\n";
+    let d = only(src, code::MALFORMED_IMPORT);
+    assert_eq!(d.severity, Severity::Error);
+    assert!(d.message.contains("names a function"), "{}", d.message);
+}
+
+/// A module spec is annotated like any behavioural spec: a `# +` on a `fn` line
+/// covers its whole nested tree, and the baseline still reconstructs.
+#[test]
+fn annotated_module_spec_is_recoverable() {
+    let src = module_spec(
+        "fn spawn(index: u32) -> Wave\n  - look it up\n\
+# +\nfn upsert(wave: Wave) -> u32\n  - store it\n",
+    );
+    let (_doc, diags) = analyze(&src);
+    assert!(
+        !diags.iter().any(
+            |d| d.code == code::UNRECOVERABLE_BASELINE || d.code == code::EMPTY_CHANGE_ADDITION
+        ),
+        "{diags:#?}"
+    );
+}
+
+/// A `fn` indented under another entry is taken for a bullet by the step
+/// parser; left silent it would drop a public function from the api, and the
+/// mistake would surface as an error in whichever *other* spec references it.
+#[test]
+fn nested_api_entry_is_an_error() {
+    let src = module_spec("fn a(index: u32) -> u32\n  - y\n  fn b(index: u32) -> u32\n    - z\n");
+    let d = only(&src, code::MALFORMED_API_ENTRY);
+    assert_eq!(d.severity, Severity::Error);
+    assert_span(&src, &d, "fn b(index: u32) -> u32");
+    assert!(d.message.contains("column 0"), "{}", d.message);
+}
+
+/// `::` with nothing before it names no receiver; a function of the module
+/// itself is a plain `fn`.
+#[test]
+fn empty_receiver_before_separator_is_an_error() {
+    let src = module_spec("fn ::spawn(index: u32) -> u32\n  - look it up\n");
+    let d = only(&src, code::MALFORMED_API_ENTRY);
+    assert_eq!(d.severity, Severity::Error);
+    assert!(d.message.contains("receiver type"), "{}", d.message);
+}
+
+/// A doubled arrow is a signature mistake, and must not be reported as a bogus
+/// type name on top of it.
+#[test]
+fn doubled_return_arrow_is_a_signature_error() {
+    let src = module_spec("fn spawn(index: u32) -> -> u32\n  - look it up\n");
+    let d = only(&src, code::MALFORMED_API_ENTRY);
+    assert!(d.message.contains("one `->`"), "{}", d.message);
+    let (_doc, diags) = analyze(&src);
+    assert!(
+        !diags.iter().any(|d| d.code == code::UNDEFINED_TYPE),
+        "{diags:#?}"
+    );
+}
+
+/// The `## api` arm of the baseline reconstruction: a removed `fn` line keeps
+/// no bullet, a removed nested bullet gets its `- ` and indent restored. With
+/// this wrong, `--lint` fails on a legitimately annotated module spec.
+#[test]
+fn removals_in_api_reconstruct_the_baseline() {
+    // Written on one line on purpose: a `\`-continuation would eat the leading
+    // spaces this test is about.
+    let src = module_spec(
+        "fn spawn(index: u32) -> u32\n# - fn upsert(wave: u32) -> u32\n  - build the query\n  # - run the old query\n# +\n  - run the new query\n",
+    );
+    let (_doc, diags) = analyze(&src);
+    assert!(
+        !diags.iter().any(|d| d.code == code::UNRECOVERABLE_BASELINE),
+        "{diags:#?}"
+    );
+
+    let baseline = mml_parser::annotations::baseline(&src).text;
+    assert!(
+        baseline.contains("\nfn upsert(wave: u32) -> u32\n"),
+        "{baseline}"
+    );
+    assert!(baseline.contains("\n  - run the old query\n"), "{baseline}");
+    assert!(!baseline.contains("run the new query"), "{baseline}");
+}
