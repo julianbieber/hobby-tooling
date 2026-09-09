@@ -5,20 +5,59 @@
 | Type         | skill                                                                  |
 | Install path | `~/.claude-hobby/commands/task/build.md` → `/task:build`               |
 | Owner        | @julianbieber                                                          |
-| Dependencies | `journal:resume`, `hmml-*`, `comment-pass`, `journal:write`            |
+| Dependencies | `journal:resume`, `hmml-*`, `comment-pass`, `structure`, `subtask`, `journal:write` |
 | Status       | experimental                                                           |
 | Supersedes   | `dev-flow`                                                             |
 
 ## Description
 
-The whole task as one pipeline with a recorded stage. Takes a brief from a
-description, a GitHub issue, or the task notes; specs the unit as it is today;
+The whole task as one pipeline with a recorded stage. Asks once whether this is
+really one task; takes a brief from a description, a GitHub issue, or the task
+notes; specs the unit as it is today; collects the business context only I have;
 writes the change on top of that baseline as `# +` / `# -` annotations; loops on
 my review until the delta is right; implements and tests; runs `/comment-pass`
 and `/structure`; stops for me to read the diff; then the PR and the journal
 entry.
 
-Two hard stops: after the HMML review, and before the PR.
+Four hard stops: the subtask assessment, the business-context questions, the
+HMML review, and the PR.
+
+## The questions come before the code, not after it
+
+A comment pass that quizzes the author line by line after the code is written
+asks for a judgment about code they did not author, at a point where the only
+honest answer is often "you tell me". So the questions moved to GATE C, between
+the baseline and the delta: they are derived from the goal read against what the
+code does today, before anything is designed.
+
+The answers are recorded verbatim in `business-context.md` in the task notes,
+and that file is then the only text — besides a fact verified in the code — that
+any later phase may take a *why* from. It reaches the delta, then the plan, then
+the code, and only last a comment. `/comment-pass` becomes a **matcher**: it
+writes a comment where a recorded passage answers the site, and reports the rest
+as gaps rather than filling them in. A gap is closed by extending the context
+(`/task:build context`), never by inventing the sentence.
+
+That is the same three-source rule the commit-message policy in
+`~/.claude-hobby/CLAUDE.md` already states — my prompts, what we settled, or a
+verified fact — with the first two finally written down somewhere a later
+session can read them.
+
+## Subtasks and this pipeline are two different cuts
+
+`assess-split` runs once, first, before any planning, and ends at a hard gate. A
+**subtask** is a separate deliverable with its own worktree, branch, PR and
+session, judged by the six Task shaping rules in `~/.claude-hobby/CLAUDE.md`.
+This pipeline is one branch: everything it does lands as one change.
+
+The gate refuses on a branch that already has commits or a dirty tree. That
+refusal is what lets a subtask's PR target the default branch — `/subtask` cuts
+from this branch, so at assessment time the two are the same thing and each
+subtask is genuinely independent. Later, subtasks would inherit unmerged work.
+Depth is bounded at one by `is_subtask` in the seeded state file rather than by
+asking the model to remember.
+
+Most tasks are one task, and the phase is expected to say so in a line.
 
 ## Where the standards fit
 
@@ -66,11 +105,14 @@ becoming indistinguishable from a fresh baseline.
 
 | phase | runs | ends |
 |---|---|---|
-| `plan` | Gate 0 prior-art/size, Gate 0b the repo's standards, brief, `hmml-extract` \| `hmml-new` for the baseline, then the `# +`/`# -` delta, then `hmml-review` | hard stop |
+| `assess-split` | precondition check, the cut tested against the shaping rules | hard stop |
+| `handed-off` | `/subtask` per approved cut, seeded state, `journal:write` | terminal |
+| `plan` | Gate 0 prior-art/size, Gate 0b the repo's standards, brief, `hmml-extract` \| `hmml-new` for the baseline, then the business-context questions | hard stop |
+| `context` | records my answers verbatim, then the `# +`/`# -` delta, then `hmml-review` | hard stop |
 | `await-hmml-review` | nothing — I edit the baseline or the delta | `continue` or `revise` |
 | `revise` | `hmml-review` again on the edited spec | back to `await-hmml-review` |
 | `implement` | `hmml-translate`, run + test, `hmml-validate` | falls through |
-| `comments` | `/comment-pass` over the branch diff | falls through |
+| `comments` | `/comment-pass` over the branch diff, matched against the recorded context | falls through |
 | `standards` | `/structure` on the target repo — ratchet a budget the change improved, try to fix one it broke | falls through |
 | `review` | prints the diff, evidence and comments for me to read | hard stop |
 | `await-review` | nothing — I read the summary | `continue` |
@@ -95,6 +137,8 @@ prunes stale symlinks on the next run.
 /task:build #42
 /task:build --notes
 /task:build implement
+/task:build context          # re-open the questions and rebuild off fuller answers
+/task:build --no-split       # I already know this is one task
 ```
 
 ## Known Limitations
@@ -104,6 +148,6 @@ prunes stale symlinks on the next run.
 - Inferring the starting phase from artifacts is a guess when a task was worked on
   outside the pipeline.
 
-## TODO(jb-doc): why the pipeline stops exactly twice
+## TODO(jb-doc): why the pipeline stops exactly where it does
 
-<!-- What it should cover: what makes those two points the ones worth a hard stop. -->
+<!-- What it should cover: what makes those four points the ones worth a hard stop. -->
