@@ -3,13 +3,35 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-/// Resolved helix runtime directory. Defaults to the path the user keeps their
-/// helix checkout at; overridable via `HELIX_RUNTIME`.
+/// Helix's config directory, `$XDG_CONFIG_HOME/helix` or `~/.config/helix`.
+/// Falls back to a relative `.config/helix` when neither variable is set, which
+/// resolves against the process's working directory and will not exist.
+fn helix_config_dir() -> PathBuf {
+    if let Ok(p) = std::env::var("XDG_CONFIG_HOME")
+        && !p.is_empty()
+    {
+        return PathBuf::from(p).join("helix");
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    PathBuf::from(home).join(".config").join("helix")
+}
+
+/// Resolved helix runtime directory, holding `grammars/` and `queries/`.
+/// Defaults to the `runtime` symlink in helix's config directory; overridable
+/// via `HELIX_RUNTIME`.
 pub fn helix_runtime() -> PathBuf {
     if let Ok(p) = std::env::var("HELIX_RUNTIME") {
         return PathBuf::from(p);
     }
-    PathBuf::from("/home/jbieber/outside_repos/helix/runtime")
+    helix_config_dir().join("runtime")
+}
+
+/// The `languages.toml` this server reads. Always the one in helix's config
+/// directory — the merged file helix itself loads — never one beside the
+/// runtime directory, which on a checkout-based runtime is the unmerged copy
+/// compiled into the binary and on a symlinked one is absent.
+pub fn helix_languages_toml() -> PathBuf {
+    helix_config_dir().join("languages.toml")
 }
 
 #[derive(Debug, Clone)]
@@ -44,10 +66,7 @@ impl LanguageRegistry {
 
     pub fn load() -> anyhow::Result<Self> {
         let runtime = helix_runtime();
-        let languages_toml = runtime
-            .parent()
-            .map(|p| p.join("languages.toml"))
-            .unwrap_or_else(|| runtime.join("../languages.toml"));
+        let languages_toml = helix_languages_toml();
         let raw = std::fs::read_to_string(&languages_toml)
             .map_err(|e| anyhow::anyhow!("read {}: {}", languages_toml.display(), e))?;
         let doc: HelixLanguagesDoc = toml::from_str(&raw)?;
