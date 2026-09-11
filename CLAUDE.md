@@ -318,13 +318,34 @@ sideways and editing `hwt_core` needs one workspace's tests, not two.
 ## A coordinator is a task with no worktree, and `tasks.json` is its whole state
 
 `/task:auto` and `/task:coordinate` exist for work where I care about what the
-change does and not how it is built. The first is `/task:build` with its four
-gates collapsed to two — acceptance criteria at the start, only if the brief
-does not already say what done looks like, and the running application at the
-end, before the PR opens. The second works a list of such tasks one at a time
-from a **coordinator session**: `hcdev coordinator <blurb>` run from
-`~/fun_repos/<project>`, a zellij session with `hcoord tui` on the left and
-`chobby` on the right.
+change does and not how it is built. The first runs a task in two processes —
+a headless **plan** stage that reads the code once and writes `plan.md`, then a
+fresh **build** stage that implements from the plan alone — with two gates:
+acceptance criteria at the start, only if the brief does not already say what
+done looks like, and the running application at the end, before the PR opens.
+The second works a list of such tasks one at a time from a **coordinator
+session**: `hcdev coordinator <blurb>` run from `~/fun_repos/<project>`, a
+zellij session with `hcoord tui` on the left and `chobby` on the right.
+
+**Two processes per task, because context was the cost.** The first version ran
+`/task:build`'s whole pipeline in one session — HMML baseline, annotated delta,
+the multi-lens spec review, then the implementation on top of all of it — and
+one task used up a session. The spec review loop and the planning conversation
+carried into the implementation were the two largest costs, and neither buys
+anything when the UX is what matters. So `/task:auto` has no HMML, and `hauto`
+(`bin/hauto`, the Claude pane of the `hobby-auto` layout) starts the plan stage
+as `chobby -p` and the build stage as a fresh `chobby` once the phase is
+`planned`. A session cannot clear another session's context — a cross-session
+message is delivered as text and a slash command in it is never executed — so
+a new process is the only clear there is, and it costs nothing because the
+window had to be opened anyway. The build stage runs on `model` from the state
+file, `sonnet` when a coordinator seeded it, since a plan that names the files
+and the steps leaves mostly mechanical work.
+
+**The coordinator knows nothing about any task.** It never reads a task's code,
+plan, diff or journal; planning happens in the task's own window. What reaches
+it is a phase name from `build-task.json` and a PR URL from `prs.json`, which is
+what lets one coordinator session work a whole list.
 
 **The coordinator is a task under the reserved topic `coordinator`.** Its notes
 dir `notes/<project>/coordinator/<blurb>/` has a `task.json`, so `hwt`, `hdash`
@@ -344,12 +365,15 @@ between tasks is expected. The tasks it creates sit under the blurb as their
 topic (`~/fun_worktrees/<project>/<blurb>/<blurb>-<slug>`), so a coordinator's
 work groups itself.
 
-**The coordinator waits in a shell call, not in prompts.** A Claude session
-cannot sleep except through a tool, so `hcoord wait <task notes dir>` blocks on
-the task's `build-task.json` — the state file `/task:build` already writes at
-every transition — and returns when the phase is one a person answers
-(`await-*`) or terminal. That is the contract that makes the two sessions
-independent: `/task:auto` names its two gates `await-acceptance` and
+**The coordinator waits on an idle notice, and falls back to a shell call.** A
+Claude session cannot sleep except through a tool. The task's window is a peer
+session on this machine, so the coordinator subscribes with `SendMessage`
+(`notify_when_idle`, no message) and gets one notice when that session ends a
+turn — a gate or `done` — for free. It never sends the session text. Before the
+peer is listed, and after a resume, `hcoord wait <task notes dir>` blocks on
+the task's `build-task.json` and returns when the phase is one a person answers
+(`await-*`) or terminal. That phase naming is the contract that keeps the two
+sessions independent: `/task:auto` names its gates `await-acceptance` and
 `await-play`, and nothing else in either skill has to know the other exists.
 `--after <phase>` is the second call on the same gate, so a reported
 `await-play` is not reported again at once. The timeout is 570 seconds because
@@ -360,9 +384,8 @@ needs the notes dir as an argument and KDL cannot expand anything, so a
 committed layout could only ever show one coordinator. `hcdev coordinator`
 writes `hobby-coordinator-<session>.kdl` into the runtime dir and hands zellij
 the path. `hobby-auto.kdl` *is* installed: it is `hobby-dev` with the Claude
-pane opening on `/task:auto`, which is how a window a coordinator spawns starts
-working the moment it exists — the prompt is a positional argument `chobby`
-passes through to `claude`.
+pane running `hauto`, which is how a window a coordinator spawns starts working
+the moment it exists.
 
 **A coordinator's windows go to one desktop.** `hcdev auto --window` gives its
 alacritty the WM_CLASS `hcdev-auto`, and the window manager does the rest: in

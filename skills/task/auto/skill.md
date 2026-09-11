@@ -1,217 +1,241 @@
 ---
-description: Run a task unattended — the /task:build pipeline with its four gates collapsed to two, acceptance criteria at the start only if the brief does not already say what done looks like, and the running app handed to me at the end before the PR opens
-argument-hint: '[<description> | #<issue>] [<phase>] [--no-hmml]'
-allowed-tools: Skill, Read, Write, Edit, AskUserQuestion, Bash
+description: Run a task unattended in two separate processes — a headless plan stage that reads the code once and writes plan.md, then a fresh build stage that implements from the plan alone and hands me the running app before the PR opens
+argument-hint: 'plan | build [<description> | #<issue>]'
+allowed-tools: Skill, Read, Write, Edit, Bash
 ---
 
-Run a task **unattended**. This is `/task:build` with the gates it stops at
-reduced to the two a person actually needs: **acceptance** at the start, only
-when the brief does not already say what done looks like, and **play** at the
-end, where the running application is put in front of me and the PR waits for
-my `continue`. Everything between runs without stopping.
+Run a task **unattended**, in two processes that never share a context.
+`hauto` — the Claude pane of an `hcdev auto` session — starts each one from the
+phase in `build-task.json`:
 
-**Read `~/.claude-hobby/commands/task/build.md` first** and run its phases with
-their sub-skills exactly as it describes them. This file says only what differs.
-Where the two disagree, this file wins; where this file is silent, `/task:build`
-governs.
+| stage | process | reads | writes |
+|---|---|---|---|
+| `plan` | `chobby -p "/task:auto plan"`, headless | the brief, the code | `plan.md`, the state file |
+| `build` | `chobby "/task:auto build"`, interactive, fresh | `plan.md`, the brief | the code, the PR |
 
-## Five rules that override everything else
+The split is the point: the plan stage's reading of the code dies with its
+process, and the build stage starts from a document instead of a conversation.
+There is **no HMML** in this pipeline and no spec review loop. `/task:build`
+governs nothing here; where this file is silent, do the obvious thing and note
+it in the journal.
 
-1. **Two hard stops, and no others.** GATE A (acceptance, conditional) and
-   GATE P (play, always). GATE S is skipped (`no_split: true` — a task under a
-   coordinator was split already, and a task typed by hand is taken as one
-   task). GATE C's questions fold into GATE A. GATE 1 does not stop: the spec
-   review's plan is taken and implemented. GATE 2 becomes GATE P. A "hard stop"
-   still means: write the state file, print the summary, end the turn.
-2. **Never write a reason I did not give you.** Same three sources as
-   `/task:build` — my prompts, what is recorded in `business-context.md`, a
-   fact verified in the code. Nothing is asked mid-run, so a *why* the recorded
-   context does not supply is a **gap**, reported at GATE P, never filled in.
-3. **The state file is a contract with the coordinator.** `build-task.json` is
-   written at **every** transition, and every waiting phase is named
-   `await-<something>`: `hcoord wait` returns to `/task:coordinate` on exactly
-   those names, plus `done`. A gate whose phase name does not start with
-   `await-` hangs the coordinator.
-4. **Commit and push only after GATE P's `continue`, and then do it.** A PR
-   cannot open without commits, and I am not at the keyboard in between, so this
-   pipeline commits — unlike `/task:build`. Messages to the rule in
-   `~/.claude-hobby/CLAUDE.md`: terse, decisions and their justifications,
-   nothing invented. The notes repo is never committed here.
-5. **No machine attribution**, anywhere.
+Two hard stops, both named so `hcoord wait` sees them: **`await-acceptance`**
+at the start, only when the brief does not say what done looks like, and
+**`await-play`** at the end, always.
 
-## Step 0 — Context, brief, phase
+## Rules that override everything else
 
-As `/task:build` Step 0, with these differences:
+1. **Never write a reason I did not give you.** Three sources: the brief, what
+   is recorded in `business-context.md`, a fact verified in the code. Nothing
+   is asked mid-run. A *why* none of them supplies is a **gap**, listed at the
+   play gate, never filled in.
+2. **The state file is a contract.** Write `build-task.json` at every
+   transition. The waiting phases are `await-acceptance` and `await-play` and
+   there are no others; `planned` and `done` are what `hauto` and the
+   coordinator key on.
+3. **The build stage reads what the plan names, and nothing else.** No
+   `journal:resume`, no directory listings, no neighbouring modules "for
+   context", no git history. A symbol the plan did not mention is looked up
+   with the `tree-extract` MCP, not by opening files.
+4. **Every build and test command is truncated.** Never let a full compiler or
+   test log into the conversation:
+   ```bash
+   cargo build 2>&1 | grep -E "^(error|warning)" -A6 | head -80
+   cargo test 2>&1 | grep -E "test result|FAILED|panicked|^error" -A4 | head -60
+   ```
+   The plan writes the exact commands for the repo; the build stage runs those.
+5. **Commit and push only after the play gate's `continue`, then do it.** A
+   PR cannot open without commits. Messages to the rule in
+   `~/.claude-hobby/CLAUDE.md`. The notes repo is never committed.
+6. **No machine attribution**, anywhere.
 
-- **The brief** may come from a **seeded state file**: a coordinator writes
-  `build-task.json` with `brief_source: "coordinator"`, `brief`, `acceptance`,
-  `auto: true`, `coordinator: <its notes dir>`, `no_split: true`,
-  `is_subtask: true` before this session starts. With no argument and such a
-  file, the brief is that — do not run `journal:resume` over an empty notes
-  dir. Otherwise: free text, `#<n>`, or `journal:resume`, as in `/task:build`.
-- **State file** phases here: `acceptance`, `await-acceptance`, `plan`,
-  `implement`, `comments`, `standards`, `play`, `await-play`, `pr`, `journal`,
-  `done`. Extra fields: `auto: true`, `acceptance` (the done-when observation,
-  verbatim), `coordinator` (notes dir, or absent), `play` (how the app was
-  launched, and the log path), `feedback` (list of GATE P rounds).
-- **Starting phase**: `phase` from the state file; else infer as `/task:build`
-  does, mapping `await-hmml-review` → `implement` and `await-review` → `play`.
-  A brand-new task starts at `acceptance`.
-- **Rehydrate** on resume as `/task:build` does, and additionally read
-  `acceptance` and `feedback`.
+## Step 0 — Context and state
 
-Announce `{project, topic, task, brief_source, phase}` in one line and run.
+Task context from `pwd` (`~/fun_worktrees/PROJECT/TOPIC/TASK`). State file at
+`~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/build-task.json`:
 
-______________________________________________________________________
+```json
+{ "phase": "acceptance", "auto": true, "model": "sonnet",
+  "coordinator": "<notes dir, or absent>",
+  "brief_source": "coordinator|description|issue", "brief": "<verbatim>",
+  "acceptance": "<the done-when observation, verbatim>",
+  "context_questions": [], "plan": "plan.md",
+  "play": { "command": "", "log": "" }, "feedback": [], "rounds": 0 }
+```
 
-## Phase `acceptance` → GATE A (conditional)
+Phases: `acceptance`, `await-acceptance`, `plan`, `planned`, `build`,
+`implement`, `comments`, `standards`, `play`, `await-play`, `pr`, `journal`,
+`done`.
 
-Decide whether the brief already says **what done looks like**: one concrete
-thing a person can do afterwards, and what they should see (Task shaping rule 2
-in `~/.claude-hobby/CLAUDE.md`). It does when the state file carries
-`acceptance`, when the issue body has an acceptance section, or when the free
-text states an observation. Quote it, record it as `acceptance`, set
-`phase: plan`, and carry on **without stopping** — this is the expected path
-under a coordinator.
+The stage argument is required. `plan` runs from whatever phase is recorded up
+to `planned`; `build` runs from `planned` to `done`. A `build` invoked with no
+`plan.md` on disk says so and stops. A phase past `planned` given `build`
+resumes at that phase (this is `hauto`'s `--continue` path).
 
-Otherwise, and only then, ask. Derive **at most three** questions:
+**The brief** is the seeded state file's `brief` when `brief_source` is
+`coordinator`; otherwise the argument after the stage — free text, or `#<n>`
+via `gh issue view`. Record it verbatim.
 
-- the acceptance question itself — *what will you do to check this, and what
-  should you see?* — always first;
-- up to two of the GATE C kind, only where the delta genuinely cannot be
-  designed without an answer (which rule sets a bound, what the obvious
-  approach must not break). Read the notes, the issue and the code first and
-  ask nothing recoverable from them.
-
-**→ GATE A: HARD STOP.** Set `phase: await-acceptance`, write
-`context_questions` and the state file, print the numbered questions and one
-line: *"Answer in your own words — `N: skip` is an answer. Then say continue and
-I'll run the rest unattended; the next time I stop, the app will be running for
-you."* End your turn.
-
-On my answers: record them **verbatim** in `business-context.md` exactly as
-`/task:build`'s `context` phase does (one `## <handle>` block each; the
-acceptance answer under `## acceptance`), write `acceptance` into the state
-file, set `phase: plan`, and continue in the same turn.
+Announce `{project, topic, task, stage, phase}` in one line and run.
 
 ______________________________________________________________________
 
-## Phase `plan` — no stop
+## Stage `plan`
 
-Gate 0 (prior art, size) and Gate 0b (standards) as `/task:build`, but they
-**report rather than stop**: an overlapping open PR or issue is named in the
-journal and at GATE P; a change over the size budget is noted and carried on.
-The one exception: an open PR **by someone else** covering this work on a repo I
-do not own — stop with `await-acceptance` and say so, because continuing would
-be accelerating past their work.
+Headless: there is no one to answer a question, so this stage asks nothing
+except by stopping at `await-acceptance`.
 
-Then, unless `--no-hmml`: baseline (`hmml-extract` / `hmml-new`), annotate the
-delta with `# +` / `# -` off the brief, the acceptance observation and whatever
-`business-context.md` holds, lint it, run `hmml-review` naming the context
-file. **Do not stop.** Take the plan it wrote and set `phase: implement`. With
-`--no-hmml`, plan inline in a few lines.
+**P1 — Acceptance.** Does the brief say what done looks like — one thing a
+person can do afterwards, and what they should see? Yes when the state file
+carries `acceptance`, the issue has an acceptance section, or the text states
+an observation. Record it as `acceptance` and go on.
 
-The acceptance observation is an invariant the delta must honour — write it
-into the spec as one, the way `/task:build` says a recorded answer belongs in
-the spec and not in your head.
+Otherwise: derive **at most three** questions — the acceptance question first
+(*what will you do to check this, and what should you see?*), then up to two
+the design cannot proceed without. Write them to `context_questions`, set
+`phase: await-acceptance`, print them numbered with the line *"Answer in your
+own words; `N: skip` is an answer. Then exit this session and the plan
+finishes on its own."*, and **end the turn**. `hauto` reopens this session
+interactively for me. When my answers arrive: record them verbatim in
+`business-context.md` (one `## <handle>` block each, acceptance under
+`## acceptance`), write `acceptance`, set `phase: plan`, and continue in the
+same turn. Finish by telling me to exit the session.
 
-## Phases `implement`, `comments`, `standards` — as `/task:build`
+**P2 — Read the code once.** Find the units the change lands in — the plugin,
+system, module or command — and read them, plus whatever they call that the
+change touches. Prior art check: `gh pr list --search` and
+`gh issue list --search` on the repo, reported in the plan, never a stop.
+A `structure.hstruct` at the root is read and its relevant standards named.
 
-Verbatim, without the stops. Three things to carry to GATE P: `hmml-translate`'s
-declined `# -` flags, `/comment-pass`'s context gaps and declined findings and
-shape-decision notes, and a standards regression the fix did not clear. Record
-each in the state file as `/task:build` names them, then fall through to
-`play`.
+**P3 — Write `plan.md`** into the task's notes dir. It is the build stage's
+entire input, read by a session that has never seen this conversation:
+
+```markdown
+---
+title: "<task> — plan"
+created: <YYYY-MM-DD>
+tags:
+  - plan
+---
+
+## Goal
+<two or three sentences: what changes for a person>
+
+## Acceptance
+<the observation, verbatim>
+
+## Files
+- `path/to/file.rs` — <what changes here, concretely; new file: say so>
+(only these are read by the build stage — name every one)
+
+## Steps
+1. <ordered, concrete, each naming its file and the shape of the edit>
+
+## Verify
+- build: `<the truncated command for this repo>`
+- test: `<the truncated command>`
+- run: `<how a person starts the app, from the worktree>`
+
+## Standards
+<the hstruct standards this touches and which way, or "none">
+
+## Risks
+<what was unclear and how it was decided; what might not work; prior art>
+```
+
+Decisions in `Risks` are decisions, not reasons: a *why* goes in the plan only
+when the brief or `business-context.md` gave it.
+
+Set `phase: planned`, write the state file, print the plan path and its
+`Files` list, and end. The process exits; `hauto` starts the build.
 
 ______________________________________________________________________
 
-## Phase `play` → GATE P (always)
+## Stage `build`
 
-The point of this pipeline: I arrive to a running application, not to a diff.
+Fresh session. Read `build-task.json`, `plan.md`, and `business-context.md` if
+it exists. Nothing else until a step names a file.
 
-1. **Find how a person runs it**, in this order: a `just run` recipe in the
-   worktree; `cargo run` when `Cargo.toml` has a binary; whatever `README.md`
-   or `CLAUDE.md` in the repo says. If nothing opens — a library, a script, a
-   tool with no UI — the play step is the acceptance observation itself: run
-   it, capture the output, and print it.
-2. **Launch it detached from this pane**, from the worktree, with its output in
-   the notes dir so a crash is readable afterwards:
+**Implement.** Follow `Steps` in order, reading each file when its step comes.
+Write comments to the rule as you go — module header, public contract, test
+justification, nothing else — taking any *why* from the plan's `Goal` and
+`business-context.md` only. Run the plan's `build` command after each step
+that compiles, `test` once at the end, both truncated. A plan step that turns
+out wrong is fixed in the code, and the deviation is noted for the play gate;
+the plan file is not edited.
+
+**No end-to-end run here.** The play gate is the end-to-end run, and I am the
+one looking at it. Build and test are the evidence.
+
+Set `phase: comments` and fall through.
+
+**Comments.** `/comment-pass` over the branch diff, naming
+`business-context.md` when it exists. Carry its shape-decision notes, declined
+findings and context gaps to the play gate. `phase: standards`.
+
+**Standards.** Skip when the repo has no `structure.hstruct`. Otherwise
+`/structure`: ratchet a budget the change moved below, try to fix a regression,
+carry an unfixed one to the play gate. `phase: play`.
+
+______________________________________________________________________
+
+## Phase `play` → the play gate
+
+1. Launch the app with the plan's `run` command, detached, output to the
+   notes dir:
    ```bash
    setsid -f sh -c '<run command> > <notes dir>/play.log 2>&1'
    ```
-   A dev build is fine; a release build is not worth the wait unless the repo's
-   run recipe already says so. Wait a few seconds and check the log's first
-   lines: a build error here is your problem to fix before the gate, not mine.
-3. **Notify**: `notify-send "<task>" "ready to play"` when `notify-send` exists.
-   Ignore its failure.
-4. Record `play: { "command": …, "log": … }` in the state file.
+   Wait a few seconds, `head` the log: a build error is yours to fix before the
+   gate. No `run` in the plan (a library, a tool without a UI) → the play step
+   is the acceptance observation run as a command, its output printed.
+2. `notify-send "<task>" "ready to play"` if `notify-send` exists.
+3. Record `play` in the state file, set `phase: await-play`, write it, print:
+   - **what to try** — the acceptance observation verbatim, and where the app is;
+   - the diff, one line per file, and any deviation from the plan;
+   - build and test evidence, truncated as run;
+   - context gaps with `file:line`, declined comment-pass findings, standards
+     delta and any regression, prior art from the plan;
+   - the shape-decision notes and the `business-context.md` handles a commit
+     body may cite;
+   - *"Play with it. Say continue to commit and open the PR, or tell me what
+     to change and I'll do it and relaunch."*
 
-**→ GATE P: HARD STOP.** Set `phase: await-play`, write the state file, print:
+   End the turn.
 
-- **What to try**: the acceptance observation, verbatim, and where the app is
-  (window title, or the command that was run, and the log path);
-- the diff summary, one line per file;
-- test evidence and the validate verdict, as `/task:build` GATE 2 lists them;
-- the context gaps with `file:line`, the comment pass's declined findings, the
-  standards delta and any regression, the size against Gate 0, and the prior
-  art — each in a line or two, none omitted;
-- the shape-decision notes and the `business-context.md` handles a commit body
-  may cite;
-- *"Play with it. Say continue to commit and open the PR, or tell me what to
-  change and I'll do it and relaunch."*
-
-End your turn.
-
-### Feedback at GATE P
-
-Anything but `continue` is feedback. Record it **verbatim** as a new
-`## feedback-<n>` block in `business-context.md` (it is a thing I said, and the
-commit message may cite it), append `{round, said}` to `feedback` in the state
-file, and return to `implement` with the feedback as the delta: edit the `.hmml`
-annotations if the spec is affected, implement, test, `comments`, `standards`,
-then `play` again. Kill the previous app instance first (`pkill -f` on the
-recorded command) so I am not looking at two windows. No cap on rounds.
+**Feedback** is anything but `continue`. Record it verbatim as
+`## feedback-<n>` in `business-context.md`, append to `feedback`, kill the
+running app (`pkill -f` on the recorded command), implement the change reading
+only the files it touches, build, test, comments, standards, play again. No
+cap on rounds.
 
 ______________________________________________________________________
 
-## Phase `pr` — on my `continue`
+## Phase `pr` — on `continue`
 
-1. **Stop the running app** (`pkill -f` on the recorded command; ignore failure).
-2. **Commit.** Inspect `git status --short` and stage the change — every file
-   the task touched, and nothing it did not: no build artefacts, no editor
-   files, no `play.log`. Prefer one commit; split only where two decisions would
-   otherwise share one message. Subject and body to the rule in
-   `~/.claude-hobby/CLAUDE.md`. A justification comes from the brief, the
-   acceptance answer, `business-context.md` (feedback blocks included), or a
-   verified fact — and from nowhere else. A decision none of those cover gets
-   no justification in the body, and is named at the end of your GATE P
-   summary next time rather than invented now.
-3. **Push** with `git push -u origin <branch>`.
-4. **Open the PR** with `gh pr create` — title in commit-subject shape, the
-   three sections and nothing else, exactly as `/task:build`'s `pr` phase and
-   `~/.claude-hobby/CLAUDE.md` describe. The manual-test bullets are the
-   acceptance observation plus what you ran at `play`, in order.
-5. Record it in `prs.json` if the `track-pr` hook did not.
+1. Stop the app (`pkill -f`; ignore failure).
+2. `git status --short`; stage the task's files and nothing else — no
+   artefacts, no `play.log`. One commit unless two decisions would share a
+   message. Subject and body to the rule; a justification comes from the
+   brief, the acceptance answer, `business-context.md`, or a verified fact.
+3. `git push -u origin <branch>`.
+4. `gh pr create`: title in commit-subject shape, the three sections and
+   nothing else per `~/.claude-hobby/CLAUDE.md`. The manual-test bullets are
+   the acceptance observation plus the `run` command.
+5. Record the PR in `prs.json` if the `track-pr` hook did not.
 
-Never push to the default branch: an unattended pipeline opens a PR every time,
-and merging is mine.
+Never push to the default branch.
 
 ## Phase `journal`
 
-`journal:write` — goal, what changed, evidence, the feedback rounds, the open
-items with the context gaps under them. Set `phase: done`, write the state
-file (this is what releases the coordinator), and print one line: task, PR
-link, anything still open. End.
-
-______________________________________________________________________
+`journal:write`: goal, what changed, evidence, feedback rounds, open items
+with the context gaps under them. Set `phase: done`, write the state file
+(this is what releases the coordinator), print one line, end.
 
 ## Notes on scope
 
-- **A coordinator may be waiting on this file.** Every phase change is a write
-  to `build-task.json`, and the two gates are named `await-acceptance` and
-  `await-play`. Do not add a third stop; if something needs me that neither
-  gate covers, set `await-acceptance` with the question and end the turn.
-- If a sub-skill asks its own clarifying question, answer it from the brief,
-  the acceptance answer and the recorded context where you can; where you
-  cannot, that is a GATE A question, and it stops there.
-- Anything off-pipeline I ask for mid-run: do it, then re-anchor on `phase`.
+- A coordinator may be waiting on the state file. Do not add a stop; anything
+  that needs me and fits neither gate becomes an `await-acceptance` with the
+  question, and the turn ends.
+- A sub-skill's clarifying question is answered from the brief and the
+  recorded context, or it is a gap. It never becomes a third gate.
