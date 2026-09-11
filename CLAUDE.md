@@ -364,6 +364,12 @@ pane opening on `/task:auto`, which is how a window a coordinator spawns starts
 working the moment it exists — the prompt is a positional argument `chobby`
 passes through to `claude`.
 
+**A coordinator's windows go to one desktop.** `hcdev auto --window` gives its
+alacritty the WM_CLASS `hcdev-auto`, and the window manager does the rest: in
+leftwm that is a `window_rules` entry on that class with a `spawn_on_tag`. The
+rule lives in `~/.config/leftwm/config.ron`, which this repo does not manage,
+so it is a per-machine line, not an install step.
+
 **One task session at a time is the design.** Two `/task:auto` sessions on one
 repo would race on the default branch and on my attention, since the play gate
 assumes one window is being looked at. A task that depends on an unmerged
