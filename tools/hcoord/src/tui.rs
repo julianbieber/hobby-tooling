@@ -2,10 +2,15 @@
 //! changes, narrow enough for a 15% split.
 
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime};
 
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
-use ratatui::layout::{Constraint, Layout};
+use ratatui::crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
+    MouseEventKind,
+};
+use ratatui::crossterm::execute;
+use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
@@ -15,12 +20,23 @@ use crate::model::{Coordinator, Status, TASKS_FILE};
 
 const POLL: Duration = Duration::from_millis(500);
 
+struct Loaded {
+    coordinator: Coordinator,
+    prs: Vec<Vec<String>>,
+}
+
+struct Row {
+    line: Line<'static>,
+    url: Option<String>,
+}
+
 struct App {
     dir: PathBuf,
-    loaded: Result<Coordinator, String>,
-    seen: Option<SystemTime>,
+    loaded: Result<Loaded, String>,
+    seen: Vec<Option<SystemTime>>,
     scroll: u16,
     show_description: bool,
+    body: Rect,
 }
 
 impl App {
@@ -28,37 +44,115 @@ impl App {
         let mut app = Self {
             dir: dir.to_path_buf(),
             loaded: Err("not loaded".into()),
-            seen: None,
+            seen: Vec::new(),
             scroll: 0,
             show_description: false,
+            body: Rect::default(),
         };
         app.reload();
         app
     }
 
-    fn mtime(&self) -> Option<SystemTime> {
-        std::fs::metadata(Coordinator::tasks_path(&self.dir))
-            .ok()
-            .and_then(|m| m.modified().ok())
+    fn watched(&self) -> Vec<PathBuf> {
+        match &self.loaded {
+            Ok(l) => l.coordinator.watched_files(&self.dir),
+            Err(_) => vec![Coordinator::tasks_path(&self.dir)],
+        }
+    }
+
+    fn mtimes(&self) -> Vec<Option<SystemTime>> {
+        self.watched()
+            .iter()
+            .map(|p| std::fs::metadata(p).ok().and_then(|m| m.modified().ok()))
+            .collect()
     }
 
     fn reload(&mut self) {
-        self.seen = self.mtime();
-        self.loaded = Coordinator::load(&self.dir);
+        self.loaded = Coordinator::load(&self.dir).map(|coordinator| {
+            let prs = coordinator
+                .tasks
+                .iter()
+                .map(|t| coordinator.pr_urls(&self.dir, t))
+                .collect();
+            Loaded { coordinator, prs }
+        });
+        self.seen = self.mtimes();
     }
 
     fn reload_if_changed(&mut self) {
-        if self.mtime() != self.seen {
+        if self.mtimes() != self.seen {
             self.reload();
         }
     }
+
+    fn rows(&self) -> Vec<Row> {
+        let Ok(loaded) = &self.loaded else {
+            return Vec::new();
+        };
+        let plain = |line: Line<'static>| Row { line, url: None };
+        let mut rows = Vec::new();
+        if self.show_description {
+            for l in loaded.coordinator.description.lines() {
+                rows.push(plain(Line::from(l.to_owned().dim())));
+            }
+            rows.push(plain(Line::from("")));
+        }
+        for (i, t) in loaded.coordinator.tasks.iter().enumerate() {
+            rows.push(plain(task_line(i + 1, t.status, &t.title)));
+            if let Some(note) = &t.note {
+                rows.push(plain(Line::from(format!("    {note}").dim())));
+            }
+            for url in &loaded.prs[i] {
+                rows.push(Row {
+                    line: pr_line(url),
+                    url: Some(url.clone()),
+                });
+            }
+        }
+        if loaded.coordinator.tasks.is_empty() {
+            rows.push(plain(Line::from("no tasks yet".dim())));
+        }
+        rows
+    }
+
+    fn lines(&self) -> Vec<Line<'static>> {
+        self.rows().into_iter().map(|r| r.line).collect()
+    }
+
+    fn url_at(&self, column: u16, row: u16) -> Option<String> {
+        let inner = Rect {
+            y: self.body.y.saturating_add(1),
+            height: self.body.height.saturating_sub(1),
+            ..self.body
+        };
+        if !inner.contains(Position { x: column, y: row }) {
+            return None;
+        }
+        let target = usize::from(row - inner.y) + usize::from(self.scroll);
+        let mut top = 0;
+        for r in self.rows() {
+            let height = Paragraph::new(r.line)
+                .wrap(Wrap { trim: false })
+                .line_count(inner.width);
+            if (top..top + height).contains(&target) {
+                return r.url;
+            }
+            top += height;
+        }
+        None
+    }
 }
 
-/// Run the view on the coordinator notes directory until `q` or Esc. The terminal is
-/// restored on every exit path, including a draw error.
+/// Run the view on the coordinator notes directory until `q` or Esc. A left click on a
+/// `PR #n` line opens that PR in the browser. The terminal is restored on every exit
+/// path, including a draw error.
 pub fn run(dir: &Path) -> Result<(), String> {
     let mut terminal = ratatui::init();
+    let mouse = execute!(std::io::stdout(), EnableMouseCapture).is_ok();
     let result = event_loop(&mut terminal, App::new(dir));
+    if mouse {
+        let _ = execute!(std::io::stdout(), DisableMouseCapture);
+    }
     ratatui::restore();
     result
 }
@@ -66,18 +160,28 @@ pub fn run(dir: &Path) -> Result<(), String> {
 fn event_loop(terminal: &mut DefaultTerminal, mut app: App) -> Result<(), String> {
     loop {
         terminal
-            .draw(|frame| draw(frame, &app))
+            .draw(|frame| draw(frame, &mut app))
             .map_err(|e| e.to_string())?;
-        if event::poll(POLL).map_err(|e| e.to_string())?
-            && let Event::Key(key) = event::read().map_err(|e| e.to_string())?
-            && key.kind == KeyEventKind::Press
-        {
-            match key.code {
-                KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
-                KeyCode::Char('j') | KeyCode::Down => app.scroll = app.scroll.saturating_add(1),
-                KeyCode::Char('k') | KeyCode::Up => app.scroll = app.scroll.saturating_sub(1),
-                KeyCode::Char('d') => app.show_description = !app.show_description,
-                KeyCode::Char('r') => app.reload(),
+        if event::poll(POLL).map_err(|e| e.to_string())? {
+            match event::read().map_err(|e| e.to_string())? {
+                Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
+                    KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                    KeyCode::Char('j') | KeyCode::Down => scroll_down(&mut app),
+                    KeyCode::Char('k') | KeyCode::Up => scroll_up(&mut app),
+                    KeyCode::Char('d') => app.show_description = !app.show_description,
+                    KeyCode::Char('r') => app.reload(),
+                    _ => {}
+                },
+                Event::Mouse(mouse) => match mouse.kind {
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        if let Some(url) = app.url_at(mouse.column, mouse.row) {
+                            open_url(&url);
+                        }
+                    }
+                    MouseEventKind::ScrollDown => scroll_down(&mut app),
+                    MouseEventKind::ScrollUp => scroll_up(&mut app),
+                    _ => {}
+                },
                 _ => {}
             }
         }
@@ -85,9 +189,26 @@ fn event_loop(terminal: &mut DefaultTerminal, mut app: App) -> Result<(), String
     }
 }
 
-fn draw(frame: &mut Frame, app: &App) {
+fn scroll_down(app: &mut App) {
+    app.scroll = app.scroll.saturating_add(1);
+}
+
+fn scroll_up(app: &mut App) {
+    app.scroll = app.scroll.saturating_sub(1);
+}
+
+fn open_url(url: &str) {
+    let _ = Command::new("xdg-open")
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+}
+
+fn draw(frame: &mut Frame, app: &mut App) {
     let coordinator = match &app.loaded {
-        Ok(c) => c,
+        Ok(l) => &l.coordinator,
         Err(e) => {
             let msg = Paragraph::new(vec![
                 Line::from(TASKS_FILE.bold()),
@@ -108,6 +229,7 @@ fn draw(frame: &mut Frame, app: &App) {
         Constraint::Length(1),
     ])
     .areas(frame.area());
+    app.body = body;
 
     let head = Paragraph::new(vec![
         Line::from(coordinator.project.as_str().bold()),
@@ -116,32 +238,13 @@ fn draw(frame: &mut Frame, app: &App) {
     ]);
     frame.render_widget(head, header);
 
-    let mut lines = Vec::new();
-    if app.show_description {
-        for l in coordinator.description.lines() {
-            lines.push(Line::from(l.to_owned().dim()));
-        }
-        lines.push(Line::from(""));
-    }
-    for (i, t) in coordinator.tasks.iter().enumerate() {
-        lines.push(task_line(i + 1, t.status, &t.title));
-        if let Some(note) = &t.note {
-            lines.push(Line::from(format!("    {note}").dim()));
-        }
-        if let Some(pr) = t.pr.as_deref().and_then(pr_number) {
-            lines.push(Line::from(format!("    PR #{pr}").fg(Color::Magenta)));
-        }
-    }
-    if coordinator.tasks.is_empty() {
-        lines.push(Line::from("no tasks yet".dim()));
-    }
-    let list = Paragraph::new(lines)
+    let list = Paragraph::new(app.lines())
         .block(Block::default().borders(Borders::TOP))
         .wrap(Wrap { trim: false })
         .scroll((app.scroll, 0));
     frame.render_widget(list, body);
 
-    let keys = Paragraph::new(Line::from("q j k d r".dim()));
+    let keys = Paragraph::new(Line::from("q j k d r · click a PR".dim()));
     frame.render_widget(keys, footer);
 }
 
@@ -164,6 +267,17 @@ fn task_line(index: usize, status: Status, title: &str) -> Line<'static> {
     ])
 }
 
+fn pr_line(url: &str) -> Line<'static> {
+    let label = match pr_number(url) {
+        Some(n) => format!("PR #{n}"),
+        None => url.to_owned(),
+    };
+    Line::from(vec![
+        Span::raw("    "),
+        Span::styled(label, Style::new().fg(Color::Magenta).underlined()),
+    ])
+}
+
 fn pr_number(url: &str) -> Option<&str> {
     url.rsplit('/')
         .next()
@@ -173,6 +287,56 @@ fn pr_number(url: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A click has to land on the PR line as it is drawn, after wrapping and scrolling,
+    // or it opens the wrong PR: a title wider than the pane takes two rows.
+    #[test]
+    fn click_finds_the_pr_under_a_wrapped_title() {
+        let coordinator = Coordinator::parse(
+            r#"{"project":"p","blurb":"b","tasks":[
+                {"task":"a","title":"a title long enough to wrap twice over"},
+                {"task":"b","title":"B"}]}"#,
+        )
+        .unwrap();
+        let mut app = App {
+            dir: PathBuf::new(),
+            loaded: Ok(Loaded {
+                coordinator,
+                prs: vec![
+                    vec!["https://github.com/o/r/pull/1".into()],
+                    vec!["https://github.com/o/r/pull/2".into()],
+                ],
+            }),
+            seen: Vec::new(),
+            scroll: 0,
+            show_description: false,
+            body: Rect::new(0, 3, 20, 10),
+        };
+        let title_rows = Paragraph::new(task_line(
+            1,
+            Status::Todo,
+            "a title long enough to wrap twice over",
+        ))
+        .wrap(Wrap { trim: false })
+        .line_count(20) as u16;
+        assert!(title_rows > 1);
+        let first_pr_row = 4 + title_rows;
+        assert_eq!(app.url_at(5, first_pr_row - 1), None);
+        assert_eq!(
+            app.url_at(5, first_pr_row).as_deref(),
+            Some("https://github.com/o/r/pull/1")
+        );
+        assert_eq!(
+            app.url_at(5, first_pr_row + 2).as_deref(),
+            Some("https://github.com/o/r/pull/2")
+        );
+        assert_eq!(app.url_at(5, 3), None);
+        app.scroll = 1;
+        assert_eq!(
+            app.url_at(5, first_pr_row - 1).as_deref(),
+            Some("https://github.com/o/r/pull/1")
+        );
+    }
 
     // The narrow pane has no room for a URL, so the number is what is shown; a URL
     // that does not end in one must not print a stray path segment.
