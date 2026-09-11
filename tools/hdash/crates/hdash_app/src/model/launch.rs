@@ -62,6 +62,13 @@ impl LaunchSpec {
         )
     }
 
+    fn coordinator_cmd(&self) -> String {
+        format!(
+            "hcdev coordinator '{}' --project '{}'",
+            self.task, self.project
+        )
+    }
+
     fn session_title(&self) -> String {
         format!("hcdev-{}-{}-{}", self.project, self.topic, self.task)
     }
@@ -125,6 +132,18 @@ pub fn launch_restore(spec: &LaunchSpec) {
     );
 }
 
+/// Open (or re-attach) a coordinator session: the task list beside Claude, in the
+/// project's main checkout, since a coordinator has no worktree of its own. `spec.task` is
+/// the coordinator's blurb.
+pub fn launch_coordinator(spec: &LaunchSpec) {
+    let dir = projects_root().join(&spec.project);
+    launch_nu(
+        &dir.to_string_lossy(),
+        &spec.session_title(),
+        &spec.coordinator_cmd(),
+    );
+}
+
 /// Open a plain terminal in a directory.
 pub fn launch_terminal(dir: &Path, title: &str) {
     spawn_detached(&[
@@ -182,6 +201,22 @@ mod tests {
              hcdev wt 'gh-7-chunk-loading' --project 'wusel' --topic 'perf'"
         );
         assert_eq!(spec.session_title(), "hcdev-wusel-perf-gh-7-chunk-loading");
+    }
+
+    // A coordinator is addressed by project and blurb only: the topic is the reserved
+    // `coordinator`, which `hcdev coordinator` supplies itself.
+    #[test]
+    fn coordinator_command_takes_blurb_and_project() {
+        let spec = LaunchSpec {
+            project: "wusel".into(),
+            topic: "coordinator".into(),
+            task: "food-economy".into(),
+        };
+        assert_eq!(
+            spec.coordinator_cmd(),
+            "hcdev coordinator 'food-economy' --project 'wusel'"
+        );
+        assert_eq!(spec.session_title(), "hcdev-wusel-coordinator-food-economy");
     }
 
     // Pins the wrapper every nu launch goes through: without the `catch`, a failing

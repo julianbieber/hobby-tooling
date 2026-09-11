@@ -360,7 +360,7 @@ pub fn update_header(
                 issues += 1;
             }
             Stage::Startable => issues += 1,
-            Stage::Active | Stage::Removed => active += 1,
+            Stage::Active | Stage::Removed | Stage::Coordinator => active += 1,
             Stage::Orphan => orphans += 1,
         }
     }

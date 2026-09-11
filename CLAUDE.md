@@ -41,6 +41,7 @@ lsps/hobby-mml-lsp/                   # forked HMML language server + grammar.md
 lsps/{claude,claude-skills,treesitter-class,path}-lsp/   # vendored from the work checkout
 mcps/{just-mcp, lsp-mcp, tree-extract}/   # vendored from the work checkout
 tools/hdash/                          # the work dashboard (Bevy)
+tools/hcoord/                         # the coordinator's task-list pane + `hcoord wait` (ratatui)
 ```
 
 ## `topic:<name>` is how an issue names its worktree
@@ -313,6 +314,72 @@ sideways and editing `hwt_core` needs one workspace's tests, not two.
 
 **Installing never needs tests** — the committed code is already tested, so
 `install-dash` builds and replaces the binary and nothing more.
+
+## A coordinator is a task with no worktree, and `tasks.json` is its whole state
+
+`/task:auto` and `/task:coordinate` exist for work where I care about what the
+change does and not how it is built. The first is `/task:build` with its four
+gates collapsed to two — acceptance criteria at the start, only if the brief
+does not already say what done looks like, and the running application at the
+end, before the PR opens. The second works a list of such tasks one at a time
+from a **coordinator session**: `hcdev coordinator <blurb>` run from
+`~/fun_repos/<project>`, a zellij session with `hcoord tui` on the left and
+`chobby` on the right.
+
+**The coordinator is a task under the reserved topic `coordinator`.** Its notes
+dir `notes/<project>/coordinator/<blurb>/` has a `task.json`, so `hwt`, `hdash`
+and the journal skills all see it without a new kind of thing existing — and no
+worktree, because it works other tasks' worktrees rather than one of its own.
+The three places that would otherwise treat it as a removed task each know the
+topic by name: `hcdev wt` and `hwt restore` refuse it and name
+`hcdev coordinator`, and `hdash` gives it a `Coordinator` stage whose primary
+button is **Open coordinator** and whose card shows the counts from
+`tasks.json`. The topic is a constant in each of the three, not a config.
+
+**`tasks.json` is the record and the display, and there is no channel between
+them.** `/task:coordinate` writes the file at every change; `hcoord tui`
+re-reads it whenever its mtime moves; `hdash` counts its `status` fields. A
+resumed coordinator picks up from it after an interrupt, and editing it by hand
+between tasks is expected. The tasks it creates sit under the blurb as their
+topic (`~/fun_worktrees/<project>/<blurb>/<blurb>-<slug>`), so a coordinator's
+work groups itself.
+
+**The coordinator waits in a shell call, not in prompts.** A Claude session
+cannot sleep except through a tool, so `hcoord wait <task notes dir>` blocks on
+the task's `build-task.json` — the state file `/task:build` already writes at
+every transition — and returns when the phase is one a person answers
+(`await-*`) or terminal. That is the contract that makes the two sessions
+independent: `/task:auto` names its two gates `await-acceptance` and
+`await-play`, and nothing else in either skill has to know the other exists.
+`--after <phase>` is the second call on the same gate, so a reported
+`await-play` is not reported again at once. The timeout is 570 seconds because
+a Claude Code shell call gets ten minutes.
+
+**The coordinator layout is rendered per session, not installed.** The TUI pane
+needs the notes dir as an argument and KDL cannot expand anything, so a
+committed layout could only ever show one coordinator. `hcdev coordinator`
+writes `hobby-coordinator-<session>.kdl` into the runtime dir and hands zellij
+the path. `hobby-auto.kdl` *is* installed: it is `hobby-dev` with the Claude
+pane opening on `/task:auto`, which is how a window a coordinator spawns starts
+working the moment it exists — the prompt is a positional argument `chobby`
+passes through to `claude`.
+
+**One task session at a time is the design.** Two `/task:auto` sessions on one
+repo would race on the default branch and on my attention, since the play gate
+assumes one window is being looked at. A task that depends on an unmerged
+predecessor is based on that predecessor's branch rather than waiting for a
+merge; the PR stack is mine to merge in order.
+
+**`/task:auto` commits, which `/task:build` never does.** A PR cannot open
+without commits and nobody is at the keyboard between `continue` and the PR, so
+the pipeline commits once after the play gate, to the same message rule. The
+notes repo stays uncommitted.
+
+`hcoord` is its own workspace rather than a member of `tools/hdash`'s: `hdash`
+is a Bevy build, and a few hundred lines over ratatui should not sit behind that
+dependency graph and its optimised-dependency profile. `hdash` reads the one
+field it needs from `tasks.json` with `serde_json::Value` rather than depending
+on the crate, for the same reason.
 
 ## Opening a session from a dashboard: two things that kill the terminal
 

@@ -15,7 +15,8 @@ use feathers_kit::{Activate, KitFonts, kit_tokens as kt, text, tok};
 use crate::model::issue::{FetchState, IssueMsg, fetch_issues};
 use crate::model::join::{ItemKey, Model, UiState, item_visible, scan};
 use crate::model::launch::{
-    launch_hcdev, launch_restore, launch_start, launch_terminal, open_notes, open_url,
+    launch_coordinator, launch_hcdev, launch_restore, launch_start, launch_terminal, open_notes,
+    open_url,
 };
 use crate::model::pull::{PullMsg, PullOutcome, pull};
 use crate::model::task::{
@@ -591,6 +592,11 @@ fn on_card_activate(
         CardAction::Restore => {
             if let Some(spec) = item.launch_spec() {
                 launch_restore(&spec);
+            }
+        }
+        CardAction::Coordinator => {
+            if let Some(spec) = item.launch_spec() {
+                launch_coordinator(&spec);
             }
         }
         CardAction::Terminal => {

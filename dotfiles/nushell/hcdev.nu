@@ -7,11 +7,15 @@
 #   hcdev new <task> -t <topic>   - create a worktree from the current repo + session
 #   hcdev wt <task>               - session in an existing worktree
 #   hcdev here                    - session in the current directory
+#   hcdev auto <task>             - session whose Claude pane starts /task:auto
+#   hcdev coordinator <blurb>     - coordinator session: task list + Claude, from a main checkout
 #   hcdev notes                   - cd to this task's notes
 #   hcdev code                    - cd to this task's worktree
 #   hcdev list / attach           - manage running sessions
 
 const LAYOUT = "hobby-dev"
+const AUTO_LAYOUT = "hobby-auto"
+const COORDINATOR_TOPIC = "coordinator"
 const WORKTREE_BASE = "~/fun_worktrees" | path expand
 const PROJECTS_BASE = "~/fun_repos" | path expand
 const NOTES_BASE = "~/fun_repos/hobby-mimisbrunnr/notes" | path expand
@@ -96,6 +100,9 @@ def hcdev-find-task [task_name: string, project?: string, topic?: string] {
     }
 
     let found = ($matches | first)
+    if $found.topic == $COORDINATOR_TOPIC {
+        error make { msg: $"'($found.task)' is a coordinator, not a worktree — run 'hcdev coordinator ($found.task) -p ($found.project)'" }
+    }
     if not $found.present {
         error make { msg: $"Task '($found.project)/($found.topic)/($found.task)' is not checked out — run 'hwt restore ($found.task)'" }
     }
@@ -179,7 +186,7 @@ def hcdev-resolve-notes-dir [dir: string] {
 # defaults to the hobby account. That covers a `claude` typed by hand; the
 # layout's Claude pane runs `chobby`, which sets the var itself, so the session
 # is correct even when zellij reuses an existing server that never saw this env.
-def --env hcdev-launch [dir: string, session: string] {
+def --env hcdev-launch [dir: string, session: string, layout: string = $LAYOUT] {
     let existing = try {
         zellij list-sessions --no-formatting
         | lines
@@ -215,9 +222,40 @@ def --env hcdev-launch [dir: string, session: string] {
         $env.HCDEV_NOTES_DIR = $notes_dir
     }
 
-    print $"Starting hobby-dev session: ($session) in ($dir)"
+    print $"Starting ($layout | path basename | str replace '.kdl' '') session: ($session) in ($dir)"
     cd $dir
-    zellij -s $session -n $LAYOUT
+    zellij -s $session -n $layout
+}
+
+def hcdev-runtime-dir [] {
+    $env.XDG_RUNTIME_DIR? | default ($env.TMPDIR? | default "/tmp")
+}
+
+def hcdev-coordinator-layout [notes_dir: string] {
+    let quoted = ($notes_dir | to json)
+    $"layout {
+    pane split_direction=\"vertical\" {
+        pane size=\"15%\" name=\"tasks\" command=\"hcoord\" close_on_exit=false {
+            args \"tui\" ($quoted)
+        }
+        pane name=\"claude\" command=\"env\" close_on_exit=false {
+            args ($"HCOORD_NOTES_DIR=($notes_dir)" | to json) \"chobby\"
+        }
+    }
+}
+"
+}
+
+def hcdev-main-checkout-project [] {
+    let root = (do -i { ^git rev-parse --show-toplevel } | complete)
+    if $root.exit_code != 0 {
+        error make { msg: $"Not in a git repo — run from ($PROJECTS_BASE)/<project>, or pass -p <project>" }
+    }
+    let path = ($root.stdout | str trim)
+    if ($path | path dirname) != $PROJECTS_BASE {
+        error make { msg: $"($path) is not a main checkout under ($PROJECTS_BASE) — run from there, or pass -p <project>" }
+    }
+    $path | path basename
 }
 
 # --- completions ------------------------------------------------------------
@@ -228,6 +266,20 @@ def hcdev-session-completions [] {
         | lines
         | where { $in | str starts-with "hcdev-" }
         | each { { value: $in, description: "running session" } }
+    } catch { [] }
+}
+
+def hcdev-coordinator-completions [context?: string] {
+    let proj_filter = if $context != null { hcdev-flag $context ["--project" "-p"] } else { null }
+    if not ($NOTES_BASE | path exists) { return [] }
+    try {
+        glob $"($NOTES_BASE)/*/($COORDINATOR_TOPIC)/*/tasks.json" --no-dir --no-symlink
+        | each {|f|
+            let rel = ($f | path dirname | path relative-to $NOTES_BASE | path split)
+            { project: ($rel | get 0), blurb: ($rel | get 2) }
+        }
+        | where {|r| ($proj_filter == null) or ($r.project == $proj_filter) }
+        | each {|r| { value: $r.blurb, description: $r.project } }
     } catch { [] }
 }
 
@@ -315,6 +367,8 @@ export def main [] {
     print "  hcdev wt <task> [-p] [-t]        Start session in an existing worktree"
     print "  hcdev here                       Start session in the current directory"
     print "  hcdev dir <path>                 Start session in a given directory"
+    print "  hcdev auto <task> [-p] [-t] [-w] Session whose Claude pane starts /task:auto (-w: new window)"
+    print "  hcdev coordinator <blurb> [-p]   Coordinator session (task list + Claude) from a main checkout"
     print "  hcdev notes                      cd to this task's notes directory"
     print "  hcdev code                       cd to this task's worktree"
     print "  hcdev list                       List running hobby sessions"
@@ -392,6 +446,73 @@ export def --env "hcdev new" [
     }
 
     hcdev-launch $worktree_dir (hcdev-session-name $repo_name $resolved_topic $task)
+}
+
+# Start a session in an existing worktree whose Claude pane opens on `/task:auto`.
+# Errors as `hcdev wt` does: unknown, ambiguous, or not checked out. With
+# `--window` it opens in a new alacritty window and returns at once, even from
+# inside a zellij pane; a failure there holds the window open with its message.
+export def --env "hcdev auto" [
+    task: string@hcdev-task-completions               # Task name
+    --project (-p): string@hcdev-project-completions  # Disambiguate across projects
+    --topic (-t): string@hcdev-topic-completions      # Disambiguate across topics
+    --window (-w)                                     # Open in a new terminal window, detached
+] {
+    let found = (hcdev-find-task $task $project $topic)
+    if $found == null {
+        error make { msg: $"Task '($task)' not found in ($WORKTREE_BASE)" }
+    }
+    let session = (hcdev-session-name $found.project $found.topic $found.task)
+    if $window {
+        let cmd = $"hcdev auto '($found.task)' --project '($found.project)' --topic '($found.topic)'"
+        let held = $"try { ($cmd) } catch {|e| print $e.msg; print ''; print 'Failed. Press enter to close.'; input }"
+        with-env {ZELLIJ: null, ZELLIJ_SESSION_NAME: null, ZELLIJ_PANE_ID: null} {
+            ^setsid -f alacritty --working-directory $found.path --title $session -e nu --login -c $held
+        }
+        print $"Opened ($session) in a new window"
+        return
+    }
+    hcdev-launch $found.path $session $AUTO_LAYOUT
+}
+
+# Start (or attach to) a coordinator session: the task list on the left, Claude on
+# the right, in the project's main checkout. Without -p the current directory must
+# be a main checkout under ~/fun_repos. Creates the coordinator's notes directory,
+# `task.json` and an empty `tasks.json` when absent; needs `hcoord` on PATH.
+export def --env "hcdev coordinator" [
+    blurb: string@hcdev-coordinator-completions       # Coordinator name (its notes dir)
+    --project (-p): string@hcdev-project-completions  # Project (defaults to the current main checkout)
+] {
+    let proj = if $project != null { $project } else { hcdev-main-checkout-project }
+    let main_repo = ($PROJECTS_BASE | path join $proj)
+    if not ($main_repo | path exists) {
+        error make { msg: $"No main checkout at ($main_repo)" }
+    }
+
+    let notes_dir = ($NOTES_BASE | path join $proj $COORDINATOR_TOPIC $blurb)
+    if not ($notes_dir | path exists) {
+        mkdir $notes_dir
+        print $"Created coordinator notes dir: ($notes_dir)"
+    }
+    let meta_file = ($notes_dir | path join "task.json")
+    if not ($meta_file | path exists) {
+        { done: false, blocked: null } | to json --indent 2 | save -f $meta_file
+    }
+    let tasks_file = ($notes_dir | path join "tasks.json")
+    if not ($tasks_file | path exists) {
+        {
+            project: $proj
+            blurb: $blurb
+            description: ""
+            created: (date now | format date "%Y-%m-%d")
+            tasks: []
+        } | to json --indent 2 | save -f $tasks_file
+    }
+
+    let session = (hcdev-session-name $proj $COORDINATOR_TOPIC $blurb)
+    let layout_file = (hcdev-runtime-dir | path join $"hobby-coordinator-($session).kdl")
+    hcdev-coordinator-layout $notes_dir | save -f $layout_file
+    hcdev-launch $main_repo $session $layout_file
 }
 
 # Start a session in the current directory

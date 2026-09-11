@@ -25,6 +25,11 @@ use serde::{Deserialize, Serialize};
 
 pub use hwt_core::{notes_root, worktrees_root};
 
+/// The reserved topic: a task under it is a **coordinator** — a notes directory with a
+/// `tasks.json` and no worktree of its own, opened with `hcdev coordinator` rather than
+/// `hcdev wt`.
+pub const COORDINATOR_TOPIC: &str = "coordinator";
+
 /// A git status result for one repo, delivered from the async scan over a channel.
 pub struct GitMsg {
     /// The task the repo belongs to.
@@ -221,6 +226,60 @@ pub struct Block {
     pub reason: Option<String>,
 }
 
+/// What a coordinator's `tasks.json` says about its list, as counts per status. Only
+/// the `status` field of each entry is read; the rest of the file belongs to
+/// `/task:coordinate` and the `hcoord` pane.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CoordinatorCounts {
+    pub todo: usize,
+    pub running: usize,
+    pub awaiting_human: usize,
+    pub done: usize,
+    pub blocked: usize,
+}
+
+impl CoordinatorCounts {
+    /// One line naming the non-zero counts, `waiting for you` first because it is the one
+    /// that wants a click; `no tasks` when the list is empty.
+    pub fn summary(&self) -> String {
+        let parts: Vec<String> = [
+            (self.awaiting_human, "waiting for you"),
+            (self.running, "running"),
+            (self.todo, "todo"),
+            (self.done, "done"),
+            (self.blocked, "blocked"),
+        ]
+        .into_iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, label)| format!("{n} {label}"))
+        .collect();
+        if parts.is_empty() {
+            "no tasks".to_owned()
+        } else {
+            parts.join(" · ")
+        }
+    }
+
+    fn parse(text: &str) -> Option<Self> {
+        let value: serde_json::Value = serde_json::from_str(text).ok()?;
+        let mut counts = Self::default();
+        for entry in value.get("tasks")?.as_array()? {
+            match entry
+                .get("status")
+                .and_then(|s| s.as_str())
+                .unwrap_or("todo")
+            {
+                "running" => counts.running += 1,
+                "awaiting-human" => counts.awaiting_human += 1,
+                "done" => counts.done += 1,
+                "blocked" => counts.blocked += 1,
+                _ => counts.todo += 1,
+            }
+        }
+        Some(counts)
+    }
+}
+
 /// A task: a directory under a topic, possibly holding several repos.
 #[derive(Clone, Debug)]
 pub struct Task {
@@ -249,9 +308,18 @@ pub struct Task {
     pub subtasks: Vec<SubtaskRef>,
     /// Notes directory/file last-modified time, if any.
     pub last_active: Option<SystemTime>,
+    /// The list counts when this task is a coordinator (topic [`COORDINATOR_TOPIC`]) whose
+    /// `tasks.json` could be read; `None` for every other task.
+    pub coordinator: Option<CoordinatorCounts>,
 }
 
 impl Task {
+    /// Whether this task is a coordinator: it lives under the reserved topic, so it has
+    /// no worktree and is opened with `hcdev coordinator`.
+    pub fn is_coordinator(&self) -> bool {
+        self.id.topic == COORDINATOR_TOPIC
+    }
+
     /// Aggregate dirty count across repos.
     pub fn dirty_total(&self) -> usize {
         self.repos.iter().map(|r| r.git.dirty).sum()
@@ -512,6 +580,10 @@ fn build_task(id: TaskId, adopted: bool, done: bool, block: Option<Block>) -> Ta
     let subtasks = read_subtasks(&id);
     let last_active =
         notes_path(&id).and_then(|p| std::fs::metadata(&p).ok().and_then(|m| m.modified().ok()));
+    let coordinator = (id.topic == COORDINATOR_TOPIC)
+        .then(|| std::fs::read_to_string(coordinator_tasks_path(&id)).ok())
+        .flatten()
+        .and_then(|text| CoordinatorCounts::parse(&text));
 
     Task {
         id,
@@ -524,7 +596,13 @@ fn build_task(id: TaskId, adopted: bool, done: bool, block: Option<Block>) -> Ta
         prs,
         subtasks,
         last_active,
+        coordinator,
     }
+}
+
+/// Path to a coordinator's `tasks.json`: `notes/PROJECT/coordinator/BLURB/tasks.json`.
+pub fn coordinator_tasks_path(id: &TaskId) -> PathBuf {
+    notes_root().join(id.rel()).join("tasks.json")
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]

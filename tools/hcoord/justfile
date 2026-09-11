@@ -1,0 +1,21 @@
+# hcoord — the coordinator's task-list TUI and pipeline-state wait
+
+# List all recipes
+default:
+    @just --list
+
+# Build
+build:
+    cargo build
+
+# Install the `hcoord` binary to ~/.cargo/bin
+install:
+    cargo install --path .
+
+# Lint with clippy
+lint:
+    cargo clippy --all-targets
+
+# Run the tests
+test:
+    cargo test

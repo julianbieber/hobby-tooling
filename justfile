@@ -60,6 +60,7 @@ bootstrap: preflight clone-notes git-identity bootstrap-config install-chobby in
     @echo "Then, optionally:"
     @echo "    just install-mcps      the general-purpose MCP servers (Rust build)"
     @echo "    just install-dash      the hdash work dashboard (Rust build)"
+    @echo "    just install-coord     the coordinator task-list TUI (Rust build)"
     @echo "    just install-mml       forked HMML language server (Rust build)"
     @echo "    just install-struct    HSTRUCT structure checker + server (Rust build)"
     @echo "    just install-lsps      the hobby language servers Helix references"
@@ -69,7 +70,7 @@ bootstrap: preflight clone-notes git-identity bootstrap-config install-chobby in
     @echo "════════════════════════════════════════════════════════════════"
 
 # Bootstrap plus every optional Rust build and the MCP servers.
-bootstrap-full: bootstrap install-mcps install-dash install-mml install-struct install-lsps
+bootstrap-full: bootstrap install-mcps install-dash install-coord install-mml install-struct install-lsps
     @echo "Full install done. Still need: chobby, then /login."
 
 # Say so when invoked from a worktree — the install still targets the main checkout,
@@ -238,6 +239,7 @@ install-shell: _root-notice
     @"{{REPO_ROOT}}"/scripts/link-dotfile.sh "{{REPO_ROOT}}/dotfiles/nushell/hcdev.nu" "{{NU_DIR}}/hcdev.nu"
     @"{{REPO_ROOT}}"/scripts/link-dotfile.sh "{{REPO_ROOT}}/dotfiles/zellij/config.kdl" "{{ZJ_DIR}}/config.kdl"
     @"{{REPO_ROOT}}"/scripts/link-dotfile.sh "{{REPO_ROOT}}/dotfiles/zellij/layouts/hobby-dev.kdl" "{{ZJ_LAYOUTS}}/hobby-dev.kdl"
+    @"{{REPO_ROOT}}"/scripts/link-dotfile.sh "{{REPO_ROOT}}/dotfiles/zellij/layouts/hobby-auto.kdl" "{{ZJ_LAYOUTS}}/hobby-auto.kdl"
 
 # Add `use hwt.nu *` / `use hcdev.nu *` to config.nu (idempotent)
 wire-nushell:
@@ -349,6 +351,10 @@ install-dash:
     @echo "Installed hdash. If the retired dashboards are still on PATH:"
     @echo "    cargo uninstall hwt_app issues_app"
 
+# The coordinator's task-list pane and `hcoord wait`; `hcdev coordinator` needs it on PATH
+install-coord:
+    cd tools/hcoord && cargo install --path .
+
 # `lsps/` vendors four servers that used to be buildable only from the work checkout,
 # which left a hobby-only machine unable to install them at all. They keep their
 # original binary names on purpose: there is one Helix and one languages.toml across
@@ -433,6 +439,7 @@ test:
     cd mcps/lsp-mcp && cargo test
     cd mcps/tree-extract && cargo test
     cd tools/hdash && cargo test --workspace
+    cd tools/hcoord && cargo test
 
 # ---------------------------------------------------------------------------
 # Uninstall
@@ -445,7 +452,7 @@ test:
 uninstall:
     #!/usr/bin/env bash
     set -euo pipefail
-    rm -f "{{NU_DIR}}/hwt.nu" "{{NU_DIR}}/hcdev.nu" "{{ZJ_LAYOUTS}}/hobby-dev.kdl"
+    rm -f "{{NU_DIR}}/hwt.nu" "{{NU_DIR}}/hcdev.nu" "{{ZJ_LAYOUTS}}/hobby-dev.kdl" "{{ZJ_LAYOUTS}}/hobby-auto.kdl"
     rm -f "{{BIN_DIR}}/chobby" "{{BIN_DIR}}/hx-claude"
     rm -f "$HOME/fun_worktrees/CLAUDE.md"
     rm -f "{{CONFIG_DIR}}/settings.json" "{{CONFIG_DIR}}/CLAUDE.md"
