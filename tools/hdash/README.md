@@ -28,6 +28,7 @@ one list.
 | active | a live worktree | **Open hcdev** |
 | removed | worktree gone, notes kept | **Restore** — `hwt restore` then `hcdev wt` |
 | done | `done` in `task.json` | **Open hcdev** (and **Reopen**) |
+| coordinator | a task under the reserved `coordinator` topic | **Open coordinator** — `hcdev coordinator` in the main checkout; the card shows the `tasks.json` counts |
 
 Plus, as they apply: **Done**/**Reopen**, **Terminal**, **Notes**, **Browser** (any
 card with an issue half — something neither predecessor could offer), **Hide**.

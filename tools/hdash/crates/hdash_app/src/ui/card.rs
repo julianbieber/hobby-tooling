@@ -29,6 +29,8 @@ pub enum CardAction {
     Start,
     /// `hwt restore` a removed worktree.
     Restore,
+    /// Open (or re-attach) the coordinator session for a task under the `coordinator` topic.
+    Coordinator,
     /// Plain terminal in the worktree.
     Terminal,
     /// Terminal in the task's notes directory.
@@ -104,6 +106,14 @@ fn header_row(commands: &mut Commands, fonts: &KitFonts, item: &Item<'_>, stage:
         // Green means "a live worktree with nothing uncommitted". Everything else — an
         // unstarted issue, a removed worktree, uncommitted work — is amber.
         Stage::Active if item.task.is_some_and(|t| t.dirty_total() == 0) => DotState::Clean,
+        Stage::Coordinator
+            if item
+                .task
+                .and_then(|t| t.coordinator.as_ref())
+                .is_none_or(|c| c.awaiting_human == 0) =>
+        {
+            DotState::Clean
+        }
         Stage::Orphan => DotState::Dirty,
         _ => DotState::Dirty,
     };
@@ -207,6 +217,11 @@ fn header_row(commands: &mut Commands, fonts: &KitFonts, item: &Item<'_>, stage:
                 .spawn(badge(fonts, "orphan", kt::DOT_DIRTY, tok(ft_text_main())))
                 .id();
             commands.entity(header).add_child(b);
+        } else if task.is_coordinator() {
+            let b = commands
+                .spawn(badge(fonts, "coordinator", kt::ACCENT, tok(kt::PANEL_BG)))
+                .id();
+            commands.entity(header).add_child(b);
         } else if !task.present {
             let b = commands
                 .spawn(badge(fonts, "removed", kt::CHIP_BG, tok(ft_text_dim())))
@@ -291,6 +306,20 @@ fn meta_row(commands: &mut Commands, fonts: &KitFonts, item: &Item<'_>, stage: S
         }
     }
 
+    if let Some(task) = item.task
+        && task.is_coordinator()
+    {
+        let (line, color) = match &task.coordinator {
+            Some(counts) if counts.awaiting_human > 0 => (counts.summary(), kt::DOT_DIRTY),
+            Some(counts) => (counts.summary(), ft_text_main()),
+            None => ("no tasks.json".to_owned(), ft_text_dim()),
+        };
+        let c = commands
+            .spawn(text(fonts, format!("· {line}"), 12.0, tok(color)))
+            .id();
+        commands.entity(meta).add_child(c);
+    }
+
     if let Some(reason) = item
         .task
         .and_then(|t| t.block.as_ref())
@@ -370,6 +399,12 @@ fn action_row(
     buttons.push(button(commands, Variant::Normal, CardAction::Hide, "Hide"));
 
     match stage {
+        Stage::Done if item.task.is_some_and(Task::is_coordinator) => buttons.push(button(
+            commands,
+            Variant::Primary,
+            CardAction::Coordinator,
+            "Open coordinator",
+        )),
         Stage::Active | Stage::Done => buttons.push(button(
             commands,
             Variant::Primary,
@@ -381,6 +416,12 @@ fn action_row(
             Variant::Primary,
             CardAction::Restore,
             "Restore",
+        )),
+        Stage::Coordinator => buttons.push(button(
+            commands,
+            Variant::Primary,
+            CardAction::Coordinator,
+            "Open coordinator",
         )),
         Stage::Startable => buttons.push(button(
             commands,

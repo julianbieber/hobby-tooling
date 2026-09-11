@@ -51,6 +51,12 @@ pub enum Stage {
     Active,
     /// A task marked done in its `task.json`.
     Done,
+    /// A task under the reserved `coordinator` topic: **Open coordinator**.
+    ///
+    /// Outranks `Removed` because a coordinator never has a worktree, so without this
+    /// it would sit at **Restore** forever. A done coordinator is `Done` like any other
+    /// task, so the done toggle hides it; its card still opens the coordinator session.
+    Coordinator,
 }
 
 /// One piece of work: a task, an issue, or both when they are the same work.
@@ -85,6 +91,7 @@ impl<'a> Item<'a> {
         match self.task {
             Some(task) if !task.adopted => Stage::Orphan,
             Some(task) if task.done => Stage::Done,
+            Some(task) if task.is_coordinator() => Stage::Coordinator,
             Some(task) if !task.present => Stage::Removed,
             Some(_) => Stage::Active,
             // Issue-only: startable exactly when it names a topic.
@@ -155,6 +162,13 @@ impl<'a> Item<'a> {
                 return 4;
             }
             if task.awaiting_review() > 0 {
+                return 2;
+            }
+            if task
+                .coordinator
+                .as_ref()
+                .is_some_and(|c| c.awaiting_human > 0)
+            {
                 return 2;
             }
             return 3;
@@ -377,6 +391,7 @@ mod tests {
             prs: Vec::new(),
             subtasks: Vec::new(),
             last_active: None,
+            coordinator: None,
         }
     }
 
