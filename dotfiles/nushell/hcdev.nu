@@ -448,7 +448,8 @@ export def --env "hcdev new" [
     hcdev-launch $worktree_dir (hcdev-session-name $repo_name $resolved_topic $task)
 }
 
-# Start a session in an existing worktree whose Claude pane opens on `/task:auto`.
+# Start a session in an existing worktree whose Claude pane runs `hauto`, the
+# /task:auto stage driver (a headless plan process, then a fresh build session).
 # Errors as `hcdev wt` does: unknown, ambiguous, or not checked out. With
 # `--window` it opens in a new alacritty window and returns at once, even from
 # inside a zellij pane; a failure there holds the window open with its message.
@@ -507,6 +508,7 @@ export def --env "hcdev coordinator" [
             blurb: $blurb
             description: ""
             created: (date now | format date "%Y-%m-%d")
+            model: "sonnet"
             tasks: []
         } | to json --indent 2 | save -f $tasks_file
     }
