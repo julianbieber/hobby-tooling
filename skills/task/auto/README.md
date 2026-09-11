@@ -5,20 +5,40 @@
 | Type         | skill                                                          |
 | Install path | `~/.claude-hobby/commands/task/auto.md` → `/task:auto`         |
 | Owner        | @julianbieber                                                  |
-| Dependencies | `task:build` (read for the phase mechanics), the `hmml-*` suite, `comment-pass`, `structure`, `journal:write` |
+| Dependencies | `hauto` (the stage driver in `bin/`), `comment-pass`, `structure`, `journal:write` |
 | Status       | experimental                                                   |
 | Derived from | `task:build`                                                   |
 
 ## Description
 
-`/task:build` with its four gates collapsed to two. **Acceptance** at the start,
-asked only when the brief does not already say what done looks like; **play**
-at the end, where the application is launched for me and the PR waits for my
-`continue`. Everything between — baseline, delta, spec review, implementation,
-tests, comment pass, standards — runs without stopping.
+A task in two processes that never share a context. The **plan** stage runs
+headless, reads the code once, and writes `plan.md`; the **build** stage starts
+fresh, implements from the plan alone, and stops with the application running
+for me before the PR opens. Two gates: **acceptance** at the start, asked only
+when the brief does not already say what done looks like; **play** at the end,
+always.
 
-It is the pipeline `/task:coordinate` runs in each task window, and it also
-works typed by hand in a worktree.
+`hauto` — what the `hobby-auto` layout runs in its Claude pane — starts each
+stage from the phase in `build-task.json`. It is the pipeline
+`/task:coordinate` runs in each task window, and it also works typed by hand
+in a worktree: `hcdev auto <task>`.
+
+## Two processes, because context is the cost
+
+The first version ran the whole pipeline in one session: HMML baseline, delta,
+a multi-lens spec review, then the implementation on top of all of that. It
+used a session's budget on one task. Two things in that design cost the most
+and returned the least for work where the UX matters and the implementation
+does not: the spec review loop, and carrying the planning conversation into
+the implementation.
+
+So there is no HMML here, and the plan stage's process exits once `plan.md` is
+written. The build stage reads the plan and the brief and nothing else — no
+journal resume, no directory listings, no neighbouring files — and every build
+and test command it runs is truncated before it reaches the conversation. The
+build stage also runs on a cheaper model by default (`model` in the state
+file, `sonnet` when a coordinator seeded it), because a plan that names the
+files and the steps leaves it mostly mechanical work.
 
 ## Why the gates moved to the ends
 

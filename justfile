@@ -150,13 +150,16 @@ bootstrap-config: _root-notice
     @ln -sf "{{REPO_ROOT}}/dotfiles/claude-md/hobby.CLAUDE.md" "{{CONFIG_DIR}}/CLAUDE.md"
     @echo "  config dir ready: {{CONFIG_DIR}}"
 
-# The `chobby` wrapper — bare claude on the hobby account
+# The `chobby` wrapper — bare claude on the hobby account — and `hauto`, the
+# stage driver the hobby-auto layout runs in its Claude pane
 install-chobby: _root-notice
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p "{{BIN_DIR}}"
     ln -sf "{{REPO_ROOT}}/bin/chobby" "{{BIN_DIR}}/chobby"
     echo "  linked chobby -> {{BIN_DIR}}/chobby"
+    ln -sf "{{REPO_ROOT}}/bin/hauto" "{{BIN_DIR}}/hauto"
+    echo "  linked hauto -> {{BIN_DIR}}/hauto"
     case ":$PATH:" in
         *":{{BIN_DIR}}:"*) ;;
         *) echo "  WARNING: {{BIN_DIR}} is not on PATH — add it or chobby won't resolve." ;;
@@ -453,7 +456,7 @@ uninstall:
     #!/usr/bin/env bash
     set -euo pipefail
     rm -f "{{NU_DIR}}/hwt.nu" "{{NU_DIR}}/hcdev.nu" "{{ZJ_LAYOUTS}}/hobby-dev.kdl" "{{ZJ_LAYOUTS}}/hobby-auto.kdl"
-    rm -f "{{BIN_DIR}}/chobby" "{{BIN_DIR}}/hx-claude"
+    rm -f "{{BIN_DIR}}/chobby" "{{BIN_DIR}}/hauto" "{{BIN_DIR}}/hx-claude"
     rm -f "$HOME/fun_worktrees/CLAUDE.md"
     rm -f "{{CONFIG_DIR}}/settings.json" "{{CONFIG_DIR}}/CLAUDE.md"
     rm -f "{{CONFIG_DIR}}"/commands/*.md "{{CONFIG_DIR}}"/hooks/*.sh

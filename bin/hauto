@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# The Claude pane of an `hcdev auto` session: start whichever /task:auto stage the
+# task's recorded phase calls for, each as its own claude process.
+#
+# Runs from the task worktree (~/fun_worktrees/<project>/<topic>/<task>) and reads
+# build-task.json in the task's notes dir. The plan stage is headless and exits
+# when it has written plan.md; the build stage is interactive and runs to the PR.
+# Exit 1 when the cwd is not a task worktree or a stage ends without moving the
+# phase; otherwise the exit code of the last claude process.
+
+set -uo pipefail
+
+WORKTREE_BASE="$HOME/fun_worktrees"
+NOTES_BASE="$HOME/fun_repos/hobby-mimisbrunnr/notes"
+
+case "$PWD" in
+  "$WORKTREE_BASE"/*/*/*) ;;
+  *) echo "hauto: $PWD is not a task worktree under $WORKTREE_BASE" >&2; exit 1 ;;
+esac
+REL="${PWD#"$WORKTREE_BASE"/}"
+PROJECT="${REL%%/*}"; REST="${REL#*/}"
+TOPIC="${REST%%/*}"; REST="${REST#*/}"
+TASK="${REST%%/*}"
+STATE="$NOTES_BASE/$PROJECT/$TOPIC/$TASK/build-task.json"
+
+phase() { jaq -r '.phase // "acceptance"' "$STATE" 2>/dev/null || echo acceptance; }
+model_flag() {
+  local m
+  m=$(jaq -r '.model // empty' "$STATE" 2>/dev/null || true)
+  [ -n "$m" ] && printf -- '--model\n%s\n' "$m"
+}
+
+while :; do
+  before=$(phase)
+  case "$before" in
+    acceptance|plan|context)
+      echo "hauto: planning $TASK (phase $before) — headless, this pane shows the result"
+      chobby -p "/task:auto plan"
+      if [ "$(phase)" = "$before" ]; then
+        echo "hauto: the plan stage ended without moving the phase off '$before' — see $STATE" >&2
+        exit 1
+      fi
+      ;;
+    await-acceptance)
+      echo "hauto: $TASK needs acceptance criteria — answer in this session, then exit it (ctrl-d) and the build starts"
+      chobby --continue
+      if [ "$(phase)" = await-acceptance ]; then
+        echo "hauto: still waiting for acceptance criteria; run hauto again when answered"
+        exit 0
+      fi
+      ;;
+    planned)
+      echo "hauto: building $TASK from plan.md — fresh session"
+      mapfile -t MODEL < <(model_flag)
+      exec chobby "${MODEL[@]}" "/task:auto build"
+      ;;
+    done)
+      echo "hauto: $TASK is done"
+      exit 0
+      ;;
+    *)
+      echo "hauto: resuming $TASK at phase '$before'"
+      mapfile -t MODEL < <(model_flag)
+      exec chobby "${MODEL[@]}" --continue
+      ;;
+  esac
+done

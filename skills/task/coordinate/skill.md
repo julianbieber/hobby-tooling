@@ -1,5 +1,5 @@
 ---
-description: Work a project's task list unattended from a coordinator session — carve the description into tasks, record them in tasks.json, and run each one through /task:auto in its own hcdev window, one at a time, waiting on the pipeline state between them
+description: Work a project's task list unattended from a coordinator session — carve the description into tasks, record them in tasks.json, and run each one through /task:auto in its own hcdev window, one at a time, knowing nothing about any task but its phase
 argument-hint: '[<description>] [--blurb <name>] [--go]'
 allowed-tools: Skill, Read, Write, Edit, AskUserQuestion, Bash
 ---
@@ -29,6 +29,11 @@ every change, so the list you write is the list I see.
    brief is assembled from the description, the split and my answers, and
    says which is which; a PR is recorded from `prs.json` or `gh`, not from
    expectation. The same three sources as every other skill.
+5. **The coordinator knows no task's specifics.** It never reads a task's
+   code, plan, diff or journal. Planning and building happen in the task's
+   own window, in processes that end with their context; what reaches this
+   session is a phase name and a PR URL. Keeping the coordinator's context
+   free of every task is what lets it run a whole list in one session.
 
 ## Step 0 — Which coordinator, and what state
 
@@ -45,6 +50,7 @@ every change, so the list you write is the list I see.
    ```json
    { "project": "wusel", "blurb": "food-economy",
      "description": "<verbatim>", "created": "2026-09-11",
+     "model": "sonnet",
      "tasks": [
        { "task": "food-economy-fields", "topic": "food-economy",
          "title": "Fields grow wheat over the seasons",
@@ -53,6 +59,8 @@ every change, so the list you write is the list I see.
          "pr": null, "note": null, "updated": null } ] }
    ```
    `status` is one of `todo`, `running`, `awaiting-human`, `done`, `blocked`.
+   `model` is what the build stage runs on; a task entry may carry its own
+   `model` to override it. The plan stage always runs on the account default.
 4. **Branch on state.** Empty list and a description → *carve*. Empty list and
    no description → ask for one and stop. Non-empty list → *work*, unless a
    description was given as well, in which case ask whether it replaces or
@@ -122,11 +130,11 @@ open → base is **that task's branch** (its `task` name), and the note says
    `~/fun_repos/hobby-mimisbrunnr/notes/<project>/<topic>/<task>/build-task.json`:
    ```json
    { "phase": "acceptance", "auto": true,
+     "model": "<the task's model, else the list's>",
      "coordinator": "<this coordinator's notes dir>",
      "brief_source": "coordinator", "brief": "<see below>",
      "acceptance": "<done_when, verbatim>",
-     "no_hmml": false, "no_context": false, "no_split": true,
-     "is_subtask": true, "rounds": 0 }
+     "feedback": [], "rounds": 0 }
    ```
    The **brief** is read by a session with no memory of this one, so it is
    self-contained and says where each part came from: the coordinator's
@@ -144,7 +152,23 @@ open → base is **that task's branch** (its `task` name), and the note says
 5. `tasks.json`: `status: running`, `updated: <now, RFC 3339>`, `note` as W2
    decided. Append one line to today's journal (below).
 
-**W4 — Wait.**
+**W4 — Wait.** Two ways, cheapest first.
+
+*Idle notice.* The task's window is a Claude session on this machine, so
+`ListAgents` lists it once it has started: its name begins with the task name.
+Subscribe with `SendMessage` to that name, `notify_when_idle: true` and **no
+message** — a pure subscription, one notice when the session next ends a turn,
+which is exactly a gate or `done`. Never send the session text. When the
+notice arrives, read the phase without blocking:
+```bash
+hcoord wait <task notes dir> --timeout 1
+```
+and act on the line as below; a `timeout` outcome means the session is still
+mid-pipeline (the plan process exited and the build one started, say) —
+subscribe again.
+
+*Polling.* When the session is not listed yet, or after a resume, block
+instead:
 ```bash
 hcoord wait <task notes dir>
 ```
@@ -152,14 +176,14 @@ Run it with the Bash tool's full budget (`timeout: 600000`), never the default t
 minutes — the command blocks for up to 570 seconds by design. It prints one JSON
 line:
 
-- `outcome: timeout` (exit 2) → call it again. Nothing to report.
+- `outcome: timeout` (exit 2) → wait again. Nothing to report.
 - `outcome: human` → the session stopped at a gate. Set
   `status: awaiting-human` and `note` from the phase — `await-acceptance`:
   *needs acceptance criteria*, `await-play`: *ready to play*, anything else:
   the phase name. `notify-send "<blurb>" "<task>: <note>"`. Print one line
   naming the window (`hcdev-<project>-<topic>-<task>`) and what it wants. Then
   wait again with `--after <that phase>` so the call blocks until I have
-  answered and the session has moved on.
+  answered and the session has moved on (or subscribe to the idle notice again).
 - `outcome: done` → read `prs.json` in the task's notes dir for the PR URL
   (fall back to `gh pr list --head <task> --json url`). Set `status: done`,
   `pr`, `updated`, clear `note`. `notify-send` and a journal line. Back to W1.

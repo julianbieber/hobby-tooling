@@ -25,6 +25,15 @@ depends on an unmerged predecessor is based on that predecessor's branch rather
 than waiting for a merge. That produces a stack of PRs whose base is named in
 the coordinator's note; merging in order is mine.
 
+## The coordinator knows nothing about any task
+
+It never reads a task's code, plan, diff or journal. Planning and building
+happen in the task's own window — `hauto` runs a headless plan process, then
+a fresh build session — and what reaches the coordinator is a phase name from
+`build-task.json` and a PR URL from `prs.json`. That is what lets one
+coordinator session work a whole list: its context holds the list, not the
+tasks.
+
 ## `tasks.json` is the record and the display
 
 Everything the coordinator knows is in one file in its notes directory, written
@@ -34,13 +43,20 @@ no channel between the two: the file is the channel. The same file is what
 `/task:coordinate` picks up from after an interrupt. Editing it by hand between
 tasks is expected.
 
-## Why the coordinator waits in a shell call
+## Why the coordinator waits on an idle notice, and falls back to a shell call
 
-A Claude session has no way to sleep except through a tool. Polling a file from
-prompts costs a prompt per poll; `hcoord wait` costs one shell call per ten
-minutes and returns a JSON line the coordinator switches on. `--after <phase>`
-is the second call on the same gate — once `await-play` has been reported, the
-next wait must block until the phase is something else.
+A Claude session has no way to sleep except through a tool. The cheapest one
+is a cross-session idle subscription: the task's window is a peer session, and
+`SendMessage` with `notify_when_idle` and no message delivers one notice when
+that session ends a turn — which is a gate or `done` — at no cost to either
+side. The coordinator never sends the session text: a message from it would
+arrive as input to a pipeline that must not take instructions from anyone but
+me, and a slash command in it would arrive as plain text anyway.
+
+When the peer is not listed yet, or after a resume, `hcoord wait` blocks for up
+to ten minutes per shell call and returns a JSON line the coordinator switches
+on. `--after <phase>` is the second call on the same gate — once `await-play`
+has been reported, the next wait must block until the phase is something else.
 
 ## What it deliberately does not do
 
