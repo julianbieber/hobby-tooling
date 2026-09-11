@@ -11,6 +11,10 @@ pub const TASKS_FILE: &str = "tasks.json";
 /// The file name a task's pipeline records its phase in, inside the task's notes directory.
 pub const STATE_FILE: &str = "build-task.json";
 
+/// The file name the `track-pr` hook records a task's opened PRs in, inside the task's
+/// notes directory.
+pub const PRS_FILE: &str = "prs.json";
+
 /// Where a task is from the coordinator's point of view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -145,6 +149,49 @@ impl Coordinator {
         serde_json::from_str(text).map_err(|e| e.to_string())
     }
 
+    /// The notes directory of one of this coordinator's tasks, given the coordinator's
+    /// own notes directory. A task without a `topic` sits under the blurb, which is
+    /// where `/task:coordinate` puts the tasks it creates.
+    pub fn task_notes_dir(&self, dir: &Path, entry: &TaskEntry) -> PathBuf {
+        let project = dir.parent().and_then(Path::parent).unwrap_or(dir);
+        project
+            .join(entry.topic.as_deref().unwrap_or(&self.blurb))
+            .join(&entry.task)
+    }
+
+    /// Every PR URL known for a task, most authoritative first and without repeats:
+    /// the task's `prs.json`, then the `pr` its `build-task.json` carries, then what
+    /// this list has recorded. The first two exist the moment the PR opens; the last
+    /// only once the coordinator's wait has returned, so a list read alone lags.
+    pub fn pr_urls(&self, dir: &Path, entry: &TaskEntry) -> Vec<String> {
+        let notes = self.task_notes_dir(dir, entry);
+        let mut urls = read_prs(&notes);
+        let recorded = BuildState::load(&notes)
+            .ok()
+            .flatten()
+            .and_then(|s| s.pr)
+            .into_iter()
+            .chain(entry.pr.clone());
+        for url in recorded {
+            if !urls.contains(&url) {
+                urls.push(url);
+            }
+        }
+        urls
+    }
+
+    /// The files whose change should redraw a view of this list: `tasks.json` and each
+    /// task's PR and state files.
+    pub fn watched_files(&self, dir: &Path) -> Vec<PathBuf> {
+        let mut files = vec![Self::tasks_path(dir)];
+        for t in &self.tasks {
+            let notes = self.task_notes_dir(dir, t);
+            files.push(notes.join(PRS_FILE));
+            files.push(notes.join(STATE_FILE));
+        }
+        files
+    }
+
     /// Tally the statuses.
     pub fn counts(&self) -> Counts {
         let mut c = Counts::default();
@@ -167,6 +214,22 @@ pub struct BuildState {
     /// The pipeline's recorded phase.
     #[serde(default)]
     pub phase: String,
+    /// The PR URL, once the pipeline has opened one.
+    #[serde(default)]
+    pub pr: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct PrRecord {
+    url: String,
+}
+
+fn read_prs(task_notes_dir: &Path) -> Vec<String> {
+    std::fs::read_to_string(task_notes_dir.join(PRS_FILE))
+        .ok()
+        .and_then(|text| serde_json::from_str::<Vec<PrRecord>>(&text).ok())
+        .map(|records| records.into_iter().map(|r| r.url).collect())
+        .unwrap_or_default()
 }
 
 impl BuildState {
@@ -240,11 +303,54 @@ mod tests {
         );
     }
 
+    // The view shows a PR as soon as the task's own notes record it, and shows it once
+    // even when the coordinator has since copied it into the list.
+    #[test]
+    fn pr_urls_come_from_the_task_notes_first_and_dedupe() {
+        let root = std::env::temp_dir().join(format!("hcoord-prs-{}", std::process::id()));
+        let coordinator = root.join("p/coordinator/b");
+        let task = root.join("p/b/b-one");
+        std::fs::create_dir_all(&coordinator).unwrap();
+        std::fs::create_dir_all(&task).unwrap();
+        std::fs::write(
+            task.join(PRS_FILE),
+            r#"[{"url":"https://github.com/o/r/pull/2","repo":"o/r","title":"t","opened":"d"}]"#,
+        )
+        .unwrap();
+        std::fs::write(
+            task.join(STATE_FILE),
+            r#"{"phase":"done","pr":"https://github.com/o/r/pull/2"}"#,
+        )
+        .unwrap();
+        let c = Coordinator::parse(
+            r#"{"project":"p","blurb":"b","tasks":[
+                {"task":"b-one","title":"One","pr":"https://github.com/o/r/pull/1"},
+                {"task":"b-two","topic":"other","title":"Two"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            c.pr_urls(&coordinator, &c.tasks[0]),
+            vec![
+                "https://github.com/o/r/pull/2".to_owned(),
+                "https://github.com/o/r/pull/1".to_owned()
+            ]
+        );
+        assert_eq!(
+            c.task_notes_dir(&coordinator, &c.tasks[1]),
+            root.join("p/other/b-two")
+        );
+        assert!(c.pr_urls(&coordinator, &c.tasks[1]).is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     // `wait` returns on exactly these phases; a new gate in `/task:auto` that does not
     // start with `await-` would otherwise hang the coordinator.
     #[test]
     fn human_and_terminal_phases() {
-        let phase = |p: &str| BuildState { phase: p.into() };
+        let phase = |p: &str| BuildState {
+            phase: p.into(),
+            pr: None,
+        };
         assert!(phase("await-play").needs_human());
         assert!(phase("await-acceptance").needs_human());
         assert!(phase("context").needs_human());
