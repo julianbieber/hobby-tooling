@@ -2,6 +2,7 @@
   "permissions": {
     "defaultMode": "auto"
   },
+  "model": "opus[1m]",
   "hooks": {
     "SessionStart": [
       {
@@ -94,7 +95,7 @@
   },
   "alwaysThinkingEnabled": true,
   "effortLevel": "high",
+  "autoUpdatesChannel": "latest",
   "theme": "dark",
-  "voiceEnabled": false,
-  "autoUpdatesChannel": "latest"
+  "voiceEnabled": false
 }
