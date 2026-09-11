@@ -452,6 +452,8 @@ export def --env "hcdev new" [
 # Errors as `hcdev wt` does: unknown, ambiguous, or not checked out. With
 # `--window` it opens in a new alacritty window and returns at once, even from
 # inside a zellij pane; a failure there holds the window open with its message.
+# That window carries WM_CLASS `hcdev-auto`, so a window-manager rule can send it
+# to a fixed desktop (leftwm: a `window_rules` entry on that class).
 export def --env "hcdev auto" [
     task: string@hcdev-task-completions               # Task name
     --project (-p): string@hcdev-project-completions  # Disambiguate across projects
@@ -467,7 +469,7 @@ export def --env "hcdev auto" [
         let cmd = $"hcdev auto '($found.task)' --project '($found.project)' --topic '($found.topic)'"
         let held = $"try { ($cmd) } catch {|e| print $e.msg; print ''; print 'Failed. Press enter to close.'; input }"
         with-env {ZELLIJ: null, ZELLIJ_SESSION_NAME: null, ZELLIJ_PANE_ID: null} {
-            ^setsid -f alacritty --working-directory $found.path --title $session -e nu --login -c $held
+            ^setsid -f alacritty --class hcdev-auto,hcdev-auto --working-directory $found.path --title $session -e nu --login -c $held
         }
         print $"Opened ($session) in a new window"
         return
