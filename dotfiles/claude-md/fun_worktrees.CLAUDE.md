@@ -57,8 +57,15 @@ hwt orphans                              worktrees with no task.json
 hwt rm <task>                            remove the worktree, keep the notes
 hwt restore <task>                       re-create a removed worktree
 hcdev wt <task>                          zellij session: Helix + Claude (hobby account)
+hcdev auto <task> [-w]                   the same, with Claude opening on /task:auto
+hcdev coordinator <blurb>                from ~/fun_repos/<project>: task list + Claude
 hcdev notes                              cd to this task's notes dir
 ```
+
+A task under the topic `coordinator` is a **coordinator**: notes, `task.json`
+and a `tasks.json`, no worktree. `hcdev coordinator <blurb>` opens it;
+`/task:coordinate` in that session works the tasks it lists, one `hcdev auto`
+window at a time.
 
 ## Account
 
