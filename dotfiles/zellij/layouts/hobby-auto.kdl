@@ -1,0 +1,15 @@
+// The unattended variant of hobby-dev: same two panes, but the Claude pane opens
+// straight into `/task:auto`, so a session a coordinator spawns starts working the
+// moment its window exists. The prompt is a claude positional argument, passed
+// through by `chobby`.
+//
+// Helix stays: the play gate at the end of `/task:auto` is where a person arrives,
+// and an editor beside the conversation is what they arrive to.
+layout {
+    pane split_direction="vertical" {
+        pane size="65%" name="editor"
+        pane size="35%" command="chobby" name="claude" close_on_exit=false {
+            args "/task:auto"
+        }
+    }
+}

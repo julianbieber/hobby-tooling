@@ -958,6 +958,9 @@ export def --env "hwt restore" [
     if $found == null {
         error make { msg: $"No notes directory found for '($task)' under ($NOTES_BASE)" }
     }
+    if $found.topic == "coordinator" {
+        error make { msg: $"'($found.task)' is a coordinator — it has no worktree; run 'hcdev coordinator ($found.task) -p ($found.project)'" }
+    }
     if $found.present and (is-git-repo $found.path) {
         print $"Already present: ($found.path)"
         if not $no_cd { cd $found.path }

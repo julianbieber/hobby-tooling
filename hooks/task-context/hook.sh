@@ -9,9 +9,15 @@
 # branch and gitStatus for free — all that's left worth injecting is the task
 # identity, the notes path, and the task.json state.
 #
+# A coordinator session is the one case that runs outside a task: its cwd is the
+# project's main checkout, so it is told which coordinator it is instead —
+# from HCOORD_NOTES_DIR when `hcdev coordinator` set it, else from the open
+# coordinators under notes/<project>/coordinator/.
+#
 # Input: JSON on stdin from Claude Code SessionStart, with { cwd, source, ... }.
 # Output (exit 0): JSON { hookSpecificOutput: { hookEventName, additionalContext } }.
-# Effect-only: never blocks; prints nothing when cwd is not inside a task.
+# Effect-only: never blocks; prints nothing when cwd is neither a task nor a main
+# checkout with a coordinator.
 
 set -uo pipefail
 
@@ -22,6 +28,53 @@ PROJECTS_BASE="$HOME/fun_repos"
 INPUT=$(cat)
 CWD=$(printf '%s' "$INPUT" | jaq -r '.cwd // empty' 2>/dev/null || true)
 CWD="${CWD:-$PWD}"
+
+emit() {
+  jaq -n --arg c "$1" '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $c}}'
+  exit 0
+}
+
+coordinator_context() {
+  local project="$1" dir="$2" blurb
+  blurb=$(basename "$dir")
+  local ctx="Coordinator session **${blurb}** for project \`${project}\` — this is the main checkout, not a task worktree."$'\n'
+  ctx="${ctx}Coordinator notes: \`${dir/#$HOME/\~}\` — the task list is \`tasks.json\` there; \`/task:coordinate\` reads and writes it, the pane on the left shows it."$'\n'
+  if [ -f "$dir/tasks.json" ]; then
+    local counts
+    counts=$(command -v hcoord >/dev/null 2>&1 && hcoord status "$dir" 2>/dev/null || true)
+    [ -n "$counts" ] && ctx="${ctx}Tasks: ${counts}"$'\n'
+  fi
+  local last
+  last=$(find "$dir" -maxdepth 1 -type f -name '????-??-??.md' -printf '%f\n' 2>/dev/null | sort -r | head -n1 || true)
+  [ -n "$last" ] && ctx="${ctx}Latest journal entry: ${last%.md}"$'\n'
+  ctx="${ctx}Issue tracking for hobby projects is GitHub issues via \`gh\`, not Jira."
+  emit "$ctx"
+}
+
+# A main checkout: ~/fun_repos/<project>, with no deeper path component.
+case "$CWD" in
+  "$PROJECTS_BASE"/*/*) ;;
+  "$PROJECTS_BASE"/*)
+    PROJECT="${CWD#"$PROJECTS_BASE"/}"
+    if [ -n "${HCOORD_NOTES_DIR:-}" ] && [ -d "$HCOORD_NOTES_DIR" ]; then
+      coordinator_context "$PROJECT" "$HCOORD_NOTES_DIR"
+    fi
+    open=()
+    for d in "$NOTES_BASE/$PROJECT/coordinator"/*/; do
+      [ -f "$d/task.json" ] || continue
+      [ "$(jaq -r '.done // false' "$d/task.json" 2>/dev/null)" = "true" ] && continue
+      open+=("${d%/}")
+    done
+    if [ "${#open[@]}" -eq 1 ]; then
+      coordinator_context "$PROJECT" "${open[0]}"
+    elif [ "${#open[@]}" -gt 1 ]; then
+      ctx="Main checkout of \`${PROJECT}\` with ${#open[@]} open coordinators — \`/task:coordinate\` has to be told which:"$'\n'
+      for d in "${open[@]}"; do ctx="${ctx}- \`${d/#$HOME/\~}\`"$'\n'; done
+      emit "$ctx"
+    fi
+    exit 0
+    ;;
+esac
 
 # Only act inside a task path: ~/fun_worktrees/<project>/<topic>/<task>[/...].
 case "$CWD" in

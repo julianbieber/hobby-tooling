@@ -79,7 +79,7 @@ fi
 # repo installed, which is how ~/.config/zellij/config.kdl went unnoticed: present,
 # working, and owned by the home dotfiles repo. A real file here is a gap, not a pass.
 ZJ="${XDG_CONFIG_HOME:-$HOME/.config}/zellij"
-for f in "config.kdl" "layouts/hobby-dev.kdl"; do
+for f in "config.kdl" "layouts/hobby-dev.kdl" "layouts/hobby-auto.kdl"; do
     name=$(basename "$f")
     if [ -h "$ZJ/$f" ]; then
         ok "$name linked"
@@ -121,6 +121,7 @@ fi
 echo ""
 echo "Optional extras"
 if command -v hdash >/dev/null 2>&1; then ok "hdash built"; else warn "hdash not built" "just install-dash"; fi
+if command -v hcoord >/dev/null 2>&1; then ok "hcoord built"; else warn "hcoord not built (hcdev coordinator needs it)" "just install-coord"; fi
 # The two dashboards hdash replaces. Reported so a machine that installed them before the
 # merge is told to reclaim the names, rather than silently keeping two stale binaries.
 for b in hwt-overview hgh-issues; do
