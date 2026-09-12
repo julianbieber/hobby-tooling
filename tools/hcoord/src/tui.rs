@@ -257,6 +257,7 @@ fn task_line(index: usize, status: Status, title: &str) -> Line<'static> {
         Status::AwaitingHuman => Style::default()
             .fg(Color::Magenta)
             .add_modifier(Modifier::BOLD),
+        Status::AwaitingMerge => Style::default().fg(Color::Cyan),
         Status::Done => Style::default().fg(Color::Green),
         Status::Blocked => Style::default().fg(Color::Red),
     };

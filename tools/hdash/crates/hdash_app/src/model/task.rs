@@ -226,24 +226,38 @@ pub struct Block {
     pub reason: Option<String>,
 }
 
-/// What a coordinator's `tasks.json` says about its list, as counts per status. Only
-/// the `status` field of each entry is read; the rest of the file belongs to
-/// `/task:coordinate` and the `hcoord` pane.
+/// What a coordinator's `tasks.json` says about its list, as counts per status, plus
+/// whether the coordinator merges its own PRs. Only those two fields are read; the rest
+/// of the file belongs to `/task:coordinate` and the `hcoord` pane.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CoordinatorCounts {
     pub todo: usize,
     pub running: usize,
     pub awaiting_human: usize,
+    pub awaiting_merge: usize,
     pub done: usize,
     pub blocked: usize,
+    /// `merge: "coordinator"` in the list: a PR waiting to be merged is its job, not mine.
+    pub self_merging: bool,
 }
 
 impl CoordinatorCounts {
+    /// How many tasks are waiting on me: the gates, plus the PRs I said I would merge.
+    pub fn wants_me(&self) -> usize {
+        self.awaiting_human
+            + if self.self_merging {
+                0
+            } else {
+                self.awaiting_merge
+            }
+    }
+
     /// One line naming the non-zero counts, `waiting for you` first because it is the one
     /// that wants a click; `no tasks` when the list is empty.
     pub fn summary(&self) -> String {
         let parts: Vec<String> = [
             (self.awaiting_human, "waiting for you"),
+            (self.awaiting_merge, "waiting on a merge"),
             (self.running, "running"),
             (self.todo, "todo"),
             (self.done, "done"),
@@ -262,7 +276,10 @@ impl CoordinatorCounts {
 
     fn parse(text: &str) -> Option<Self> {
         let value: serde_json::Value = serde_json::from_str(text).ok()?;
-        let mut counts = Self::default();
+        let mut counts = Self {
+            self_merging: value.get("merge").and_then(|m| m.as_str()) == Some("coordinator"),
+            ..Self::default()
+        };
         for entry in value.get("tasks")?.as_array()? {
             match entry
                 .get("status")
@@ -271,6 +288,7 @@ impl CoordinatorCounts {
             {
                 "running" => counts.running += 1,
                 "awaiting-human" => counts.awaiting_human += 1,
+                "awaiting-merge" => counts.awaiting_merge += 1,
                 "done" => counts.done += 1,
                 "blocked" => counts.blocked += 1,
                 _ => counts.todo += 1,
@@ -1023,5 +1041,28 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // A status the dashboard does not know falls into `todo`, which would have reported a
+    // task whose PR is merging as one that has not started — and left the card's dot green
+    // while the coordinator was waiting on me.
+    #[test]
+    fn awaiting_merge_counts_and_wants_me_unless_the_coordinator_merges() {
+        let list = |merge: &str| {
+            format!(
+                r#"{{"project":"p","blurb":"b"{merge},"tasks":[
+                    {{"task":"a","title":"A","status":"awaiting-merge"}},
+                    {{"task":"b","title":"B","status":"todo"}}]}}"#
+            )
+        };
+        let mine = CoordinatorCounts::parse(&list("")).unwrap();
+        assert_eq!(mine.awaiting_merge, 1);
+        assert_eq!(mine.todo, 1);
+        assert_eq!(mine.wants_me(), 1);
+        assert_eq!(mine.summary(), "1 waiting on a merge · 1 todo");
+
+        let theirs = CoordinatorCounts::parse(&list(r#","merge":"coordinator""#)).unwrap();
+        assert_eq!(theirs.awaiting_merge, 1);
+        assert_eq!(theirs.wants_me(), 0);
     }
 }

@@ -164,11 +164,7 @@ impl<'a> Item<'a> {
             if task.awaiting_review() > 0 {
                 return 2;
             }
-            if task
-                .coordinator
-                .as_ref()
-                .is_some_and(|c| c.awaiting_human > 0)
-            {
+            if task.coordinator.as_ref().is_some_and(|c| c.wants_me() > 0) {
                 return 2;
             }
             return 3;

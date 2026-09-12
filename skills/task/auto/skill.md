@@ -224,7 +224,9 @@ ______________________________________________________________________
    the acceptance observation plus the `run` command.
 5. Record the PR in `prs.json` if the `track-pr` hook did not.
 
-Never push to the default branch.
+Never push to the default branch, and never merge: a coordinator waiting on
+this task decides that, and an unattended task with no coordinator leaves the
+merge to me.
 
 ## Phase `journal`
 
