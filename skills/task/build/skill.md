@@ -615,6 +615,11 @@ two sentences each, then **How can you test it by hand** as an ordered bullet li
 whose last bullet says what I should see. No other sections, no `## AI use`, no
 empty section, no attribution.
 
+When the task has an issue — a `gh-<number>` in the task or branch name, or the one
+`brief_source: issue` read — the body's first line is `Closes #<number>`, so the
+issue closes when the PR merges. A task with no issue writes no such line, and a
+number is never guessed.
+
 The *why* is sourced, not invented — from my prompts, from what we settled, or from
 something you verified in the `implement` phase. If you do not have one, ask before
 opening the PR.

@@ -173,9 +173,12 @@ line already does here, and nothing consumes them.
 **Title** — same rule as a commit subject: imperative, capitalized, no trailing
 period, at most 72 characters, naming the effect.
 
-**Three sections, in this order, and nothing else:**
+**Three sections, in this order, and nothing else** — above them, when the task has
+an issue, the one line that closes it:
 
 ````markdown
+Closes #12
+
 ## What do we change
 
 One or two sentences. No more.
@@ -193,6 +196,16 @@ One or two sentences. No more.
 
 The PR carries the argument for the **whole change**. The commit bodies carry the
 per-decision record — do not restate them here, and never paste the diff.
+
+**A PR that has an issue closes it, and the body is the only thing that can.** The
+first line is `Closes #<n>` — GitHub then closes the issue the moment the PR merges,
+which is the only point at which the work is actually in the default branch. Leaving
+it out means closing the issue by hand later, which is to say not closing it. The
+issue number is the one in the task or branch name (`gh-12-…`), or the issue the
+brief named; a task with no issue writes no line, and never invents a number. The
+keyword fires only on a merge into the **default** branch, so a PR based on another
+branch has to name the issue again when it is re-targeted. The line is not a section
+and does not count against the three.
 
 **Why** is under the same sourcing rule as a commit message: it comes from my
 prompts, from what we settled in discussion, or from something you verified. Never
