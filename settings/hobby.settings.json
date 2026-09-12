@@ -91,7 +91,17 @@
     ]
   },
   "enabledPlugins": {
-    "rust-analyzer-lsp@claude-plugins-official": true
+    "rust-analyzer-lsp@claude-plugins-official": true,
+    "bevy@stuart-plugins": true,
+    "efficient-commands@stuart-plugins": true
+  },
+  "extraKnownMarketplaces": {
+    "stuart-plugins": {
+      "source": {
+        "source": "github",
+        "repo": "pavlov-net/claude-plugins"
+      }
+    }
   },
   "alwaysThinkingEnabled": true,
   "effortLevel": "high",
