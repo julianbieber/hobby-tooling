@@ -354,7 +354,7 @@ install-dash:
     @echo "Installed hdash. If the retired dashboards are still on PATH:"
     @echo "    cargo uninstall hwt_app issues_app"
 
-# The coordinator's task-list pane and `hcoord wait`; `hcdev coordinator` needs it on PATH
+# The coordinator's task-list pane, `hcoord wait` and `hcoord merged`; `hcdev coordinator` needs it on PATH
 install-coord:
     cd tools/hcoord && cargo install --path .
 

@@ -110,7 +110,7 @@ fn header_row(commands: &mut Commands, fonts: &KitFonts, item: &Item<'_>, stage:
             if item
                 .task
                 .and_then(|t| t.coordinator.as_ref())
-                .is_none_or(|c| c.awaiting_human == 0) =>
+                .is_none_or(|c| c.wants_me() == 0) =>
         {
             DotState::Clean
         }
@@ -310,7 +310,7 @@ fn meta_row(commands: &mut Commands, fonts: &KitFonts, item: &Item<'_>, stage: S
         && task.is_coordinator()
     {
         let (line, color) = match &task.coordinator {
-            Some(counts) if counts.awaiting_human > 0 => (counts.summary(), kt::DOT_DIRTY),
+            Some(counts) if counts.wants_me() > 0 => (counts.summary(), kt::DOT_DIRTY),
             Some(counts) => (counts.summary(), ft_text_main()),
             None => ("no tasks.json".to_owned(), ft_text_dim()),
         };

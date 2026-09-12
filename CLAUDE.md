@@ -379,6 +379,12 @@ sessions independent: `/task:auto` names its gates `await-acceptance` and
 `await-play` is not reported again at once. The timeout is 570 seconds because
 a Claude Code shell call gets ten minutes.
 
+`hcoord merged <pr>` is the same shape one layer further on: it polls `gh pr
+view` and returns `merged`, `blocked` with a reason, or `timeout` — plus
+`mergeable`, only with `--ready`, which is how a coordinator that was handed the
+merges learns it may run `gh pr merge`. Without the flag a green PR is waited
+on, because merging is mine.
+
 **The coordinator layout is rendered per session, not installed.** The TUI pane
 needs the notes dir as an argument and KDL cannot expand anything, so a
 committed layout could only ever show one coordinator. `hcdev coordinator`
@@ -395,9 +401,31 @@ so it is a per-machine line, not an install step.
 
 **One task session at a time is the design.** Two `/task:auto` sessions on one
 repo would race on the default branch and on my attention, since the play gate
-assumes one window is being looked at. A task that depends on an unmerged
-predecessor is based on that predecessor's branch rather than waiting for a
-merge; the PR stack is mine to merge in order.
+assumes one window is being looked at.
+
+**A task is not done until its PR is merged.** `done` used to mean *the session
+ended*, and a task whose dependency was still open was based on that
+dependency's branch — a stack that had to be merged in order and rebased
+whenever a review changed anything early in it. Now the list holds in
+`awaiting-merge` between the session ending and the PR landing, and the stack
+is gone with it: every task branches off the default branch, because everything
+before it is already there.
+
+That also makes `Closes #<n>` work. A closing keyword fires only on a merge into
+the **default** branch, so on a stacked PR it silently did nothing; every PR now
+merges there, which is what makes an issue closing on merge a fact rather than a
+hope. The line is required of every PR that has an issue, in
+`dotfiles/claude-md/hobby.CLAUDE.md`, and the coordinator confirms it afterwards
+for a `gh-<number>` task rather than trusting it.
+
+**Merging is mine by default, and the list says so.** `merge` in `tasks.json` is
+`mine` — report the green PR, notify once, hold — or `coordinator`, which I set
+when I trust how a run is going and which merges each PR itself once the checks
+pass. It is in the file rather than in the conversation so a resumed session
+still knows. `hcoord merged` decides green from `gh`'s `statusCheckRollup`, and
+a repo with no checks at all counts as green: most hobby repos have no CI, and
+the alternative is a list that never moves. A failing check, a conflict or a
+PR closed unmerged is a **stop**, never a longer wait.
 
 **`/task:auto` commits, which `/task:build` never does.** A PR cannot open
 without commits and nobody is at the keyboard between `continue` and the PR, so

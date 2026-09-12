@@ -1,5 +1,5 @@
 ---
-description: Work a project's task list unattended from a coordinator session — carve the description into tasks, record them in tasks.json, and run each one through /task:auto in its own hcdev window, one at a time, knowing nothing about any task but its phase
+description: Work a project's task list unattended from a coordinator session — carve the description into tasks, record them in tasks.json, and run each one through /task:auto in its own hcdev window, one at a time, each task's PR merged before the next one starts
 argument-hint: '[<description>] [--blurb <name>] [--go]'
 allowed-tools: Skill, Read, Write, Edit, AskUserQuestion, Bash
 ---
@@ -8,16 +8,20 @@ Run a body of work from start to a stack of PRs with one conversation at the
 start and one visit per task at the end. This session is the **coordinator**:
 it owns no code and opens no PR. It carves the description into tasks, writes
 them to `tasks.json`, and works the list by opening one `hcdev auto` window at
-a time and blocking on that task's pipeline state until it needs me or is done.
+a time, blocking on that task's pipeline state until it needs me or is done,
+and then on its pull request until that PR is merged.
 
 The pane on the left shows `tasks.json` (`hcoord tui`); it re-reads the file on
 every change, so the list you write is the list I see.
 
-## Four rules that override everything else
+## Six rules that override everything else
 
-1. **One task session at a time.** Never start the next task while one is
-   `running` or `awaiting-human`. Parallel sessions on one repo are what this
-   skill exists to avoid.
+1. **One task at a time, and it is not over until its PR is merged.** Never
+   start the next task while one is `running`, `awaiting-human` or
+   `awaiting-merge`. Parallel sessions on one repo are what this skill exists
+   to avoid, and a task whose PR is still open is not finished: the next task
+   branches off the default branch, so an unmerged predecessor is work the next
+   task would not have.
 2. **`tasks.json` is the record, and it is written at every change** — a task
    started, a gate reached, a PR opened, a task done. A crash or an interrupt
    loses nothing that was written; `/task:coordinate` with no arguments picks
@@ -25,11 +29,16 @@ every change, so the list you write is the list I see.
 3. **Wait with `hcoord wait`, never with a prompt.** One shell call per wait,
    ten minutes at most, then call again. Do not read `build-task.json` in a
    loop from here.
-4. **Nothing is invented.** The description is recorded verbatim; a task's
+4. **Merging is mine unless the list says otherwise.** `merge` in `tasks.json`
+   is `mine` — report the green PR and hold the list until I merge it — or
+   `coordinator`, which I set when I trust the run, and which merges each PR
+   itself once its checks pass. Either way a red check, a conflict or a closed
+   PR blocks the task and stops the loop: it is a decision, not a wait.
+5. **Nothing is invented.** The description is recorded verbatim; a task's
    brief is assembled from the description, the split and my answers, and
    says which is which; a PR is recorded from `prs.json` or `gh`, not from
    expectation. The same three sources as every other skill.
-5. **The coordinator knows no task's specifics.** It never reads a task's
+6. **The coordinator knows no task's specifics.** It never reads a task's
    code, plan, diff or journal. Planning and building happen in the task's
    own window, in processes that end with their context; what reaches this
    session is a phase name and a PR URL. Keeping the coordinator's context
@@ -50,7 +59,7 @@ every change, so the list you write is the list I see.
    ```json
    { "project": "wusel", "blurb": "food-economy",
      "description": "<verbatim>", "created": "2026-09-11",
-     "model": "sonnet",
+     "model": "sonnet", "merge": "mine",
      "tasks": [
        { "task": "food-economy-fields", "topic": "food-economy",
          "title": "Fields grow wheat over the seasons",
@@ -58,9 +67,10 @@ every change, so the list you write is the list I see.
          "depends_on": [], "status": "todo",
          "pr": null, "note": null, "updated": null } ] }
    ```
-   `status` is one of `todo`, `running`, `awaiting-human`, `done`, `blocked`.
-   `model` is what the build stage runs on; a task entry may carry its own
-   `model` to override it. The plan stage always runs on the account default.
+   `status` is one of `todo`, `running`, `awaiting-human`, `awaiting-merge`,
+   `done`, `blocked`. `model` is what the build stage runs on; a task entry may
+   carry its own `model` to override it. The plan stage always runs on the
+   account default. `merge` is `mine` or `coordinator` and defaults to `mine`.
 4. **Branch on state.** Empty list and a description → *carve*. Empty list and
    no description → ask for one and stop. Non-empty list → *work*, unless a
    description was given as well, in which case ask whether it replaces or
@@ -91,11 +101,16 @@ when, depends on — the rejected cuts with the rule each failed, the sequence
 checks, and the decisions as numbered questions. Then one line: *"Edit
 `tasks.json` or tell me what to change; answer the questions in your own words.
 Say `go` and I'll start working the list — you'll hear from me once per task,
-when it is ready to play."* End your turn.
+when it is ready to play, and again when its PR is waiting for you to merge.
+Say `go, you merge` and I'll merge each PR myself once its checks are green."*
+End your turn.
 
-On `go`: re-read `tasks.json` (it may have been edited), record every answer
-**verbatim** in `business-context.md` in the coordinator's notes dir (one
-`## <handle>` block each, the `/task:build` format), then *work*.
+On `go`: re-read `tasks.json` (it may have been edited), set `merge` to
+`coordinator` if I handed you the merges and `mine` otherwise, record every
+answer **verbatim** in `business-context.md` in the coordinator's notes dir
+(one `## <handle>` block each, the `/task:build` format), then *work*. I may
+hand you the merges at any later point too; that is a `merge` write and takes
+effect on the next PR.
 
 ______________________________________________________________________
 
@@ -104,27 +119,29 @@ ______________________________________________________________________
 Repeat until nothing is left:
 
 **W1 — Current task.** A task that is `running` or `awaiting-human` is the
-current one; skip to W4 with its notes dir. Otherwise pick the **first `todo`
+current one; skip to W4 with its notes dir. One that is `awaiting-merge` is
+the current one too; skip to W5 with its PR. Otherwise pick the **first `todo`
 whose `depends_on` are all `done`**. None, with `todo`s remaining → they are
 blocked on something not done: mark each `blocked` with the reason in `note`
 and stop with a summary. None, with none remaining → *finish*.
 
-**W2 — Base branch.** Fast-forward the main checkout:
+**W2 — Base branch.** Every task branches off the **default branch**, because
+every earlier task's PR is merged before this one starts. Resolve it once and
+fast-forward the main checkout:
 ```bash
+gh repo view --json defaultBranchRef -q .defaultBranchRef.name
 git pull --ff-only
 ```
-A refusal is reported in the note and does not stop the loop. Then, for each
-task in `depends_on`, check its PR: `gh pr view <pr> --json state,mergedAt`.
-Every dependency merged → base is the default branch. Any dependency still
-open → base is **that task's branch** (its `task` name), and the note says
-`based on <task>` so the PR's reviewer knows the stack. Two open dependencies
-→ stop and ask; a three-way base is a decision, not a default.
+A refusal is reported in the note and does not stop the loop; it means the base
+is stale, not that the task cannot run. There is no stacked base and no
+`depends_on` check here — W1 already refused to pick a task whose dependencies
+are not `done`, and `done` now means merged.
 
 **W3 — Start it.**
 
 1. Create the worktree and notes dir:
    ```bash
-   nu -l -c "hwt new '<task>' -p '<project>' -t '<topic>' -b '<base>' --no-cd"
+   nu -l -c "hwt new '<task>' -p '<project>' -t '<topic>' -b '<base branch>' --no-cd"
    ```
 2. Seed the task's pipeline state at
    `~/fun_repos/hobby-mimisbrunnr/notes/<project>/<topic>/<task>/build-task.json`:
@@ -149,8 +166,9 @@ open → base is **that task's branch** (its `task` name), and the note says
    ```bash
    nu -l -c "hcdev auto '<task>' -p '<project>' -t '<topic>' --window"
    ```
-5. `tasks.json`: `status: running`, `updated: <now, RFC 3339>`, `note` as W2
-   decided. Append one line to today's journal (below).
+5. `tasks.json`: `status: running`, `updated: <now, RFC 3339>`, `note` empty
+   unless W2's pull was refused, in which case it says so. Append one line to
+   today's journal (below).
 
 **W4 — Wait.** Two ways, cheapest first.
 
@@ -184,21 +202,68 @@ line:
   naming the window (`hcdev-<project>-<topic>-<task>`) and what it wants. Then
   wait again with `--after <that phase>` so the call blocks until I have
   answered and the session has moved on (or subscribe to the idle notice again).
-- `outcome: done` → read `prs.json` in the task's notes dir for the PR URL
-  (fall back to `gh pr list --head <task> --json url`). Set `status: done`,
-  `pr`, `updated`, clear `note`. `notify-send` and a journal line. Back to W1.
+- `outcome: done` → the session has finished and pushed. Read `prs.json` in the
+  task's notes dir for the PR URL (fall back to `gh pr list --head <task> --json
+  url`). No PR anywhere → the task opened none: `status: done`, journal line,
+  back to W1. Otherwise record `pr`, set `status: awaiting-merge`, `updated`,
+  `note: PR open, waiting for merge`, and go to W5.
 - exit 1 → the state file is unreadable. `status: blocked`, `note` with the
   error, stop and report.
+
+**W5 — Merge.** The list holds here until the PR has landed. The task is not
+`done` while it is open, and no `todo` starts behind it.
+
+1. `notify-send "<blurb>" "<task>: PR <url> ready to merge"` when `merge` is
+   `mine`, once, on arriving here — not on every wait.
+2. Block on the PR. One shell call, ten minutes, then call again:
+   ```bash
+   hcoord merged <pr url>            # merge: mine
+   hcoord merged <pr url> --ready    # merge: coordinator
+   ```
+   Run it with the Bash tool's full budget (`timeout: 600000`). It prints one
+   JSON line `{pr, outcome, state, checks}`:
+
+   - `outcome: timeout` (exit 2) → nothing has resolved. Wait again, silently.
+   - `outcome: mergeable` → only with `--ready`: checks pass and GitHub reports
+     no conflict. Merge it, then wait again to confirm:
+     ```bash
+     gh pr merge <pr url> --merge
+     ```
+     A refusal from `gh` blocks the task: record what it said in `note` and
+     stop. Merge commits, not squashes — that is how these repos merge.
+   - `outcome: blocked` → a red check, a conflict, or a PR closed unmerged. Set
+     `status: blocked` with the line's `reason` in `note`, `notify-send`, and
+     **stop the loop** with a summary. It is a decision for me, and the tasks
+     behind it would branch off work that is not landing.
+   - `outcome: merged` → go to W6.
+   - exit 1 → `gh` failed. `status: blocked`, `note` with the error, stop.
+
+**W6 — The issue, then done.** A merged PR whose body carried its closing line
+has already closed the issue; this confirms it rather than trusting it.
+
+1. Only when the task name carries a `gh-<number>` prefix — the tasks this
+   coordinator creates do not, so this is usually one skipped line:
+   ```bash
+   gh issue view <number> --json state
+   ```
+   `OPEN` means the closing line was missing or the PR did not merge into the
+   default branch. Close it, naming the PR, and say so in the note:
+   ```bash
+   gh issue close <number> --reason completed --comment "Merged in <pr url>."
+   ```
+2. `status: done`, `updated`, clear `note`, keep `pr`. `notify-send` and a
+   journal line naming the PR. Back to W1.
 
 `hwt`, `hcdev` and `hcoord` are all on `PATH`; each `nu -l -c` is a fresh
 login shell so the modules are loaded.
 
 ## Finish
 
-Every task `done` (or the loop stopped at a `blocked` one): print the list
-with each PR link, mark the coordinator done when nothing is blocked
-(`task.json` → `done: true`), write the journal, and end. A blocked task is
-left blocked with its reason on the card; unblocking is a decision for me.
+Every task `done` — which now means every PR merged — or the loop stopped at a
+`blocked` one: print the list with each PR link, mark the coordinator done when
+nothing is blocked (`task.json` → `done: true`), write the journal, and end. A
+blocked task is left blocked with its reason on the card; unblocking is a
+decision for me.
 
 ## Journal
 
@@ -206,21 +271,25 @@ The coordinator has no worktree, so `journal:write` cannot find it. Write
 `<coordinator notes dir>/YYYY-MM-DD.md` directly, in the same front matter
 as any task journal (`title: "<blurb> — coordinator"`, `created`, tag
 `journal`), appending one timestamped line per event: task started (with
-base), gate reached, PR opened, task done, anything refused. Terse; the task's
-own journal has the detail.
+base), gate reached, PR opened, PR merged and by whom, an issue closed by hand,
+task done, anything refused. Terse; the task's own journal has the detail.
 
 ## Notes on scope
 
 - **Interrupting is fine.** Esc out of a wait, come back with
   `/task:coordinate` and no arguments, and the loop resumes from `tasks.json`:
   a `running` task is waited on again, an `awaiting-human` one is waited on
-  with `--after`.
+  with `--after`, and an `awaiting-merge` one goes straight back to `hcoord
+  merged`.
 - **Editing `tasks.json` by hand is fine** between tasks — reorder, drop, add.
   The file is re-read at every W1. A running task's entry is the one thing not
   to edit.
 - **No GitHub issues are filed.** `/gh-issue-create` is an editing session,
   and this skill is meant to run without one. File them afterwards from the
   PRs if you want the record.
-- **Merging is mine.** The coordinator never merges, never pushes to the
-  default branch, and bases a dependent task on an unmerged branch rather than
-  waiting for a merge that may be days away.
+- **The coordinator never pushes to the default branch.** A merge it makes is
+  `gh pr merge` on a PR whose checks are green, and only when `merge` says
+  `coordinator`.
+- **A merge that needs a decision stops the list.** Red checks, a conflict and
+  a closed PR are all `blocked`, never waited out. The loop is resumed with
+  `/task:coordinate` once the PR is merged or the entry is edited.

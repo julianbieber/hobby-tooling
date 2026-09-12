@@ -5,7 +5,7 @@
 | Type         | skill                                                              |
 | Install path | `~/.claude-hobby/commands/task/coordinate.md` → `/task:coordinate` |
 | Owner        | @julianbieber                                                      |
-| Dependencies | `task-split`, `hwt`, `hcdev auto`, `hcoord` on PATH, `task:auto` in each spawned session |
+| Dependencies | `task-split`, `hwt`, `hcdev auto`, `hcoord` and `gh` on PATH, `task:auto` in each spawned session |
 | Status       | experimental                                                       |
 
 ## Description
@@ -14,16 +14,57 @@ The session in the right pane of `hcdev coordinator`. Given a description, it
 carves the work into tasks with `/task-split`, records them in `tasks.json`,
 and then works the list: one task at a time, each in its own `hcdev auto`
 window, blocking on `hcoord wait` until the task stops for a person or
-finishes. I hear from it once per task, when the application is ready to play.
+finishes, and then on `hcoord merged` until its PR has landed. I hear from it
+twice per task — when the application is ready to play, and when its PR is
+waiting for me to merge.
 
 ## One session at a time is the design, not a limitation
 
 Two `/task:auto` sessions on one repo would race on the default branch, on
 `structure.hstruct` budgets, and on my attention — the play gate assumes I am
-looking at one window. So the loop is strictly sequential, and a task that
-depends on an unmerged predecessor is based on that predecessor's branch rather
-than waiting for a merge. That produces a stack of PRs whose base is named in
-the coordinator's note; merging in order is mine.
+looking at one window. So the loop is strictly sequential.
+
+## A task is not done until its PR is merged
+
+The list used to move on the moment a task's session ended, and a task whose
+dependency was still open was based on that dependency's branch. That produced
+a stack: each PR's base was a branch rather than the default one, the whole
+stack had to be merged in order, and a review that changed anything early
+rebased everything behind it.
+
+So `done` now means **merged**, with a status of its own — `awaiting-merge` —
+between the session ending and the PR landing. The consequences are all
+simplifications:
+
+- **There is no stacked base.** Every task branches off the default branch,
+  because everything before it is already in that branch. `W2` is a
+  fast-forward and nothing else, and the two-open-dependencies question that
+  had no good answer is gone with it.
+- **A GitHub closing keyword works.** `Closes #12` fires only on a merge into
+  the **default** branch, so on a stacked PR it silently did nothing. Now every
+  PR merges there, which is what makes "the issue closes when the PR merges" a
+  fact rather than a hope.
+- **The cost is real and is the point.** The list now stalls on me. That is the
+  same trade the play gate already makes: unattended until it needs a person,
+  and what it needs is the thing only I can give.
+
+## Who merges, and what stops the list
+
+`merge` in `tasks.json` is `mine` by default: the coordinator reports the green
+PR, notifies once, and holds. Told to (`go, you merge`, or a later `merge:
+"coordinator"`), it merges each PR itself as soon as the checks pass and GitHub
+reports no conflict. That is a per-coordinator decision, made when I trust how
+the run is going, and it is in the file rather than in the conversation so a
+resumed session still knows.
+
+**Green is decided by `gh`, not by the coordinator.** `hcoord merged` reads
+`statusCheckRollup` and reports `green`, `pending`, `failing` or `none` — and
+`none`, a repository that runs no checks at all, counts as green, because most
+hobby repos have no CI and the alternative is a list that never moves.
+
+Everything that is not a wait is a **stop**: a failing check, a conflict with
+the base, a PR closed unmerged. None of those resolve by waiting longer, and
+the tasks behind them would be branched off work that is not landing.
 
 ## The coordinator knows nothing about any task
 
@@ -60,8 +101,10 @@ has been reported, the next wait must block until the phase is something else.
 
 ## What it deliberately does not do
 
-- File GitHub issues: `/gh-issue-create` is an editing session.
-- Merge, or push to the default branch.
+- File GitHub issues: `/gh-issue-create` is an editing session. It does close
+  one after a merge, and only when the task name carries a `gh-<number>` and
+  GitHub did not close it itself.
+- Push to the default branch, or merge a PR it was not handed the merges for.
 - Run `/task-split` itself: that skill owns the shaping rules and their re-cuts.
 - Answer a task's gate on my behalf: an `awaiting-human` task is reported and
   waited on, never continued from here.

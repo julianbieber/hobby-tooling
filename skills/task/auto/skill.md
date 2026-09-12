@@ -221,10 +221,15 @@ ______________________________________________________________________
 3. `git push -u origin <branch>`.
 4. `gh pr create`: title in commit-subject shape, the three sections and
    nothing else per `~/.claude-hobby/CLAUDE.md`. The manual-test bullets are
-   the acceptance observation plus the `run` command.
+   the acceptance observation plus the `run` command. A task that has an issue
+   — a `gh-<number>` in the task or branch name, or the issue the brief was
+   read from — opens the body with `Closes #<number>`, which is what closes it
+   on merge. No issue, no line; never a guessed number.
 5. Record the PR in `prs.json` if the `track-pr` hook did not.
 
-Never push to the default branch.
+Never push to the default branch, and never merge: a coordinator waiting on
+this task decides that, and an unattended task with no coordinator leaves the
+merge to me.
 
 ## Phase `journal`
 

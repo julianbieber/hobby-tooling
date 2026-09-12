@@ -5,7 +5,7 @@
 | Type         | terminal app (ratatui) + CLI                                 |
 | Binary       | `hcoord`                                                     |
 | Owner        | @julianbieber                                                |
-| Dependencies | none at runtime; `hcdev coordinator` and `/task:coordinate` call it |
+| Dependencies | `gh` on PATH for `merged`; `hcdev coordinator` and `/task:coordinate` call it |
 | Status       | experimental                                                 |
 
 ## Description
@@ -16,6 +16,7 @@ What a coordinator session needs from outside its Claude pane.
 hcoord tui <coordinator notes dir>                         the left pane of `hcdev coordinator`
 hcoord wait <task notes dir> [--timeout <s>] [--after <phase>]
                                                            block until a task needs a person or is done
+hcoord merged <pr url> [--timeout <s>] [--ready]           block until its PR has landed
 hcoord status <coordinator notes dir>                      one line of counts
 ```
 
@@ -35,6 +36,7 @@ scroll, `r` forces a reload, `q` quits.
   "blurb": "food-economy",
   "description": "verbatim, what the coordinator was started with",
   "created": "2026-09-11",
+  "merge": "mine | coordinator",
   "tasks": [
     {
       "task": "food-economy-fields",
@@ -42,7 +44,7 @@ scroll, `r` forces a reload, `q` quits.
       "title": "Fields grow wheat over the seasons",
       "done_when": "start a game, place a field, watch it fill by autumn",
       "depends_on": [],
-      "status": "todo | running | awaiting-human | done | blocked",
+      "status": "todo | running | awaiting-human | awaiting-merge | done | blocked",
       "pr": "https://github.com/…/pull/12",
       "note": "one line, optional",
       "updated": "2026-09-11T10:00:00Z"
@@ -51,7 +53,8 @@ scroll, `r` forces a reload, `q` quits.
 }
 ```
 
-Only `task` and `title` are required; `status` defaults to `todo`.
+Only `task` and `title` are required; `status` defaults to `todo` and `merge` to
+`mine`.
 
 ## `wait` is how the coordinator spends its time
 
@@ -70,10 +73,38 @@ shell call, and a timeout is exit 2 so the coordinator simply calls again.
 The output is one JSON line, `{"phase": "await-play", "outcome": "human"}`, so
 the coordinator reads a field rather than parsing prose.
 
+## `merged` is the same trick, one layer on
+
+A task is not done when its session ends — it is done when its PR is merged, so
+the coordinator has a second thing to wait on and the same reason not to wait on
+it from a prompt. `hcoord merged` polls `gh pr view` every fifteen seconds and
+prints one JSON line, `{"pr": …, "outcome": "merged", "state": "MERGED",
+"checks": "green"}`, with the same timeout and the same exit codes as `wait`.
+
+Four outcomes, and the split between them is the whole design:
+
+- **`merged`** — the PR landed. The task is done.
+- **`blocked`** — a failing check, a conflict with the base, or a PR closed
+  unmerged, with `reason` saying which. None of these resolve by waiting longer,
+  so they are reported rather than waited out.
+- **`mergeable`** — only with `--ready`: the checks pass and GitHub reports no
+  conflict, so `gh pr merge` would go through now. A coordinator that was handed
+  the merges passes the flag; without it a green PR is waited on, because merging
+  is mine by default.
+- **`timeout`** — nothing resolved. Call again.
+
+**A repo with no checks counts as green.** `statusCheckRollup` comes back empty,
+which is reported as `checks: none` and treated as passing. Most hobby repos run
+no CI at all, and the alternative is a list that never moves.
+
+Both shapes `statusCheckRollup` returns are read: a check run carries
+`conclusion` once it has finished and `status` until then, a commit status
+carries `state`. Reading only one of them would call a red build green.
+
 ## Not part of the hdash workspace
 
 `hdash` is a Bevy build; this is a few hundred lines over ratatui. Sharing a
 workspace would put the Bevy dependency graph and its optimised-dependency
 profile in front of a tool that builds in ten seconds on its own. `hdash` reads
 the `status` field of `tasks.json` with `serde_json::Value` rather than
-depending on this crate, for the same reason.
+depending on this crate, for the same reason — it reads `merge` the same way.

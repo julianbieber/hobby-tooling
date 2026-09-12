@@ -25,7 +25,9 @@ pub enum Status {
     Running,
     /// The session stopped at a gate and is waiting for a person.
     AwaitingHuman,
-    /// The session finished; the PR, if any, is in `pr`.
+    /// The session finished and its PR is open; the list holds until that PR is merged.
+    AwaitingMerge,
+    /// The PR is merged, or the task finished without one.
     Done,
     /// Cannot proceed; `note` says why.
     Blocked,
@@ -38,6 +40,7 @@ impl Status {
             Status::Todo => "·",
             Status::Running => "▶",
             Status::AwaitingHuman => "!",
+            Status::AwaitingMerge => "⇡",
             Status::Done => "✓",
             Status::Blocked => "✗",
         }
@@ -79,6 +82,17 @@ fn default_status() -> Status {
     Status::Todo
 }
 
+/// Who merges a task's pull request once its checks are green.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MergeBy {
+    /// I merge; the coordinator reports the PR and holds the list until I have.
+    #[default]
+    Mine,
+    /// The coordinator merges as soon as the checks pass and GitHub reports no conflict.
+    Coordinator,
+}
+
 /// The whole of `tasks.json`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Coordinator {
@@ -92,6 +106,9 @@ pub struct Coordinator {
     /// `YYYY-MM-DD` the coordinator was created.
     #[serde(default)]
     pub created: Option<String>,
+    /// Who merges each task's PR; `mine` when absent.
+    #[serde(default)]
+    pub merge: MergeBy,
     /// The list, in the order it is worked.
     #[serde(default)]
     pub tasks: Vec<TaskEntry>,
@@ -103,6 +120,7 @@ pub struct Counts {
     pub todo: usize,
     pub running: usize,
     pub awaiting_human: usize,
+    pub awaiting_merge: usize,
     pub done: usize,
     pub blocked: usize,
 }
@@ -113,6 +131,7 @@ impl Counts {
         let parts: Vec<String> = [
             (self.running, "running"),
             (self.awaiting_human, "waiting for you"),
+            (self.awaiting_merge, "waiting on a merge"),
             (self.todo, "todo"),
             (self.done, "done"),
             (self.blocked, "blocked"),
@@ -200,6 +219,7 @@ impl Coordinator {
                 Status::Todo => c.todo += 1,
                 Status::Running => c.running += 1,
                 Status::AwaitingHuman => c.awaiting_human += 1,
+                Status::AwaitingMerge => c.awaiting_merge += 1,
                 Status::Done => c.done += 1,
                 Status::Blocked => c.blocked += 1,
             }
@@ -284,23 +304,38 @@ mod tests {
             r#"{"project":"p","blurb":"b","tasks":[
                 {"task":"a","title":"A","status":"awaiting-human"},
                 {"task":"b","title":"B","status":"running"},
-                {"task":"c","title":"C","status":"done"}]}"#,
+                {"task":"c","title":"C","status":"done"},
+                {"task":"d","title":"D","status":"awaiting-merge"}]}"#,
         )
         .unwrap();
         assert_eq!(c.tasks[0].status, Status::AwaitingHuman);
+        assert_eq!(c.tasks[3].status, Status::AwaitingMerge);
         assert_eq!(
             c.counts(),
             Counts {
                 running: 1,
                 awaiting_human: 1,
+                awaiting_merge: 1,
                 done: 1,
                 ..Counts::default()
             }
         );
         assert_eq!(
             c.counts().summary(),
-            "1 running · 1 waiting for you · 1 done"
+            "1 running · 1 waiting for you · 1 waiting on a merge · 1 done"
         );
+    }
+
+    // Merging is mine unless the file says otherwise, so a list written before the field
+    // existed must not start merging on my behalf.
+    #[test]
+    fn merge_is_mine_unless_the_list_says_coordinator() {
+        let mine = Coordinator::parse(r#"{"project":"p","blurb":"b","tasks":[]}"#).unwrap();
+        assert_eq!(mine.merge, MergeBy::Mine);
+        let theirs =
+            Coordinator::parse(r#"{"project":"p","blurb":"b","merge":"coordinator","tasks":[]}"#)
+                .unwrap();
+        assert_eq!(theirs.merge, MergeBy::Coordinator);
     }
 
     // The view shows a PR as soon as the task's own notes record it, and shows it once
