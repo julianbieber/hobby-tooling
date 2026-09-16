@@ -101,9 +101,11 @@ waiting phases are named `await-acceptance`, `await-play` (interactive) and
 `await-fix` (unattended, when the acceptance checks would not pass). `hcoord
 wait` returns on any `await-*` phase and on `done`, which is how
 `/task:coordinate` knows when a task wants a person and when it is finished
-without either session talking to the other. A coordinator seeds the file before
-the session starts — `brief`, `acceptance`, `auto`, `coordinator` — and that
-seed is the brief.
+without either session talking to the other. `hcoord wait` also returns on a
+`play` phase that has gone untouched, so the gate is still seen when the
+write to `await-play` is the thing that went missing. A coordinator seeds the
+file before the session starts — `brief`, `acceptance`, `auto`, `coordinator`
+— and that seed is the brief.
 
 An unattended run also writes `acceptance_result`: every check with its command,
 exit status and verdict. That is deliberately **data, not prose**, and it is

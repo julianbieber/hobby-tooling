@@ -19,6 +19,11 @@ const POLL: Duration = Duration::from_secs(2);
 /// cause of both is the task session part-way through writing it. Exit 1 therefore means
 /// the file never became parseable before the timeout, and the last error is printed.
 ///
+/// `human` also resolves on a `play` phase that has sat untouched for
+/// [`crate::model::IDLE_GATE_SECS`] — the backstop for a session that printed its
+/// play-gate report without writing `await-play`, which otherwise leaves this call
+/// returning `timeout` forever.
+///
 /// An unattended run's state file also carries what its acceptance checks did, and the
 /// line then carries `acceptance` as `{passed, checks, failed}`, each failure naming its
 /// command and exit status — the evidence a coordinator would otherwise have to read out
@@ -237,6 +242,36 @@ mod tests {
             line(&failed, "human"),
             r#"{"acceptance":{"checks":2,"failed":[{"command":"hcoord wait .","exit":1,"name":"cli"}],"passed":false},"outcome":"human","phase":"await-fix"}"#
         );
+    }
+
+    // The bug behind #45: a session that printed its play-gate report and never wrote
+    // `await-play` leaves a coordinator polling `play` forever. A `play` untouched since
+    // 2020 has to resolve as `human` through `resolve`, not just through `needs_human`
+    // in isolation.
+    #[test]
+    fn resolve_reports_an_idle_play_as_human() {
+        let dir = temp_dir("idle-play");
+        std::fs::write(
+            state_file(&dir),
+            r#"{"phase":"play","phase_since":"2020-01-01T00:00:00Z",
+                "written":"2020-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        let resolution = resolve(
+            &dir,
+            Instant::now() + Duration::from_millis(50),
+            Duration::from_millis(10),
+            None,
+        );
+        match resolution {
+            Resolution::Reached(line) => {
+                let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+                assert_eq!(value["outcome"], "human");
+                assert_eq!(value["phase"], "play");
+            }
+            other => panic!("expected Reached, got {other:?}"),
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     // A coordinator waiting on a phase that has not moved needs the age, not just a
