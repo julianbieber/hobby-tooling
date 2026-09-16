@@ -53,7 +53,7 @@ simplifications:
 ## Who merges, and what stops the list
 
 `merge` in `tasks.json` is `mine` by default: the coordinator reports the green
-PR, notifies once, and holds. Told to (`go, you merge`, or a later `merge:
+PR once, and holds. Told to (`go, you merge`, or a later `merge:
 "coordinator"`), it merges each PR itself as soon as the checks pass and GitHub
 reports no conflict. That is a per-coordinator decision, made when I trust how
 the run is going, and it is in the file rather than in the conversation so a

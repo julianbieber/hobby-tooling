@@ -422,7 +422,7 @@ hope. The line is required of every PR that has an issue, in
 for a `gh-<number>` task rather than trusting it.
 
 **Merging is mine by default, and the list says so.** `merge` in `tasks.json` is
-`mine` — report the green PR, notify once, hold — or `coordinator`, which I set
+`mine` — report the green PR once, hold — or `coordinator`, which I set
 when I trust how a run is going and which merges each PR itself once the checks
 pass. It is in the file rather than in the conversation so a resumed session
 still knows. `hcoord merged` decides green from `gh`'s `statusCheckRollup`, and
