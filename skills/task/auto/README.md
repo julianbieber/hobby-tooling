@@ -119,3 +119,31 @@ says the pipeline is still alive even while it sits in one phase for a long
 task, and `phase_since` is what turns "still at `implement`" into "unchanged
 for 1h 12m" instead of a guess made by sampling `/proc` or reading a pane that
 cannot be read.
+
+## The session merges its own PR, when it was handed the merges
+
+`merge` in the seeded state file — `mine` or `coordinator` — is how a task
+session learns whether merging its own green PR is its job. **Absent means
+`mine`**, so a `hcdev auto` typed by hand, which seeds no such field, never
+merges: only a coordinator writes `coordinator` into the seed, from its own
+`tasks.json`.
+
+With `coordinator`, the `merge` phase removes four round trips a coordinator
+used to make per task — `hcoord merged --ready`, `gh pr merge`, `hcoord
+merged` again to confirm, `git pull --ff-only` in the main checkout — by
+making the session that already has the PR open watch its own checks, merge,
+and confirm the merge landed before it reports `done`.
+
+A merge that cannot be made reuses `await-fix` rather than a new phase. The
+reason is what an un-updated coordinator does with the name: `hcoord wait`
+already stops a list on `await-fix`, so reusing it means a coordinator that
+has not been taught about `merge_result` still stops correctly, where a phase
+name it does not recognise would instead hold the list waiting on a gate that
+never resolves. `merge_result.outcome` is what tells the two failure kinds
+apart once the coordinator does know to look.
+
+A merge conflict is always `blocked`, never resolved by rebasing here.
+`business-context.md`'s `## merge-conflicts` records why: a conflict means
+something landed on the default branch outside this run, which is exactly the
+one-task-at-a-time assumption the whole coordinator loop depends on — the
+session escalates it rather than guessing at a resolution unattended.

@@ -32,9 +32,11 @@ every change, so the list you write is the list I see.
    loop from here.
 4. **Merging is mine unless the list says otherwise.** `merge` in `tasks.json`
    is `mine` — report the green PR and hold the list until I merge it — or
-   `coordinator`, which I set when I trust the run, and which merges each PR
-   itself once its checks pass. Either way a red check, a conflict or a closed
-   PR blocks the task and stops the loop: it is a decision, not a wait.
+   `coordinator`, which I set when I trust the run. With `coordinator` the
+   merge is made by the task's own session, not this one — it watches its own
+   checks and merges on green; this session only confirms the merge landed.
+   Either way a red check, a conflict or a closed PR blocks the task and stops
+   the loop: it is a decision, not a wait.
 5. **Nothing is invented.** The description is recorded verbatim; a task's
    brief is assembled from the description, the split and my answers, and
    says which is which; a PR is recorded from `prs.json` or `gh`, not from
@@ -150,6 +152,7 @@ are not `done`, and `done` now means merged.
    `~/fun_repos/hobby-mimisbrunnr/notes/<project>/<topic>/<task>/build-task.json`:
    ```json
    { "phase": "acceptance", "auto": true,
+     "merge": "<mine or coordinator, from this list>",
      "model": "<the task's model, else the list's>",
      "coordinator": "<this coordinator's notes dir>",
      "brief_source": "coordinator", "brief": "<see below>",
@@ -157,6 +160,10 @@ are not `done`, and `done` now means merged.
      "feedback": [], "rounds": 0,
      "written": "<now, RFC 3339>", "phase_since": "<now, RFC 3339>" }
    ```
+   This is how the task's session learns who merges its PR, and it is read
+   once, at task start — a later change to this list's `merge` takes effect on
+   the next task's seed, not on one already running.
+
    The **brief** is read by a session with no memory of this one, so it is
    self-contained and says where each part came from: the coordinator's
    description (verbatim, labelled as such), this task's title and behaviour
@@ -205,12 +212,18 @@ line:
   that the session is still on the same phase rather than nothing at all. A
   single timeout, or one whose phase differs from the last, reports nothing:
   the loop is about to call again either way.
-- `outcome: human`, phase `await-fix` → the task ran its own acceptance and
-  could not make it pass, so it opened no PR. Set `status: blocked` with the
-  failed check names from the line's `acceptance.failed` in `note`, and
-  **stop the loop** with a summary. Like a red check in W5
-  this is a decision, not a wait: nobody is going to answer it in that window,
-  and the tasks behind it would branch off work that is not landing.
+- `outcome: human`, phase `await-fix`, no `merge` on the line → the task ran
+  its own acceptance and could not make it pass, so it opened no PR. Set
+  `status: blocked` with the failed check names from the line's
+  `acceptance.failed` in `note`, and **stop the loop** with a summary. Like a
+  red check in W5 this is a decision, not a wait: nobody is going to answer it
+  in that window, and the tasks behind it would branch off work that is not
+  landing.
+- `outcome: human`, phase `await-fix`, `merge.outcome == "blocked"` → the PR
+  opened and passed acceptance, but the session could not merge it itself. Set
+  `status: blocked` with `note`: `merge blocked: <merge.reason>`, plus the
+  line's `merge.check` when there is one, and **stop the loop** with a
+  summary — the same decision as a red check in W5, reached one phase later.
 - `outcome: human`, any other phase → the session stopped at a gate. Set
   `status: awaiting-human` and `note` from the phase — `await-acceptance`:
   *needs acceptance criteria*, `await-play`: *ready to play*, anything else:
@@ -218,12 +231,17 @@ line:
   (`hcdev-<project>-<topic>-<task>`) and what it wants. Then
   wait again with `--after <that phase>` so the call blocks until I have
   answered and the session has moved on (or subscribe to the idle notice again).
-- `outcome: done` → the session has finished and pushed. Read `prs.json` in the
-  task's notes dir for the PR URL (fall back to `gh pr list --head <task> --json
-  url`). No PR anywhere → the task opened none: `status: done`, journal line,
-  back to W1. Otherwise record `pr`, set `status: awaiting-merge`, `updated`,
-  `note: PR open, waiting for merge` plus the line's acceptance tally when it
-  carried one, and go to W5.
+- `outcome: done`, `merge.outcome == "merged"` → the session has already merged its own PR.
+  Record `pr` from `merge.pr` (falling back to `prs.json`), `status: done`,
+  journal line naming the PR and that it merged itself, and go straight to
+  **W6** — no `hcoord merged` call, no `awaiting-merge`.
+- `outcome: done`, no `merge` on the line → the session has finished and
+  pushed but did not merge it itself (`merge: mine`, or nothing recorded).
+  Read `prs.json` in the task's notes dir for the PR URL (fall back to
+  `gh pr list --head <task> --json url`). No PR anywhere → the task opened
+  none: `status: done`, journal line, back to W1. Otherwise record `pr`, set
+  `status: awaiting-merge`, `updated`, `note: PR open, waiting for merge` plus
+  the line's acceptance tally when it carried one, and go to W5.
 
 The `acceptance` object on a wait line — `{passed, checks, failed}`, each failure
 naming its command and exit status — is the evidence a task ran on itself. It is
@@ -232,8 +250,10 @@ is the one thing that takes the place of looking at the window.
 - exit 1 → the state file never became readable within the timeout. `status:
   blocked`, `note` with the error, stop and report.
 
-**W5 — Merge.** The list holds here until the PR has landed. The task is not
-`done` while it is open, and no `todo` starts behind it.
+**W5 — Merge.** Reached only for a PR the session did not merge itself —
+`merge: mine`, or a session that recorded no `merge_result`. The list holds
+here until the PR has landed. The task is not `done` while it is open, and no
+`todo` starts behind it.
 
 1. Print one line naming the PR URL and that it is ready to merge, when
    `merge` is `mine`, once, on arriving here — not on every wait.

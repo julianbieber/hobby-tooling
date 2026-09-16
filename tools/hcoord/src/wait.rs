@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use crate::model::{AcceptanceResult, BuildState};
+use crate::model::{AcceptanceResult, BuildState, MergeResult};
 
 /// Under the ten minutes Claude Code allows a single shell call.
 pub const DEFAULT_TIMEOUT_SECS: u64 = 570;
@@ -28,6 +28,12 @@ const POLL: Duration = Duration::from_secs(2);
 /// line then carries `acceptance` as `{passed, checks, failed}`, each failure naming its
 /// command and exit status — the evidence a coordinator would otherwise have to read out
 /// of the task's own pane.
+///
+/// A run that merged its own PR carries `merge` as `{outcome, pr, reason, check,
+/// merge_commit}`, `reason`/`check`/`merge_commit` present only when recorded — this is
+/// how an un-updated coordinator's W4 learns to skip its own merge call and go straight
+/// to `done`, or to read a merge failure's reason off a `blocked` outcome instead of the
+/// acceptance failures.
 ///
 /// A state file that recorded `phase_since` also adds it and `unchanged_for` (seconds,
 /// computed at print time) to the line, plus `written` when that was recorded too — a
@@ -104,6 +110,9 @@ fn line(state: &BuildState, outcome: &str) -> String {
     if let Some(acceptance) = &state.acceptance_result {
         object["acceptance"] = acceptance_json(acceptance);
     }
+    if let Some(merge) = &state.merge_result {
+        object["merge"] = merge_json(merge);
+    }
     if let Some(phase_since) = &state.phase_since {
         object["phase_since"] = serde_json::Value::String(phase_since.clone());
     }
@@ -114,6 +123,23 @@ fn line(state: &BuildState, outcome: &str) -> String {
         object["unchanged_for"] = serde_json::Value::from(unchanged_for);
     }
     object.to_string()
+}
+
+fn merge_json(merge: &MergeResult) -> serde_json::Value {
+    let mut object = serde_json::json!({ "outcome": merge.outcome });
+    if let Some(pr) = &merge.pr {
+        object["pr"] = serde_json::Value::String(pr.clone());
+    }
+    if let Some(reason) = &merge.reason {
+        object["reason"] = serde_json::Value::String(reason.clone());
+    }
+    if let Some(check) = &merge.check {
+        object["check"] = serde_json::Value::String(check.clone());
+    }
+    if let Some(merge_commit) = &merge.merge_commit {
+        object["merge_commit"] = serde_json::Value::String(merge_commit.clone());
+    }
+    object
 }
 
 fn acceptance_json(acceptance: &AcceptanceResult) -> serde_json::Value {
@@ -242,6 +268,47 @@ mod tests {
             line(&failed, "human"),
             r#"{"acceptance":{"checks":2,"failed":[{"command":"hcoord wait .","exit":1,"name":"cli"}],"passed":false},"outcome":"human","phase":"await-fix"}"#
         );
+    }
+
+    // The line a coordinator reads to go straight to done with the PR and make no merge
+    // call of its own.
+    #[test]
+    fn the_line_carries_a_merged_result() {
+        let state: BuildState = serde_json::from_str(
+            r#"{"phase":"done","merge_result":{"by":"session","outcome":"merged",
+                "pr":"https://github.com/o/r/pull/9","merge_commit":"abc123"}}"#,
+        )
+        .unwrap();
+        let rendered = line(&state, "done");
+        let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        assert_eq!(value["merge"]["outcome"], "merged");
+        assert_eq!(value["merge"]["pr"], "https://github.com/o/r/pull/9");
+    }
+
+    // The reason and the failing check have to reach the card, and `await-fix` is what
+    // stops the list on a merge a session could not make.
+    #[test]
+    fn the_line_carries_a_blocked_merge_reason_and_check() {
+        let state: BuildState = serde_json::from_str(
+            r#"{"phase":"await-fix","merge_result":{"by":"session","outcome":"blocked",
+                "pr":"https://github.com/o/r/pull/9","reason":"checks failing: build",
+                "check":"build","log":"error[E0308] mismatched types"}}"#,
+        )
+        .unwrap();
+        let rendered = line(&state, "human");
+        let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        assert_eq!(value["merge"]["reason"], "checks failing: build");
+        assert_eq!(value["merge"]["check"], "build");
+    }
+
+    // A state file with no merge result must not grow a `merge` field the coordinator
+    // could misread as a merge having happened.
+    #[test]
+    fn the_line_carries_no_merge_field_when_none_was_recorded() {
+        let state: BuildState = serde_json::from_str(r#"{"phase":"implement"}"#).unwrap();
+        let rendered = line(&state, "timeout");
+        let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        assert!(value.get("merge").is_none());
     }
 
     // The bug behind #45: a session that printed its play-gate report and never wrote

@@ -438,12 +438,19 @@ for a `gh-<number>` task rather than trusting it.
 
 **Merging is mine by default, and the list says so.** `merge` in `tasks.json` is
 `mine` — report the green PR once, hold — or `coordinator`, which I set
-when I trust how a run is going and which merges each PR itself once the checks
-pass. It is in the file rather than in the conversation so a resumed session
-still knows. `hcoord merged` decides green from `gh`'s `statusCheckRollup`, and
-a repo with no checks at all counts as green: most hobby repos have no CI, and
-the alternative is a list that never moves. A failing check, a conflict or a
-PR closed unmerged is a **stop**, never a longer wait.
+when I trust how a run is going. With `coordinator` the merge is made by the
+**task's own session**, not the coordinator: the field reaches it through the
+`merge` key in its seeded `build-task.json`, it watches its own checks with
+`hcoord merged --ready`, merges on green, confirms the merge landed, and
+reports `done` with the merge already made — the coordinator's own merge call
+is skipped for that task. It is in the file rather than in the conversation so
+a resumed session still knows. `hcoord merged` decides green from `gh`'s
+`statusCheckRollup`, and a repo with no checks at all counts as green: most
+hobby repos have no CI, and the alternative is a list that never moves. A
+merge that cannot be made — a failing check, a conflict, a `gh` refusal — is
+`await-fix` with the reason in `merge_result`, which the coordinator renders
+as a blocked card; on the coordinator's own merge call the same three cases
+are a **stop**, never a longer wait.
 
 **`/task:auto` commits, which `/task:build` never does.** A PR cannot open
 without commits and nobody is at the keyboard between the last gate and the PR,
