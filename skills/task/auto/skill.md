@@ -1,5 +1,5 @@
 ---
-description: Run a task unattended in two separate processes — a headless plan stage that reads the code once and writes plan.md, then a fresh build stage that implements from the plan alone and hands me the running app before the PR opens
+description: Run a task unattended in two separate processes — a headless plan stage that reads the code once and writes plan.md, then a fresh build stage that implements from the plan alone and, unattended, runs the acceptance observation as commands before the PR opens, or hands me the running app when I am there to look
 argument-hint: 'plan | build [<description> | #<issue>]'
 allowed-tools: Skill, Read, Write, Edit, Bash
 ---
@@ -19,9 +19,18 @@ There is **no HMML** in this pipeline and no spec review loop. `/task:build`
 governs nothing here; where this file is silent, do the obvious thing and note
 it in the journal.
 
-Two hard stops, both named so `hcoord wait` sees them: **`await-acceptance`**
-at the start, only when the brief does not say what done looks like, and
-**`await-play`** at the end, always.
+The stops are named so `hcoord wait` sees them, and which ones exist depends on
+`auto` in the state file:
+
+| | `auto: true` — a coordinator seeded it, nobody is at the machine | `auto` false or absent — I typed `hcdev auto` |
+|---|---|---|
+| start | `await-acceptance`, only when the brief does not say what done looks like | the same |
+| end | none. The plan writes the acceptance observation as commands and the `verify` phase runs them; the PR opens only when they pass | `await-play`, always |
+| failure | `await-fix` — the checks would not pass and no PR is opened | — |
+
+An unattended run has no reader, so a report it prints is not read: the window
+is off-screen and the pane is about seventeen columns wide. The checks replace
+the report because a failing command stops the pipeline and a report does not.
 
 ## Rules that override everything else
 
@@ -30,9 +39,9 @@ at the start, only when the brief does not say what done looks like, and
    is asked mid-run. A *why* none of them supplies is a **gap**, listed at the
    play gate, never filled in.
 2. **The state file is a contract.** Write `build-task.json` at every
-   transition. The waiting phases are `await-acceptance` and `await-play` and
-   there are no others; `planned` and `done` are what `hauto` and the
-   coordinator key on.
+   transition. The waiting phases are `await-acceptance`, `await-play`
+   (interactive only) and `await-fix` (unattended only), and there are no
+   others; `planned` and `done` are what `hauto` and the coordinator key on.
 3. **The build stage reads what the plan names, and nothing else.** No
    `journal:resume`, no directory listings, no neighbouring modules "for
    context", no git history. A symbol the plan did not mention is looked up
@@ -44,9 +53,10 @@ at the start, only when the brief does not say what done looks like, and
    cargo test 2>&1 | grep -E "test result|FAILED|panicked|^error" -A4 | head -60
    ```
    The plan writes the exact commands for the repo; the build stage runs those.
-5. **Commit and push only after the play gate's `continue`, then do it.** A
-   PR cannot open without commits. Messages to the rule in
-   `~/.claude-hobby/CLAUDE.md`. The notes repo is never committed.
+5. **Commit and push only after the play gate's `continue` — or, unattended,
+   after every acceptance check has passed — then do it.** A PR cannot open
+   without commits. Messages to the rule in `~/.claude-hobby/CLAUDE.md`. The
+   notes repo is never committed.
 6. **No machine attribution**, anywhere.
 
 ## Step 0 — Context and state
@@ -60,11 +70,21 @@ Task context from `pwd` (`~/fun_worktrees/PROJECT/TOPIC/TASK`). State file at
   "brief_source": "coordinator|description|issue", "brief": "<verbatim>",
   "acceptance": "<the done-when observation, verbatim>",
   "context_questions": [], "plan": "plan.md",
+  "acceptance_checks": [ { "name": "", "command": "", "expect": "" } ],
+  "acceptance_result": { "checked": "<RFC 3339>", "passed": false, "rounds": 0,
+    "checks": [ { "name": "", "command": "", "exit": 0, "pass": false,
+                  "note": "" } ] },
   "play": { "command": "", "log": "" }, "feedback": [], "rounds": 0 }
 ```
 
+`acceptance_checks` is written by the plan stage, `acceptance_result` by
+`verify`; both are absent from an interactive run. **`auto` is true only when a
+coordinator seeded it.** A state file this skill writes for itself sets
+`auto: false`, so a `hcdev auto <task>` typed by hand keeps the play gate.
+
 Phases: `acceptance`, `await-acceptance`, `plan`, `planned`, `build`,
-`implement`, `comments`, `standards`, `play`, `await-play`, `pr`, `journal`,
+`implement`, `comments`, `standards`, then either `verify` and `await-fix`
+(unattended) or `play` and `await-play` (interactive), then `pr`, `journal`,
 `done`.
 
 The stage argument is required. `plan` runs from whatever phase is recorded up
@@ -107,7 +127,20 @@ change touches. Prior art check: `gh pr list --search` and
 `gh issue list --search` on the repo, reported in the plan, never a stop.
 A `structure.hstruct` at the root is read and its relevant standards named.
 
-**P3 — Write `plan.md`** into the task's notes dir. It is the build stage's
+**P3 — Turn the acceptance observation into commands.** Unattended only; an
+interactive run writes `interactive — play gate` in the section below and skips
+this. Each check is a name, one shell command, and what in its exit status or
+output means pass. Together they have to amount to the observation itself, not
+to a proxy for it: a check that passes while the observation would fail is worse
+than no check, because nothing downstream looks again.
+
+If the observation cannot be expressed as commands at all, **do not invent a
+proxy**. Write the question — *what command would show me this, and what should
+it print?* — to `context_questions`, set `phase: await-acceptance`, print it as
+P1 does, and end the turn. That is the gate the coordinator already handles, so
+it costs no new kind of stop.
+
+**P4 — Write `plan.md`** into the task's notes dir. It is the build stage's
 entire input, read by a session that has never seen this conversation:
 
 ```markdown
@@ -123,6 +156,11 @@ tags:
 
 ## Acceptance
 <the observation, verbatim>
+
+## Acceptance checks
+needs: run            <- only when a check requires the application running
+1. `<command>` — expect: <what in its output or exit status means pass>
+(unattended only; an interactive run writes `interactive — play gate` here)
 
 ## Files
 - `path/to/file.rs` — <what changes here, concretely; new file: say so>
@@ -146,8 +184,10 @@ tags:
 Decisions in `Risks` are decisions, not reasons: a *why* goes in the plan only
 when the brief or `business-context.md` gave it.
 
-Set `phase: planned`, write the state file, print the plan path and its
-`Files` list, and end. The process exits; `hauto` starts the build.
+Copy the checks into the state file as `acceptance_checks` alongside
+`phase: planned` — `verify` runs them from there rather than re-reading prose.
+Write the state file, print the plan path and its `Files` list, and end. The
+process exits; `hauto` starts the build.
 
 ______________________________________________________________________
 
@@ -175,11 +215,49 @@ findings and context gaps to the play gate. `phase: standards`.
 
 **Standards.** Skip when the repo has no `structure.hstruct`. Otherwise
 `/structure`: ratchet a budget the change moved below, try to fix a regression,
-carry an unfixed one to the play gate. `phase: play`.
+carry an unfixed one to the gate. `phase: verify` when `auto` is true, `play`
+otherwise.
+
+______________________________________________________________________
+
+## Phase `verify` — the unattended acceptance run
+
+`auto: true` only. This is what stands in for the play gate: the same
+observation, run as commands by the session that wrote the code, because there
+is nobody to hand a running application to.
+
+1. When the plan's `## Acceptance checks` says `needs: run`, launch the app the
+   way the play gate does — detached, output to `<notes dir>/play.log` — wait a
+   few seconds and `head` the log. A build error there is fixed before any check
+   runs.
+2. Run each check in `acceptance_checks`, in order, capturing its exit status
+   and at most a few lines of its output. Truncate as rule 4 requires: a check
+   that prints a compiler log is filtered, not pasted.
+3. Kill the application (`pkill -f` on the recorded command) if one was launched.
+4. Write `acceptance_result` into the state file — `checked`, `passed`,
+   `rounds`, and one object per check with `name`, `command`, `exit`, `pass` and
+   a `note` of at most one line of evidence. **Write it whether the checks
+   passed or not**: it is what `hcoord wait` reports and what a coordinator has
+   instead of the pane.
+5. **All pass** → `phase: pr`, and continue to the PR section in the same turn.
+6. **Any fail** → the failure is this session's own, like a failing test. Fix it
+   reading only the files the failure names, then build, test, `/comment-pass`
+   over what changed, and run the checks again. **At most three repair rounds**,
+   counted in `rounds`; the cap exists because nobody is at the keyboard to stop
+   a loop that is not converging.
+7. **Three rounds spent and something still fails** → write the final
+   `acceptance_result` with `passed: false`, set `phase: await-fix`,
+   `notify-send "<task>" "acceptance failing"` if it exists, print each failed
+   check with its command and evidence, and **end the turn**. No commit and no
+   PR: a change that cannot show its own acceptance is not one to open a PR for,
+   and a coordinator reading `await-fix` stops its list rather than waiting.
 
 ______________________________________________________________________
 
 ## Phase `play` → the play gate
+
+`auto` false or absent only — I am at the machine and the running application is
+what I am handed.
 
 1. Launch the app with the plan's `run` command, detached, output to the
    notes dir:
@@ -224,7 +302,9 @@ ______________________________________________________________________
    the acceptance observation plus the `run` command. A task that has an issue
    — a `gh-<number>` in the task or branch name, or the issue the brief was
    read from — opens the body with `Closes #<number>`, which is what closes it
-   on merge. No issue, no line; never a guessed number.
+   on merge. No issue, no line; never a guessed number. Unattended, the
+   manual-test bullets are the acceptance check commands, which are known to
+   pass because the PR would not be open otherwise.
 5. Record the PR in `prs.json` if the `track-pr` hook did not.
 
 Never push to the default branch, and never merge: a coordinator waiting on

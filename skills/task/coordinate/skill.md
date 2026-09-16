@@ -5,7 +5,8 @@ allowed-tools: Skill, Read, Write, Edit, AskUserQuestion, Bash
 ---
 
 Run a body of work from start to a stack of PRs with one conversation at the
-start and one visit per task at the end. This session is the **coordinator**:
+start and, for most tasks, nothing but a merge at the end. This session is the
+**coordinator**:
 it owns no code and opens no PR. It carves the description into tasks, writes
 them to `tasks.json`, and works the list by opening one `hcdev auto` window at
 a time, blocking on that task's pipeline state until it needs me or is done,
@@ -41,8 +42,9 @@ every change, so the list you write is the list I see.
 6. **The coordinator knows no task's specifics.** It never reads a task's
    code, plan, diff or journal. Planning and building happen in the task's
    own window, in processes that end with their context; what reaches this
-   session is a phase name and a PR URL. Keeping the coordinator's context
-   free of every task is what lets it run a whole list in one session.
+   session is a phase name, a PR URL, and the acceptance result the task
+   recorded about itself. Keeping the coordinator's context free of every task
+   is what lets it run a whole list in one session.
 
 ## Step 0 — Which coordinator, and what state
 
@@ -100,9 +102,10 @@ ______________________________________________________________________
 when, depends on — the rejected cuts with the rule each failed, the sequence
 checks, and the decisions as numbered questions. Then one line: *"Edit
 `tasks.json` or tell me what to change; answer the questions in your own words.
-Say `go` and I'll start working the list — you'll hear from me once per task,
-when it is ready to play, and again when its PR is waiting for you to merge.
-Say `go, you merge` and I'll merge each PR myself once its checks are green."*
+Say `go` and I'll start working the list — each task runs its own acceptance and
+you'll hear from me when its PR is waiting for you to merge, or sooner if it
+needs acceptance criteria or could not make its checks pass. Say `go, you merge`
+and I'll merge each PR myself once its checks are green."*
 End your turn.
 
 On `go`: re-read `tasks.json` (it may have been edited), set `merge` to
@@ -195,7 +198,13 @@ minutes — the command blocks for up to 570 seconds by design. It prints one JS
 line:
 
 - `outcome: timeout` (exit 2) → wait again. Nothing to report.
-- `outcome: human` → the session stopped at a gate. Set
+- `outcome: human`, phase `await-fix` → the task ran its own acceptance and
+  could not make it pass, so it opened no PR. Set `status: blocked` with the
+  failed check names from the line's `acceptance.failed` in `note`,
+  `notify-send`, and **stop the loop** with a summary. Like a red check in W5
+  this is a decision, not a wait: nobody is going to answer it in that window,
+  and the tasks behind it would branch off work that is not landing.
+- `outcome: human`, any other phase → the session stopped at a gate. Set
   `status: awaiting-human` and `note` from the phase — `await-acceptance`:
   *needs acceptance criteria*, `await-play`: *ready to play*, anything else:
   the phase name. `notify-send "<blurb>" "<task>: <note>"`. Print one line
@@ -206,7 +215,13 @@ line:
   task's notes dir for the PR URL (fall back to `gh pr list --head <task> --json
   url`). No PR anywhere → the task opened none: `status: done`, journal line,
   back to W1. Otherwise record `pr`, set `status: awaiting-merge`, `updated`,
-  `note: PR open, waiting for merge`, and go to W5.
+  `note: PR open, waiting for merge` plus the line's acceptance tally when it
+  carried one, and go to W5.
+
+The `acceptance` object on a wait line — `{passed, checks, failed}`, each failure
+naming its command and exit status — is the evidence a task ran on itself. It is
+the whole of what this session learns about a task's correctness, and reading it
+is the one thing that takes the place of looking at the window.
 - exit 1 → the state file is unreadable. `status: blocked`, `note` with the
   error, stop and report.
 

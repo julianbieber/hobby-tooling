@@ -16,13 +16,14 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::{DefaultTerminal, Frame};
 
-use crate::model::{Coordinator, Status, TASKS_FILE};
+use crate::model::{BuildState, Coordinator, Status, TASKS_FILE};
 
 const POLL: Duration = Duration::from_millis(500);
 
 struct Loaded {
     coordinator: Coordinator,
     prs: Vec<Vec<String>>,
+    acceptance: Vec<Option<(String, bool)>>,
 }
 
 struct Row {
@@ -74,7 +75,22 @@ impl App {
                 .iter()
                 .map(|t| coordinator.pr_urls(&self.dir, t))
                 .collect();
-            Loaded { coordinator, prs }
+            let acceptance = coordinator
+                .tasks
+                .iter()
+                .map(|t| {
+                    BuildState::load(&coordinator.task_notes_dir(&self.dir, t))
+                        .ok()
+                        .flatten()
+                        .and_then(|s| s.acceptance_result)
+                        .map(|a| (a.summary(), a.passed))
+                })
+                .collect();
+            Loaded {
+                coordinator,
+                prs,
+                acceptance,
+            }
         });
         self.seen = self.mtimes();
     }
@@ -101,6 +117,9 @@ impl App {
             rows.push(plain(task_line(i + 1, t.status, &t.title)));
             if let Some(note) = &t.note {
                 rows.push(plain(Line::from(format!("    {note}").dim())));
+            }
+            if let Some((summary, passed)) = &loaded.acceptance[i] {
+                rows.push(plain(acceptance_line(summary, *passed)));
             }
             for url in &loaded.prs[i] {
                 rows.push(Row {
@@ -268,6 +287,14 @@ fn task_line(index: usize, status: Status, title: &str) -> Line<'static> {
     ])
 }
 
+fn acceptance_line(summary: &str, passed: bool) -> Line<'static> {
+    let colour = if passed { Color::Green } else { Color::Red };
+    Line::from(vec![
+        Span::raw("    "),
+        Span::styled(summary.to_owned(), Style::new().fg(colour)),
+    ])
+}
+
 fn pr_line(url: &str) -> Line<'static> {
     let label = match pr_number(url) {
         Some(n) => format!("PR #{n}"),
@@ -307,6 +334,7 @@ mod tests {
                     vec!["https://github.com/o/r/pull/1".into()],
                     vec!["https://github.com/o/r/pull/2".into()],
                 ],
+                acceptance: vec![None, None],
             }),
             seen: Vec::new(),
             scroll: 0,
@@ -336,6 +364,46 @@ mod tests {
         assert_eq!(
             app.url_at(5, first_pr_row - 1).as_deref(),
             Some("https://github.com/o/r/pull/1")
+        );
+    }
+
+    // The acceptance result is the only thing in this view that comes from a task's own
+    // notes rather than from tasks.json, and it is what a coordinator has instead of the
+    // task's pane — so it has to reach the list, above the PR and below the note.
+    #[test]
+    fn a_task_with_an_acceptance_shows_it_under_its_note() {
+        let coordinator = Coordinator::parse(
+            r#"{"project":"p","blurb":"b","tasks":[
+                {"task":"a","title":"A","note":"acceptance failing"},
+                {"task":"b","title":"B"}]}"#,
+        )
+        .unwrap();
+        let app = App {
+            dir: PathBuf::new(),
+            loaded: Ok(Loaded {
+                coordinator,
+                prs: vec![vec!["https://github.com/o/r/pull/1".into()], Vec::new()],
+                acceptance: vec![Some(("acceptance 1/2 \u{2717} cli".into(), false)), None],
+            }),
+            seen: Vec::new(),
+            scroll: 0,
+            show_description: false,
+            body: Rect::new(0, 3, 40, 10),
+        };
+        let rendered: Vec<String> = app
+            .lines()
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![
+                "\u{b7} 1. A",
+                "    acceptance failing",
+                "    acceptance 1/2 \u{2717} cli",
+                "    PR #1",
+                "\u{b7} 2. B",
+            ]
         );
     }
 
