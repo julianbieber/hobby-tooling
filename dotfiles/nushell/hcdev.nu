@@ -13,6 +13,7 @@
 #   hcdev code                    - cd to this task's worktree
 #   hcdev list / attach           - manage running sessions
 #   hcdev close <task>            - kill its session, its processes, and its window
+#   hcdev claude-pane <task>      - resolve the Claude pane id of a running auto session
 
 const LAYOUT = "hobby-dev"
 const AUTO_LAYOUT = "hobby-auto"
@@ -257,6 +258,20 @@ def hcdev-session-live [session: string] {
     if ($m | is-empty) { false } else { not (($m | first) | str contains "EXITED") }
 }
 
+def hcdev-session-terminal-panes [session: string] {
+    let result = (do -i { ^zellij --session $session action list-panes -a --json } | complete)
+    if $result.exit_code != 0 { return [] }
+    let panes = (try { $result.stdout | from json } catch { [] })
+    $panes
+    | where { not $in.is_plugin }
+    | each {|p| {
+        id: $"terminal_($p.id)"
+        terminal_command: ($p.terminal_command? | default null)
+        pane_command: ($p.pane_command? | default null)
+        title: ($p.title? | default null)
+    }}
+}
+
 def hcdev-worktree-pids [dir: string] {
     let result = (do -i {
         ^find /proc -mindepth 2 -maxdepth 2 -type l "(" -name cwd -o -name exe ")" "(" -lname $dir -o -lname $"($dir)/*" ")" -printf "%h\n"
@@ -455,6 +470,7 @@ export def main [] {
     print "  hcdev list                       List running hobby sessions"
     print "  hcdev attach <session>           Attach to an existing session"
     print "  hcdev close <task> [-p] [-t]     Kill the session, stop its processes, close the window"
+    print "  hcdev claude-pane <task> [-p] [-t] [--json]  Resolve the Claude pane id of a running auto session"
     print ""
     print $"Layout:  ~/.config/zellij/layouts/($LAYOUT).kdl"
     print $"Account: ($HOBBY_CONFIG_DIR)  \(via chobby in the Claude pane\)"
@@ -657,6 +673,59 @@ export def --env "hcdev attach" [
     session: string@hcdev-session-completions  # Session name
 ] {
     zellij attach $session
+}
+
+# Resolve the Claude pane of a running `hcdev auto` session to its zellij pane id.
+# Errors naming `hcdev auto <task>` when the session is not live.
+#
+# Prefers the id `hauto` recorded for itself in the task's `claude-pane.json`
+# (kept fresh on every start, so a stale record from a prior session is never
+# trusted once its pane is gone); otherwise falls back to the single live
+# terminal pane whose `terminal_command` is `hauto`/`chobby`, then to the single
+# one whose `pane_command` starts with `claude`. Two or more candidates at a
+# step is not a match — it never guesses between them. Prints the bare pane id
+# (e.g. `terminal_1`), so `zellij action focus-pane-id (hcdev claude-pane
+# <task>)` composes; `--json` also prints the session name and which source won.
+export def "hcdev claude-pane" [
+    task: string@hcdev-task-completions               # Task name
+    --project (-p): string@hcdev-project-completions  # Disambiguate across projects
+    --topic (-t): string@hcdev-topic-completions       # Disambiguate across topics
+    --json                                             # Print {session, pane_id, source} instead of the bare id
+] {
+    let found = (hcdev-match-task $task $project $topic)
+    if $found == null {
+        error make { msg: $"Task '($task)' not found" }
+    }
+    let session = (hcdev-session-name $found.project $found.topic $found.task)
+    if not (hcdev-session-live $session) {
+        error make { msg: $"($session) is not running — start it with 'hcdev auto ($found.task)'" }
+    }
+
+    let panes = (hcdev-session-terminal-panes $session)
+    let recorded_file = ($NOTES_BASE | path join $found.project $found.topic $found.task "claude-pane.json")
+    let recorded = if ($recorded_file | path exists) {
+        try { open --raw $recorded_file | from json } catch { null }
+    } else { null }
+
+    let resolved = if ($recorded != null) and ($recorded.session? == $session) and ($recorded.pane_id? in ($panes | get id)) {
+        { pane_id: $recorded.pane_id, source: "recorded" }
+    } else {
+        let by_terminal_command = ($panes | where { $in.terminal_command in ["hauto" "chobby"] })
+        let by_pane_command = ($panes | where { ($in.pane_command | default "") | str starts-with "claude" })
+        if ($by_terminal_command | length) == 1 {
+            { pane_id: ($by_terminal_command | first | get id), source: "terminal_command" }
+        } else if ($by_pane_command | length) == 1 {
+            { pane_id: ($by_pane_command | first | get id), source: "pane_command" }
+        } else {
+            error make { msg: $"Could not resolve the Claude pane of ($session) — saw: ($panes | to json --raw)" }
+        }
+    }
+
+    if $json {
+        print ({ session: $session, pane_id: $resolved.pane_id, source: $resolved.source } | to json --raw)
+    } else {
+        print $resolved.pane_id
+    }
 }
 
 # Close a task's session: kill and delete its zellij session, stop every process
