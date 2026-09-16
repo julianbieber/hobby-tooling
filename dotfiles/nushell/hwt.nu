@@ -22,11 +22,12 @@ const PROJECTS_BASE = "~/fun_repos" | path expand
 const NOTES_REPO = "~/fun_repos/hobby-mimisbrunnr" | path expand
 const NOTES_BASE = $NOTES_REPO | path join "notes"
 
-# `hwt sessions` opens hcdev sessions, so it needs the session name for a task.
-# Imported rather than re-derived: the name is clamped to what zellij's socket
-# path allows, and a second copy of that rule would silently stop matching the
-# sessions hcdev actually creates.
-use hcdev.nu [hcdev-session-name]
+# `hwt sessions` opens hcdev sessions, so it needs the session name for a task
+# and the detached-terminal launcher. Imported rather than re-derived: the name
+# is clamped to what zellij's socket path allows, and the launcher strips the
+# zellij env vars and redirects the terminal's stdio — a second copy of either
+# rule would silently drift from what hcdev actually does.
+use hcdev.nu [hcdev-session-name hcdev-spawn-window]
 
 # Main hwt command - shows help.
 # Named `main` rather than `hwt`: a nushell module cannot export a command with
@@ -1419,12 +1420,7 @@ export def "hwt sessions" [
             print $"would open: ($t.session)  [($t.path)]"
         } else {
             print $"opening: ($t.session)"
-            # Drop this shell's zellij variables: run from inside a session, the new
-            # terminal would otherwise look to zellij like a nested client of *that*
-            # session rather than a fresh top-level one.
-            with-env {ZELLIJ: null, ZELLIJ_SESSION_NAME: null, ZELLIJ_PANE_ID: null} {
-                ^setsid -f alacritty --working-directory $t.path --title $t.session -e nu --login -c $"hcdev wt '($t.task)' --project '($t.project)' --topic '($t.topic)'"
-            }
+            hcdev-spawn-window $t.path $t.session $"hcdev wt '($t.task)' --project '($t.project)' --topic '($t.topic)'"
         }
     }
 }

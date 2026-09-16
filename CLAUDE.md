@@ -491,9 +491,10 @@ dashboard inherits `ZELLIJ`, `ZELLIJ_SESSION_NAME` and `ZELLIJ_PANE_ID`, and `se
 does not undo that — the terminal it opens believes it is already inside that session.
 For the task you are *currently* in, `hcdev` then asks zellij to attach a session to
 itself, which zellij answers with a **panic**. `hwt_core::spawn_detached` therefore
-removes the three variables from every process it starts, and `hwt sessions` does the
-same with `with-env`. `hcdev-launch` also refuses the self-attach in so many words, for
-the case nothing spawned: a `hcdev wt <this task>` typed by hand.
+removes the three variables from every process it starts, and every nu-side launch of
+a detached terminal (`hcdev auto -w`, `hwt sessions`) goes through `hcdev-spawn-window`,
+which does the same with `with-env`. `hcdev-launch` also refuses the self-attach in so
+many words, for the case nothing spawned: a `hcdev wt <this task>` typed by hand.
 
 **And a command that fails kills it the same way.** `nu -c` exits on the first error and
 takes the window with it, so a failing `hwt restore` was indistinguishable from both
@@ -501,6 +502,14 @@ bugs above — nothing on screen either way. Every nu launch now goes through
 `hold_on_error`, which wraps the pipeline in `try`/`catch` and waits on `input`, so the
 message that says what went wrong is still there to read. The cost is a keypress after a
 session that exits non-zero; that is worth paying to never lose an error again.
+
+**And an inherited stdout keeps the *caller* alive, not the window.** `setsid -f`
+returns the instant it forks, so `hcdev auto -w` was never blocking on its child —
+alacritty inherits the caller's stdout and stderr, so a caller that reads that pipe to
+EOF (`nu -l -c "…"` from a tool, `$(…)` in a shell) waits for the window to *close*
+instead. `hcdev-spawn-window` redirects the terminal's stdio to `/dev/null`
+(`o+e> /dev/null`) and `hcdev auto -w` then polls `hcdev-session-live` for up to 20s so
+its own exit code means "the window is up", not just "the fork succeeded".
 
 `Restore` also runs `hcdev wt` after `hwt restore`, as `Start task` does after `hwt new`.
 The card is only rescanned by the **Refresh** button, so a restore that stopped at the
