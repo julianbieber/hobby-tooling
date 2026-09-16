@@ -24,6 +24,12 @@ const POLL: Duration = Duration::from_secs(2);
 /// command and exit status — the evidence a coordinator would otherwise have to read out
 /// of the task's own pane.
 ///
+/// A state file that recorded `phase_since` also adds it and `unchanged_for` (seconds,
+/// computed at print time) to the line, plus `written` when that was recorded too — a
+/// coordinator polling a phase that has not moved can then say how long, instead of
+/// sampling `/proc` or a pane it cannot read. A file written before these fields existed
+/// carries none of the three.
+///
 /// `after` names a phase that does not count: a coordinator that has already reported
 /// `await-play` passes it here so the call blocks until the person has answered and the
 /// pipeline has moved on, instead of returning at once with the same phase.
@@ -92,6 +98,15 @@ fn line(state: &BuildState, outcome: &str) -> String {
     let mut object = serde_json::json!({ "phase": state.phase, "outcome": outcome });
     if let Some(acceptance) = &state.acceptance_result {
         object["acceptance"] = acceptance_json(acceptance);
+    }
+    if let Some(phase_since) = &state.phase_since {
+        object["phase_since"] = serde_json::Value::String(phase_since.clone());
+    }
+    if let Some(written) = &state.written {
+        object["written"] = serde_json::Value::String(written.clone());
+    }
+    if let Some(unchanged_for) = state.unchanged_for() {
+        object["unchanged_for"] = serde_json::Value::from(unchanged_for);
     }
     object.to_string()
 }
@@ -222,5 +237,22 @@ mod tests {
             line(&failed, "human"),
             r#"{"acceptance":{"checks":2,"failed":[{"command":"hcoord wait .","exit":1,"name":"cli"}],"passed":false},"outcome":"human","phase":"await-fix"}"#
         );
+    }
+
+    // A coordinator waiting on a phase that has not moved needs the age, not just a
+    // repeated phase name — `phase_since`, `written` and the computed `unchanged_for`
+    // travel on the line whenever the file recorded them.
+    #[test]
+    fn the_line_carries_phase_since_written_and_the_computed_age() {
+        let state: BuildState = serde_json::from_str(
+            r#"{"phase":"implement","written":"2020-01-01T00:00:00Z",
+                "phase_since":"2020-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        let rendered = line(&state, "timeout");
+        let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        assert_eq!(value["phase_since"], "2020-01-01T00:00:00Z");
+        assert_eq!(value["written"], "2020-01-01T00:00:00Z");
+        assert!(value["unchanged_for"].as_i64().unwrap() > 0);
     }
 }

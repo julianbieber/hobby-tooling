@@ -42,6 +42,10 @@ the report because a failing command stops the pipeline and a report does not.
    transition. The waiting phases are `await-acceptance`, `await-play`
    (interactive only) and `await-fix` (unattended only), and there are no
    others; `planned` and `done` are what `hauto` and the coordinator key on.
+   Every write — including one that leaves the phase unchanged — sets
+   `written` to the time of that write; `phase_since` is set to the same
+   value only when the write changes the phase, and otherwise carried forward
+   from what the file already held. Get the time with `date -u +%FT%TZ`.
 3. **The build stage reads what the plan names, and nothing else.** No
    `journal:resume`, no directory listings, no neighbouring modules "for
    context", no git history. A symbol the plan did not mention is looked up
@@ -74,7 +78,8 @@ Task context from `pwd` (`~/fun_worktrees/PROJECT/TOPIC/TASK`). State file at
   "acceptance_result": { "checked": "<RFC 3339>", "passed": false, "rounds": 0,
     "checks": [ { "name": "", "command": "", "exit": 0, "pass": false,
                   "note": "" } ] },
-  "play": { "command": "", "log": "" }, "feedback": [], "rounds": 0 }
+  "play": { "command": "", "log": "" }, "feedback": [], "rounds": 0,
+  "written": "<RFC 3339>", "phase_since": "<RFC 3339>" }
 ```
 
 `acceptance_checks` is written by the plan stage, `acceptance_result` by

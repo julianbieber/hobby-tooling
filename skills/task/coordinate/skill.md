@@ -154,7 +154,8 @@ are not `done`, and `done` now means merged.
      "coordinator": "<this coordinator's notes dir>",
      "brief_source": "coordinator", "brief": "<see below>",
      "acceptance": "<done_when, verbatim>",
-     "feedback": [], "rounds": 0 }
+     "feedback": [], "rounds": 0,
+     "written": "<now, RFC 3339>", "phase_since": "<now, RFC 3339>" }
    ```
    The **brief** is read by a session with no memory of this one, so it is
    self-contained and says where each part came from: the coordinator's
@@ -197,7 +198,13 @@ Run it with the Bash tool's full budget (`timeout: 600000`), never the default t
 minutes — the command blocks for up to 570 seconds by design. It prints one JSON
 line:
 
-- `outcome: timeout` (exit 2) → wait again. Nothing to report.
+- `outcome: timeout` (exit 2) → wait again. When the line's `phase` is the same
+  as the previous timeout on this task, set `note` from its `unchanged_for`
+  (rendered as a duration) instead of leaving it blank — *"implement, unchanged
+  for 1h 12m"* — so a resumed coordinator or a person reading `tasks.json` sees
+  that the session is still on the same phase rather than nothing at all. A
+  single timeout, or one whose phase differs from the last, reports nothing:
+  the loop is about to call again either way.
 - `outcome: human`, phase `await-fix` → the task ran its own acceptance and
   could not make it pass, so it opened no PR. Set `status: blocked` with the
   failed check names from the line's `acceptance.failed` in `note`, and

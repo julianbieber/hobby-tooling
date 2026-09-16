@@ -17,7 +17,7 @@ hcoord tui <coordinator notes dir>                         the left pane of `hcd
 hcoord wait <task notes dir> [--timeout <s>] [--after <phase>]
                                                            block until a task needs a person or is done
 hcoord merged <pr url> [--timeout <s>] [--ready]           block until its PR has landed
-hcoord status <coordinator notes dir>                      one line of counts
+hcoord status <coordinator notes dir>                      counts, then each task's phase and age
 ```
 
 ## `tui` shows `tasks.json` and nothing else
@@ -99,6 +99,37 @@ That object is the point of the whole field. A coordinator cannot read the task'
 own pane — the window is off-screen and about seventeen columns wide — so the
 evidence that a change does what it promised has to arrive as data or not at
 all.
+
+A state file that records `phase_since` (when the phase last changed) also adds
+it to the line, along with `unchanged_for` — the age in seconds, computed at
+print time so the coordinator does not have to do its own date arithmetic — and
+`written` (when the file was last written) when that was recorded too:
+
+```json
+{"outcome": "human", "phase": "implement", "phase_since": "2026-09-16T15:18:47Z",
+ "unchanged_for": 4320, "written": "2026-09-16T16:26:47Z"}
+```
+
+`written` and `phase_since` differ here because the pipeline wrote the file again
+without moving the phase — the one distinction an mtime alone cannot make. A
+state file from before these fields existed carries none of the three, rather
+than falling back to the file's own mtime.
+
+## `status` names how long a phase has sat still
+
+`hcoord status <coordinator notes dir>` prints the counts line `hcoord tui`
+draws at the top, then one line per task that is not yet `done` (or
+`handed-off`) and has a readable state file:
+
+```
+1 running · 1 waiting for you
+  1. food-fields — implement, unchanged for 1h 12m, last write 4m ago
+  2. food-market — await-play, unchanged for 3m
+```
+
+A task with no state file yet, or one already terminal, prints no line — there
+is nothing to watch there. A file with neither timestamp reads `no time
+recorded` rather than a guess.
 
 ## `merged` is the same trick, one layer on
 
