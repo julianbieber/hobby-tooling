@@ -22,8 +22,8 @@ usage:
   hcoord status <coordinator notes dir>         one line of counts, for scripts
 
 `wait` prints one JSON line {phase, outcome}, plus {acceptance} when the run recorded
-one, and exits 0 when a state was reached, 2 on timeout, 1 on a missing or unreadable
-file. `merged` prints one JSON line {pr, outcome, state, checks} with the same exit
+one, and exits 0 when a state was reached, 2 on timeout, 1 when the file never became
+readable. `merged` prints one JSON line {pr, outcome, state, checks} with the same exit
 codes, 1 when `gh` fails.";
 
 fn main() -> ExitCode {
