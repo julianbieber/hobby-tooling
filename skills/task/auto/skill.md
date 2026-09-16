@@ -272,7 +272,11 @@ what I am handed.
    Wait a few seconds, `head` the log: a build error is yours to fix before the
    gate. No `run` in the plan (a library, a tool without a UI) → the play step
    is the acceptance observation run as a command, its output printed.
-2. Record `play` in the state file, set `phase: await-play`, write it, print:
+2. Record `play` in the state file, set `phase: await-play`, and write it.
+   **Nothing of the report is printed until that write has happened** — the
+   report is what I read and the phase is what the coordinator reads, so a
+   report without the write tells nobody who is waiting.
+3. Print:
    - **what to try** — the acceptance observation verbatim, and where the app is;
    - the diff, one line per file, and any deviation from the plan;
    - build and test evidence, truncated as run;
@@ -284,6 +288,10 @@ what I am handed.
      to change and I'll do it and relaunch."*
 
    End the turn.
+
+   `hcoord wait` also reports a `play` phase untouched for three minutes as a
+   gate on its own — a backstop for this write being missed, not a licence to
+   skip it.
 
 **Feedback** is anything but `continue`. Record it verbatim as
 `## feedback-<n>` in `business-context.md`, append to `feedback`, kill the

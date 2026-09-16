@@ -83,6 +83,17 @@ acceptance would not pass — needed nothing here to be seen.
 `await-play` once, the coordinator wants to block until the phase is something
 *else*, not be told `await-play` again immediately.
 
+`wait` also reports `human` on a `play` phase that has sat untouched for three
+minutes, even without an `await-*` name. The reason is recorded in
+`business-context.md` under `## play-gate-fix`: the write to `await-play` and
+the printed gate report are two halves of one step in the skill, and the
+`hcoord` half is the one that cannot be forgotten by a session that drops the
+other. Three minutes is measured against the skill's own phase `play` — a
+detached launch, a few seconds' wait and a `head` of the log — so it is well
+past normal work and well inside one 570-second wait. A file recording neither
+`written` nor `phase_since` counts as idle too, since it cannot be told apart
+from one that has gone stale.
+
 The output is one JSON line, `{"phase": "await-play", "outcome": "human"}`, so
 the coordinator reads a field rather than parsing prose.
 

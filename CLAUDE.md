@@ -377,7 +377,11 @@ the task's `build-task.json` and returns when the phase is one a person answers
 sessions independent: `/task:auto` names its gates `await-acceptance`,
 `await-play` and `await-fix`, and nothing else in either skill has to know the
 other exists — the third was added without touching `hcoord` at all, because
-`await-` is the whole of the contract.
+`await-` is the whole of the *declared* contract. A `play` phase left untouched
+for three minutes is a backstop under it, for the one case the naming cannot
+cover: the skill's write to `await-play` and its printed report are two halves
+of one step (#45), and a session that drops the write leaves nothing named
+`await-*` for `hcoord wait` to see.
 `--after <phase>` is the second call on the same gate, so a reported
 `await-play` is not reported again at once. The timeout is 570 seconds because
 a Claude Code shell call gets ten minutes.

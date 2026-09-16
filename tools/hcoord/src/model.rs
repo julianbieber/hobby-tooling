@@ -17,6 +17,10 @@ pub const STATE_FILE: &str = "build-task.json";
 /// notes directory.
 pub const PRS_FILE: &str = "prs.json";
 
+/// How long a `play` phase must have sat untouched before a session is taken to be
+/// idle at its gate rather than still working up to it.
+pub const IDLE_GATE_SECS: i64 = 180;
+
 /// Where a task is from the coordinator's point of view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -360,11 +364,26 @@ impl BuildState {
 
     /// Whether the phase is one where the pipeline has stopped for a person: every
     /// `await-*` phase — `await-play` interactively, `await-fix` when an unattended run
-    /// could not make its acceptance pass — plus the two waiting states `/task:build`
-    /// names.
+    /// could not make its acceptance pass — the two waiting states `/task:build` names,
+    /// and a `play` phase that has sat untouched for `IDLE_GATE_SECS`. That last one is
+    /// a backstop: phase `play`'s write to `await-play` and its printed report are two
+    /// halves of one step, and a session that printed the report and skipped the write
+    /// leaves a task a coordinator would otherwise wait on forever. A file recording
+    /// neither `written` nor `phase_since` counts as idle too — it cannot be told apart
+    /// from one that has gone stale, and the case that hangs a coordinator is worse than
+    /// the case of reporting a `play` a little early.
     pub fn needs_human(&self) -> bool {
         self.phase.starts_with("await-")
             || matches!(self.phase.as_str(), "context" | "assess-split")
+            || self.is_idle_play()
+    }
+
+    fn is_idle_play(&self) -> bool {
+        self.phase == "play"
+            && match self.idle_for() {
+                Some(idle) => idle >= IDLE_GATE_SECS,
+                None => true,
+            }
     }
 
     /// Whether the pipeline has ended, one way or another.
@@ -381,6 +400,19 @@ impl BuildState {
     /// Seconds since `written`, when the file recorded one that parses.
     pub fn written_ago(&self) -> Option<i64> {
         self.written.as_deref().and_then(clock::seconds_since)
+    }
+
+    /// Seconds since anything last happened to this file: the smaller of the ages
+    /// `written_ago` and `unchanged_for` give, so any write counts as evidence of life.
+    /// `None` when the file recorded neither, which is every file written before those
+    /// fields existed.
+    pub fn idle_for(&self) -> Option<i64> {
+        match (self.written_ago(), self.unchanged_for()) {
+            (Some(w), Some(u)) => Some(w.min(u)),
+            (Some(w), None) => Some(w),
+            (None, Some(u)) => Some(u),
+            (None, None) => None,
+        }
     }
 
     /// One line for a person or a script: `"<phase>, unchanged for <human>"`, with a
@@ -514,8 +546,53 @@ mod tests {
         assert!(phase("context").needs_human());
         assert!(!phase("implement").needs_human());
         assert!(!phase("verify").needs_human());
+        assert!(!phase("pr").needs_human());
         assert!(phase("done").is_terminal());
         assert!(!phase("done").needs_human());
+    }
+
+    // The backstop for #45: a session that printed its play-gate report and skipped the
+    // write to `await-play` still has to be seen, so a `play` untouched since 2020 is a
+    // gate, and one whose `phase_since` is in the future (freshly entered, or a clock
+    // ahead of this one) is not.
+    #[test]
+    fn a_stale_play_needs_human_and_a_fresh_one_does_not() {
+        let stale: BuildState = serde_json::from_str(
+            r#"{"phase":"play","phase_since":"2020-01-01T00:00:00Z",
+                "written":"2020-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        assert!(stale.needs_human());
+
+        let fresh: BuildState = serde_json::from_str(
+            r#"{"phase":"play","phase_since":"2999-01-01T00:00:00Z",
+                "written":"2999-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        assert!(!fresh.needs_human());
+    }
+
+    // A write that left `phase_since` stale but moved `written` forward is a session
+    // still alive at its gate, not one that has gone idle — `idle_for` has to take the
+    // smaller of the two ages, not just `phase_since`.
+    #[test]
+    fn a_play_with_a_stale_phase_since_but_a_fresh_written_is_not_idle() {
+        let state: BuildState = serde_json::from_str(
+            r#"{"phase":"play","phase_since":"2020-01-01T00:00:00Z",
+                "written":"2999-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        assert!(!state.needs_human());
+    }
+
+    // A `play` written before `written`/`phase_since` existed cannot be told apart from
+    // one that has gone stale, and the failure this backstop exists for is exactly that
+    // silence — so it counts as idle rather than as unmeasurable.
+    #[test]
+    fn a_play_with_no_timestamps_is_idle() {
+        let state: BuildState = serde_json::from_str(r#"{"phase":"play"}"#).unwrap();
+        assert_eq!(state.idle_for(), None);
+        assert!(state.needs_human());
     }
 
     // An unattended run's evidence has to survive the trip through the file, because the
