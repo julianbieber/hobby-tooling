@@ -54,10 +54,17 @@ simplifications:
 
 `merge` in `tasks.json` is `mine` by default: the coordinator reports the green
 PR once, and holds. Told to (`go, you merge`, or a later `merge:
-"coordinator"`), it merges each PR itself as soon as the checks pass and GitHub
-reports no conflict. That is a per-coordinator decision, made when I trust how
-the run is going, and it is in the file rather than in the conversation so a
-resumed session still knows.
+"coordinator"`), each task's **own session** merges its own PR: it is seeded
+with `merge: coordinator` in its `build-task.json`, watches its checks itself,
+and reports `done` with the merge already landed — the coordinator's W4 reads
+that off the `hcoord wait` line and skips straight to confirming the issue and
+moving on, making no merge call of its own. That is a per-coordinator
+decision, made when I trust how the run is going, and it is in the file rather
+than in the conversation so a resumed session still knows.
+
+`merge: mine` is unchanged: the task session reports its PR and stops at
+`done` without touching it, and the coordinator's W5 is what waits on the
+merge and makes it.
 
 **Green is decided by `gh`, not by the coordinator.** `hcoord merged` reads
 `statusCheckRollup` and reports `green`, `pending`, `failing` or `none` — and

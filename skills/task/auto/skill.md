@@ -26,7 +26,7 @@ The stops are named so `hcoord wait` sees them, and which ones exist depends on
 |---|---|---|
 | start | `await-acceptance`, only when the brief does not say what done looks like | the same |
 | end | none. The plan writes the acceptance observation as commands and the `verify` phase runs them; the PR opens only when they pass | `await-play`, always |
-| failure | `await-fix` — the checks would not pass and no PR is opened | — |
+| failure | `await-fix` — the checks would not pass, or the PR could not be merged | — |
 
 An unattended run has no reader, so a report it prints is not read: the window
 is off-screen and the pane is about seventeen columns wide. The checks replace
@@ -70,7 +70,7 @@ Task context from `pwd` (`~/fun_worktrees/PROJECT/TOPIC/TASK`). State file at
 
 ```json
 { "phase": "acceptance", "auto": true, "model": "sonnet",
-  "coordinator": "<notes dir, or absent>",
+  "coordinator": "<notes dir, or absent>", "merge": "mine|coordinator",
   "brief_source": "coordinator|description|issue", "brief": "<verbatim>",
   "acceptance": "<the done-when observation, verbatim>",
   "context_questions": [], "plan": "plan.md",
@@ -78,6 +78,9 @@ Task context from `pwd` (`~/fun_worktrees/PROJECT/TOPIC/TASK`). State file at
   "acceptance_result": { "checked": "<RFC 3339>", "passed": false, "rounds": 0,
     "checks": [ { "name": "", "command": "", "exit": 0, "pass": false,
                   "note": "" } ] },
+  "merge_result": { "by": "session", "outcome": "merged|blocked", "pr": "",
+    "merge_commit": "", "reason": "", "check": "", "log": "", "tried": [],
+    "base": "", "base_updated": true, "checked": "<RFC 3339>" },
   "play": { "command": "", "log": "" }, "feedback": [], "rounds": 0,
   "written": "<RFC 3339>", "phase_since": "<RFC 3339>" }
 ```
@@ -86,11 +89,14 @@ Task context from `pwd` (`~/fun_worktrees/PROJECT/TOPIC/TASK`). State file at
 `verify`; both are absent from an interactive run. **`auto` is true only when a
 coordinator seeded it.** A state file this skill writes for itself sets
 `auto: false`, so a `hcdev auto <task>` typed by hand keeps the play gate.
+**`merge`** is seeded by the coordinator from its `tasks.json`; **absent means
+`mine`**, so a hand-typed `hcdev auto` never merges. `merge_result` is written
+by the `merge` phase below.
 
 Phases: `acceptance`, `await-acceptance`, `plan`, `planned`, `build`,
 `implement`, `comments`, `standards`, then either `verify` and `await-fix`
-(unattended) or `play` and `await-play` (interactive), then `pr`, `journal`,
-`done`.
+(unattended) or `play` and `await-play` (interactive), then `pr`, `merge`,
+`journal`, `done`.
 
 The stage argument is required. `plan` runs from whatever phase is recorded up
 to `planned`; `build` runs from `planned` to `done`. A `build` invoked with no
@@ -317,11 +323,47 @@ ______________________________________________________________________
    on merge. No issue, no line; never a guessed number. Unattended, the
    manual-test bullets are the acceptance check commands, which are known to
    pass because the PR would not be open otherwise.
-5. Record the PR in `prs.json` if the `track-pr` hook did not.
+5. Record the PR in `prs.json` if the `track-pr` hook did not, and as `pr` in
+   the state file — so `merge` is resumable after an interrupt without
+   re-reading `prs.json`.
 
-Never push to the default branch, and never merge: a coordinator waiting on
-this task decides that, and an unattended task with no coordinator leaves the
-merge to me.
+Never push to the default branch; merge only your own PR, only through
+`gh pr merge --merge`, and only when `merge` says `coordinator` — `merge:
+mine` or absent reports the PR and stops at `done`, which is what holds it
+for a person. Set `phase: merge` and continue in the same turn.
+
+## Phase `merge` — the session merges its own PR
+
+1. `merge` is `mine` or absent → skip to `journal` unchanged. The PR is
+   reported and held; merging it is not this session's.
+2. `coordinator` → write the state file with `phase: merge`, then
+   `hcoord merged <pr url> --ready` with the Bash tool's full budget
+   (`timeout: 600000`). At most **four** calls; a `timeout` on the fourth is a
+   block with reason `checks still pending after ~38 minutes`.
+3. `mergeable` → `gh pr merge <pr url> --merge`. Never `--squash`, never
+   `--rebase`, never `--admin`, never a force of any kind. `merged` already →
+   go to 4. `blocked` → 6.
+4. Confirm, never assume: `hcoord merged <pr url> --timeout 60` must say
+   `merged`; take the commit from
+   `gh pr view <pr url> --json mergeCommit -q .mergeCommit.oid`. Then
+   `git fetch origin <default branch>` and
+   `git merge-base --is-ancestor HEAD origin/<default branch>` — a non-zero
+   exit is a block, because a `done` reported before the merge landed starts
+   the next task off a commit without this work. Finally
+   `git -C ~/fun_repos/<project> pull --ff-only` as best effort: a refusal is
+   recorded in `base_updated` and does not block.
+5. Write `merge_result` with `outcome: merged`, the PR, the merge commit,
+   `base`, `base_updated`, `checked` and `tried`; set `phase: journal` and
+   continue in the same turn.
+6. Blocked — a red check, a conflict, a `gh` refusal, or the wait running
+   out: write `merge_result` with `outcome: blocked`, `reason` (one line),
+   `check` (the failing check's name when there is one), `log` (at most three
+   lines, truncated as rule 4 requires), `pr` and `tried`; set
+   `phase: await-fix`, print one line naming the PR and the reason, and **end
+   the turn**. Never rebase, never force, never close the PR:
+   `business-context.md` `## merge-conflicts` says a conflict means something
+   pushed to the default branch outside the run, which is exactly the
+   assumption being violated.
 
 ## Phase `journal`
 

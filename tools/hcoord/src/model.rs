@@ -312,6 +312,76 @@ impl AcceptanceResult {
     }
 }
 
+/// What a task session recorded about merging its own PR. Absent when `merge` in the
+/// seeded state file is `mine` or unset, or before the `merge` phase has run.
+#[allow(dead_code)]
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct MergeResult {
+    /// `"merged"` or `"blocked"`. A `String` rather than an enum: this file is written
+    /// by a prompt, and an unknown variant on a typed enum would fail `BuildState::load`
+    /// outright, turning one bad word into an unreadable state file instead of an
+    /// unrecognised outcome.
+    #[serde(default)]
+    pub outcome: String,
+    /// Who merged — `"session"` when this pipeline did it itself.
+    #[serde(default)]
+    pub by: Option<String>,
+    /// The PR that was merged or could not be.
+    #[serde(default)]
+    pub pr: Option<String>,
+    /// The merge commit's SHA, once confirmed.
+    #[serde(default)]
+    pub merge_commit: Option<String>,
+    /// Why the merge could not be made, one line.
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// The failing check's name, when the block came from one.
+    #[serde(default)]
+    pub check: Option<String>,
+    /// At most a few lines of evidence, truncated.
+    #[serde(default)]
+    pub log: Option<String>,
+    /// What was already tried before giving up.
+    #[serde(default)]
+    pub tried: Vec<String>,
+    /// The default branch merged into.
+    #[serde(default)]
+    pub base: Option<String>,
+    /// Whether the main checkout's fast-forward pull succeeded.
+    #[serde(default)]
+    pub base_updated: Option<bool>,
+    /// When this result was recorded, RFC 3339.
+    #[serde(default)]
+    pub checked: Option<String>,
+}
+
+impl MergeResult {
+    /// Whether the merge succeeded.
+    pub fn merged(&self) -> bool {
+        self.outcome == "merged"
+    }
+
+    /// One line for the narrow coordinator pane: `"merge ✓ #<n>"` (or `"merge ✓"` with no
+    /// PR number) when merged, `"merge ✗ <reason>"` (or `"merge ✗"` with no reason)
+    /// otherwise.
+    pub fn summary(&self) -> String {
+        if self.merged() {
+            let pr = self
+                .pr
+                .as_deref()
+                .and_then(crate::tui::pr_number)
+                .map(|n| format!(" #{n}"))
+                .unwrap_or_default();
+            format!("merge \u{2713}{pr}")
+        } else {
+            match &self.reason {
+                Some(reason) => format!("merge \u{2717} {reason}"),
+                None => "merge \u{2717}".to_owned(),
+            }
+        }
+    }
+}
+
 /// The part of `build-task.json` the coordinator reacts to.
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct BuildState {
@@ -325,6 +395,10 @@ pub struct BuildState {
     /// Named apart from the state file's `acceptance`, which is the observation itself.
     #[serde(default)]
     pub acceptance_result: Option<AcceptanceResult>,
+    /// What the pipeline recorded about merging its own PR; `None` when `merge` was
+    /// `mine`/absent or the `merge` phase has not run yet.
+    #[serde(default)]
+    pub merge_result: Option<MergeResult>,
     /// When this file was last written, RFC 3339. Absent from a file written before
     /// this field existed.
     #[serde(default)]
@@ -631,6 +705,44 @@ mod tests {
         )
         .unwrap();
         assert!(state.acceptance_result.is_none());
+    }
+
+    // A session that merged its own PR has to survive the trip through the file, and an
+    // unknown outcome word must parse rather than fail `BuildState::load` outright — the
+    // file is written by a prompt, so the failure is reachable.
+    #[test]
+    fn a_merge_result_parses_and_summarises() {
+        let state: BuildState = serde_json::from_str(
+            r#"{"phase":"done","merge_result":{"by":"session","outcome":"merged",
+                "pr":"https://github.com/o/r/pull/9","merge_commit":"abc123"}}"#,
+        )
+        .unwrap();
+        let merge = state.merge_result.unwrap();
+        assert!(merge.merged());
+        assert_eq!(merge.summary(), "merge \u{2713} #9");
+
+        let blocked: BuildState = serde_json::from_str(
+            r#"{"phase":"await-fix","merge_result":{"by":"session","outcome":"blocked",
+                "reason":"checks failing: build","check":"build"}}"#,
+        )
+        .unwrap();
+        let merge = blocked.merge_result.unwrap();
+        assert!(!merge.merged());
+        assert_eq!(merge.summary(), "merge \u{2717} checks failing: build");
+
+        let unknown: BuildState =
+            serde_json::from_str(r#"{"phase":"merge","merge_result":{"outcome":"sideways"}}"#)
+                .unwrap();
+        assert!(!unknown.merge_result.unwrap().merged());
+    }
+
+    // A state file with no merge result — the ordinary case, `merge: mine` or an
+    // interactive run — must leave the field `None` rather than a default that could be
+    // mistaken for a recorded outcome.
+    #[test]
+    fn a_state_file_without_a_merge_result_has_none() {
+        let state: BuildState = serde_json::from_str(r#"{"phase":"done"}"#).unwrap();
+        assert!(state.merge_result.is_none());
     }
 
     // A write that changed the phase leaves `written` and `phase_since` equal, so the

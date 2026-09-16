@@ -24,6 +24,7 @@ struct Loaded {
     coordinator: Coordinator,
     prs: Vec<Vec<String>>,
     acceptance: Vec<Option<(String, bool)>>,
+    merge: Vec<Option<(String, bool)>>,
 }
 
 struct Row {
@@ -86,10 +87,22 @@ impl App {
                         .map(|a| (a.summary(), a.passed))
                 })
                 .collect();
+            let merge = coordinator
+                .tasks
+                .iter()
+                .map(|t| {
+                    BuildState::load(&coordinator.task_notes_dir(&self.dir, t))
+                        .ok()
+                        .flatten()
+                        .and_then(|s| s.merge_result)
+                        .map(|m| (m.summary(), m.merged()))
+                })
+                .collect();
             Loaded {
                 coordinator,
                 prs,
                 acceptance,
+                merge,
             }
         });
         self.seen = self.mtimes();
@@ -119,7 +132,10 @@ impl App {
                 rows.push(plain(Line::from(format!("    {note}").dim())));
             }
             if let Some((summary, passed)) = &loaded.acceptance[i] {
-                rows.push(plain(acceptance_line(summary, *passed)));
+                rows.push(plain(summary_line(summary, *passed)));
+            }
+            if let Some((summary, merged)) = &loaded.merge[i] {
+                rows.push(plain(summary_line(summary, *merged)));
             }
             for url in &loaded.prs[i] {
                 rows.push(Row {
@@ -287,8 +303,8 @@ fn task_line(index: usize, status: Status, title: &str) -> Line<'static> {
     ])
 }
 
-fn acceptance_line(summary: &str, passed: bool) -> Line<'static> {
-    let colour = if passed { Color::Green } else { Color::Red };
+fn summary_line(summary: &str, ok: bool) -> Line<'static> {
+    let colour = if ok { Color::Green } else { Color::Red };
     Line::from(vec![
         Span::raw("    "),
         Span::styled(summary.to_owned(), Style::new().fg(colour)),
@@ -306,7 +322,9 @@ fn pr_line(url: &str) -> Line<'static> {
     ])
 }
 
-fn pr_number(url: &str) -> Option<&str> {
+/// The PR's number, taken from a GitHub PR URL's last path segment. `None` when that
+/// segment is not purely digits, as on a URL with a trailing path (`/pull/12/files`).
+pub(crate) fn pr_number(url: &str) -> Option<&str> {
     url.rsplit('/')
         .next()
         .filter(|n| n.chars().all(|c| c.is_ascii_digit()))
@@ -335,6 +353,7 @@ mod tests {
                     vec!["https://github.com/o/r/pull/2".into()],
                 ],
                 acceptance: vec![None, None],
+                merge: vec![None, None],
             }),
             seen: Vec::new(),
             scroll: 0,
@@ -384,6 +403,7 @@ mod tests {
                 coordinator,
                 prs: vec![vec!["https://github.com/o/r/pull/1".into()], Vec::new()],
                 acceptance: vec![Some(("acceptance 1/2 \u{2717} cli".into(), false)), None],
+                merge: vec![None, None],
             }),
             seen: Vec::new(),
             scroll: 0,
@@ -403,6 +423,45 @@ mod tests {
                 "    acceptance 1/2 \u{2717} cli",
                 "    PR #1",
                 "\u{b7} 2. B",
+            ]
+        );
+    }
+
+    // A blocked merge is what a coordinator has instead of the session's pane when a
+    // green PR still could not land — it has to reach the list between the note and the
+    // PR link, the same slot the acceptance result takes.
+    #[test]
+    fn a_task_with_a_blocked_merge_shows_it_between_its_note_and_its_pr() {
+        let coordinator = Coordinator::parse(
+            r#"{"project":"p","blurb":"b","tasks":[
+                {"task":"a","title":"A","note":"checks failing: build"}]}"#,
+        )
+        .unwrap();
+        let app = App {
+            dir: PathBuf::new(),
+            loaded: Ok(Loaded {
+                coordinator,
+                prs: vec![vec!["https://github.com/o/r/pull/9".into()]],
+                acceptance: vec![None],
+                merge: vec![Some(("merge \u{2717} checks failing: build".into(), false))],
+            }),
+            seen: Vec::new(),
+            scroll: 0,
+            show_description: false,
+            body: Rect::new(0, 3, 40, 10),
+        };
+        let rendered: Vec<String> = app
+            .lines()
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![
+                "\u{b7} 1. A",
+                "    checks failing: build",
+                "    merge \u{2717} checks failing: build",
+                "    PR #9",
             ]
         );
     }
