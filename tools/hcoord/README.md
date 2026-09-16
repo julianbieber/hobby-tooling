@@ -26,8 +26,11 @@ The file lives in `~/fun_repos/hobby-mimisbrunnr/notes/<project>/coordinator/<bl
 and is written by `/task:coordinate`. The pane re-reads it whenever its mtime
 changes, so the list updates as the coordinator works without either side
 talking to the other. It is designed for a 15% split: one line per task — status
-glyph, number, title — with the coordinator's note and PR number indented
-beneath, and the counts at the top. `d` toggles the description, `j`/`k`
+glyph, number, title — with the coordinator's note, the task's own acceptance
+result and its PR number indented beneath, and the counts at the top. The
+acceptance line is read out of that task's `build-task.json`, not out of
+`tasks.json`, and appears only for an unattended run that got as far as running
+its checks. `d` toggles the description, `j`/`k`
 scroll, `r` forces a reload, `q` quits.
 
 ```json
@@ -66,12 +69,30 @@ transition — and returns when the phase is one a person has to answer
 default timeout is 570 seconds, under the ten minutes Claude Code allows a
 shell call, and a timeout is exit 2 so the coordinator simply calls again.
 
+The `await-*` prefix is what keeps the two sides independent: `/task:auto` names
+its gates and `wait` matches the shape, so `await-fix` — an unattended run whose
+acceptance would not pass — needed nothing here to be seen.
+
 `--after <phase>` is for the second call on the same gate: having reported
 `await-play` once, the coordinator wants to block until the phase is something
 *else*, not be told `await-play` again immediately.
 
 The output is one JSON line, `{"phase": "await-play", "outcome": "human"}`, so
 the coordinator reads a field rather than parsing prose.
+
+An unattended run records what its own acceptance checks did, and the line then
+carries that too:
+
+```json
+{"acceptance": {"checks": 6, "failed": [{"command": "…", "exit": 1,
+ "name": "switch documents"}], "passed": false},
+ "outcome": "human", "phase": "await-fix"}
+```
+
+That object is the point of the whole field. A coordinator cannot read the task's
+own pane — the window is off-screen and about seventeen columns wide — so the
+evidence that a change does what it promised has to arrive as data or not at
+all.
 
 ## `merged` is the same trick, one layer on
 

@@ -344,8 +344,9 @@ and the steps leaves mostly mechanical work.
 
 **The coordinator knows nothing about any task.** It never reads a task's code,
 plan, diff or journal; planning happens in the task's own window. What reaches
-it is a phase name from `build-task.json` and a PR URL from `prs.json`, which is
-what lets one coordinator session work a whole list.
+it is a phase name from `build-task.json`, the acceptance result beside it, and
+a PR URL from `prs.json`, which is what lets one coordinator session work a
+whole list.
 
 **The coordinator is a task under the reserved topic `coordinator`.** Its notes
 dir `notes/<project>/coordinator/<blurb>/` has a `task.json`, so `hwt`, `hdash`
@@ -373,8 +374,10 @@ turn — a gate or `done` — for free. It never sends the session text. Before 
 peer is listed, and after a resume, `hcoord wait <task notes dir>` blocks on
 the task's `build-task.json` and returns when the phase is one a person answers
 (`await-*`) or terminal. That phase naming is the contract that keeps the two
-sessions independent: `/task:auto` names its gates `await-acceptance` and
-`await-play`, and nothing else in either skill has to know the other exists.
+sessions independent: `/task:auto` names its gates `await-acceptance`,
+`await-play` and `await-fix`, and nothing else in either skill has to know the
+other exists — the third was added without touching `hcoord` at all, because
+`await-` is the whole of the contract.
 `--after <phase>` is the second call on the same gate, so a reported
 `await-play` is not reported again at once. The timeout is 570 seconds because
 a Claude Code shell call gets ten minutes.
@@ -400,8 +403,8 @@ rule lives in `~/.config/leftwm/config.ron`, which this repo does not manage,
 so it is a per-machine line, not an install step.
 
 **One task session at a time is the design.** Two `/task:auto` sessions on one
-repo would race on the default branch and on my attention, since the play gate
-assumes one window is being looked at.
+repo would race on the default branch and on my attention, since a gate assumes
+one window is being looked at.
 
 **A task is not done until its PR is merged.** `done` used to mean *the session
 ended*, and a task whose dependency was still open was based on that
@@ -428,9 +431,34 @@ the alternative is a list that never moves. A failing check, a conflict or a
 PR closed unmerged is a **stop**, never a longer wait.
 
 **`/task:auto` commits, which `/task:build` never does.** A PR cannot open
-without commits and nobody is at the keyboard between `continue` and the PR, so
-the pipeline commits once after the play gate, to the same message rule. The
-notes repo stays uncommitted.
+without commits and nobody is at the keyboard between the last gate and the PR,
+so the pipeline commits once after it, to the same message rule. The notes repo
+stays uncommitted.
+
+**An unattended run has no play gate; it runs its own acceptance.** A gate is
+worth having because a person reads what it prints, and in a coordinator's task
+window nobody does: the window is 800x600 and off-screen and the Claude pane is
+about seventeen columns wide, so a report there is not merely unread but
+unreadable, and `continue` gets answered having read none of it. A task shipped
+that way with four of its six scenarios failing. So with `auto: true` the plan
+stage writes the acceptance observation as **commands**, a `verify` phase runs
+them, and a failure is the session's own to fix for at most three rounds. The
+run either opens a PR with its checks passing or reaches `await-fix` with none.
+
+The report is replaced rather than improved because the property that matters is
+not who looks: a failing command stops the pipeline by itself and a printed
+report does not. The rounds are capped because a repair loop nobody can
+interrupt is the same failure wearing different clothes, and the count is
+recorded so a run that keeps spending all three is visible.
+
+What the checks did is written to `build-task.json` as `acceptance_result` —
+command, exit status, per-check verdict — and `hcoord wait` puts it on the line
+it already returns. **Evidence has to arrive as data or it does not arrive**,
+which is the same argument `tasks.json` makes one level up. The acceptance gate
+survives unattended: a done-when that cannot be written as commands stops at
+`await-acceptance` and asks, because a check that passes while the observation
+fails is worse than no check. `auto` is set only by a coordinator, so a
+hand-typed `hcdev auto` keeps the play gate and the running application.
 
 `hcoord` is its own workspace rather than a member of `tools/hdash`'s: `hdash`
 is a Bevy build, and a few hundred lines over ratatui should not sit behind that

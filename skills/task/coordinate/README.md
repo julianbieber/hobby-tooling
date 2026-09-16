@@ -15,14 +15,16 @@ carves the work into tasks with `/task-split`, records them in `tasks.json`,
 and then works the list: one task at a time, each in its own `hcdev auto`
 window, blocking on `hcoord wait` until the task stops for a person or
 finishes, and then on `hcoord merged` until its PR has landed. I hear from it
-twice per task — when the application is ready to play, and when its PR is
-waiting for me to merge.
+once per task — when its PR is waiting for me to merge. A task it started is
+unattended (`auto: true`), so it runs its own acceptance rather than stopping to
+show me the application; it interrupts me only when it cannot write acceptance
+criteria, or when its own checks would not pass.
 
 ## One session at a time is the design, not a limitation
 
-Two `/task:auto` sessions on one repo would race on the default branch, on
-`structure.hstruct` budgets, and on my attention — the play gate assumes I am
-looking at one window. So the loop is strictly sequential.
+Two `/task:auto` sessions on one repo would race on the default branch and on
+`structure.hstruct` budgets, and the two gates that are left both assume one
+window has my attention. So the loop is strictly sequential.
 
 ## A task is not done until its PR is merged
 
@@ -45,8 +47,8 @@ simplifications:
   PR merges there, which is what makes "the issue closes when the PR merges" a
   fact rather than a hope.
 - **The cost is real and is the point.** The list now stalls on me. That is the
-  same trade the play gate already makes: unattended until it needs a person,
-  and what it needs is the thing only I can give.
+  trade the whole skill makes: unattended until it needs a person, and what it
+  needs is the thing only I can give.
 
 ## Who merges, and what stops the list
 
@@ -98,6 +100,14 @@ When the peer is not listed yet, or after a resume, `hcoord wait` blocks for up
 to ten minutes per shell call and returns a JSON line the coordinator switches
 on. `--after <phase>` is the second call on the same gate — once `await-play`
 has been reported, the next wait must block until the phase is something else.
+
+That line is also where a task's acceptance arrives. An unattended task runs the
+observation itself and records every check; `hcoord wait` puts `{passed, checks,
+failed}` on the line, each failure naming its command and exit status. This is
+what replaces looking at the window, and it is why the coordinator can judge a
+task it has read no code for. A task that could not make its checks pass reaches
+`await-fix` with no PR, and that is a **stop** — the same treatment as a red
+check on a PR, and for the same reason: waiting longer does not resolve it.
 
 ## What it deliberately does not do
 

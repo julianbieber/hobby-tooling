@@ -228,6 +228,65 @@ impl Coordinator {
     }
 }
 
+/// One acceptance command an unattended run executed, and how it went.
+#[derive(Clone, Debug, Deserialize)]
+pub struct AcceptanceCheck {
+    /// What the check is called in the plan.
+    pub name: String,
+    /// The command as it was run, when the pipeline recorded one.
+    #[serde(default)]
+    pub command: Option<String>,
+    /// The command's exit status, when the pipeline recorded one.
+    #[serde(default)]
+    pub exit: Option<i32>,
+    /// Whether this check passed. Absent in the file means it did not.
+    #[serde(default)]
+    pub pass: bool,
+}
+
+/// What an unattended `/task:auto` run recorded about its own acceptance. Absent from
+/// the state file of an interactive run, which stops at the play gate instead.
+#[derive(Clone, Debug, Deserialize)]
+pub struct AcceptanceResult {
+    /// Whether every check passed.
+    #[serde(default)]
+    pub passed: bool,
+    /// One entry per check, in the order the plan listed them.
+    #[serde(default)]
+    pub checks: Vec<AcceptanceCheck>,
+}
+
+impl AcceptanceResult {
+    /// The names of the checks that did not pass, in plan order.
+    pub fn failed(&self) -> Vec<&str> {
+        self.checks
+            .iter()
+            .filter(|c| !c.pass)
+            .map(|c| c.name.as_str())
+            .collect()
+    }
+
+    /// One line for the narrow coordinator pane: the tally, a pass or fail glyph, and the
+    /// first failing check's name when there is one. `passed` decides the glyph, so a
+    /// result whose flag disagrees with its checks reads as its flag.
+    pub fn summary(&self) -> String {
+        let total = self.checks.len();
+        let passed = self.checks.iter().filter(|c| c.pass).count();
+        let tally = if total == 0 {
+            String::new()
+        } else {
+            format!("{passed}/{total} ")
+        };
+        if self.passed {
+            return format!("acceptance {tally}\u{2713}");
+        }
+        match self.failed().first() {
+            Some(name) => format!("acceptance {tally}\u{2717} {name}"),
+            None => format!("acceptance {tally}\u{2717}"),
+        }
+    }
+}
+
 /// The part of `build-task.json` the coordinator reacts to.
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct BuildState {
@@ -237,6 +296,10 @@ pub struct BuildState {
     /// The PR URL, once the pipeline has opened one.
     #[serde(default)]
     pub pr: Option<String>,
+    /// The acceptance run of an unattended pipeline; `None` until one has happened.
+    /// Named apart from the state file's `acceptance`, which is the observation itself.
+    #[serde(default)]
+    pub acceptance_result: Option<AcceptanceResult>,
 }
 
 #[derive(Deserialize)]
@@ -267,7 +330,9 @@ impl BuildState {
     }
 
     /// Whether the phase is one where the pipeline has stopped for a person: every
-    /// `await-*` phase, plus the two waiting states `/task:build` names.
+    /// `await-*` phase — `await-play` interactively, `await-fix` when an unattended run
+    /// could not make its acceptance pass — plus the two waiting states `/task:build`
+    /// names.
     pub fn needs_human(&self) -> bool {
         self.phase.starts_with("await-")
             || matches!(self.phase.as_str(), "context" | "assess-split")
@@ -385,12 +450,53 @@ mod tests {
         let phase = |p: &str| BuildState {
             phase: p.into(),
             pr: None,
+            acceptance_result: None,
         };
         assert!(phase("await-play").needs_human());
         assert!(phase("await-acceptance").needs_human());
+        assert!(phase("await-fix").needs_human());
         assert!(phase("context").needs_human());
         assert!(!phase("implement").needs_human());
+        assert!(!phase("verify").needs_human());
         assert!(phase("done").is_terminal());
         assert!(!phase("done").needs_human());
+    }
+
+    // An unattended run's evidence has to survive the trip through the file, because the
+    // coordinator sees it and never sees the pane that produced it.
+    #[test]
+    fn an_acceptance_result_parses_and_summarises() {
+        let state: BuildState = serde_json::from_str(
+            r#"{"phase":"done","acceptance":"place a field, watch it fill",
+                "acceptance_result":{"passed":true,"checks":[
+                {"name":"tests","command":"cargo test","exit":0,"pass":true},
+                {"name":"cli","command":"hcoord wait .","exit":0,"pass":true}]}}"#,
+        )
+        .unwrap();
+        let result = state.acceptance_result.unwrap();
+        assert!(result.failed().is_empty());
+        assert_eq!(result.summary(), "acceptance 2/2 \u{2713}");
+
+        let failing: BuildState = serde_json::from_str(
+            r#"{"phase":"await-fix","acceptance_result":{"checks":[
+                {"name":"tests","exit":0,"pass":true},
+                {"name":"cli","exit":1}]}}"#,
+        )
+        .unwrap();
+        let result = failing.acceptance_result.unwrap();
+        assert_eq!(result.failed(), vec!["cli"]);
+        assert_eq!(result.summary(), "acceptance 1/2 \u{2717} cli");
+    }
+
+    // The interactive path stops at the play gate and writes no result block, so a state
+    // file without one must not read as a failure — and `acceptance` there is the
+    // observation as prose, which must not be mistaken for the result.
+    #[test]
+    fn a_state_file_without_a_result_has_none() {
+        let state: BuildState = serde_json::from_str(
+            r#"{"phase":"await-play","pr":null,"acceptance":"place a field"}"#,
+        )
+        .unwrap();
+        assert!(state.acceptance_result.is_none());
     }
 }

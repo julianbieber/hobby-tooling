@@ -21,9 +21,10 @@ usage:
                                                 blocks it; --ready also returns once it could be merged
   hcoord status <coordinator notes dir>         one line of counts, for scripts
 
-`wait` prints one JSON line {phase, outcome} and exits 0 when a state was reached,
-2 on timeout, 1 on a missing or unreadable file. `merged` prints one JSON line
-{pr, outcome, state, checks} with the same exit codes, 1 when `gh` fails.";
+`wait` prints one JSON line {phase, outcome}, plus {acceptance} when the run recorded
+one, and exits 0 when a state was reached, 2 on timeout, 1 on a missing or unreadable
+file. `merged` prints one JSON line {pr, outcome, state, checks} with the same exit
+codes, 1 when `gh` fails.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
