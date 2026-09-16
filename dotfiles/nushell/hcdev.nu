@@ -227,6 +227,31 @@ def --env hcdev-launch [dir: string, session: string, layout: string = $LAYOUT] 
     zellij -s $session -n $layout
 }
 
+# Open `cmd` in a new detached alacritty window and return at once. Strips the
+# zellij env vars so the new terminal is not mistaken for a pane of the caller's
+# session, and redirects the terminal's stdout/stderr to /dev/null so a caller
+# that reads its own output to EOF (`nu -l -c "…"`, `$(…)`) does not block on the
+# window's lifetime — a terminal otherwise inherits the caller's stdio. A failed
+# `cmd` holds the window open with its error instead of the window vanishing.
+export def hcdev-spawn-window [
+    dir: string      # working directory for the new terminal
+    title: string    # window title
+    cmd: string      # nu command to run in it
+    --class: string  # WM_CLASS, for a window-manager rule
+] {
+    let held = $"try { ($cmd) } catch {|e| print $e.msg; print ''; print 'Failed. Press enter to close.'; input }"
+    let class_args = if $class != null { ["--class" $"($class),($class)"] } else { [] }
+    with-env {ZELLIJ: null, ZELLIJ_SESSION_NAME: null, ZELLIJ_PANE_ID: null} {
+        ^setsid -f alacritty ...$class_args --working-directory $dir --title $title -e nu --login -c $held o+e> /dev/null
+    }
+}
+
+def hcdev-session-live [session: string] {
+    let lines = (try { zellij list-sessions --no-formatting | lines } catch { [] })
+    let m = ($lines | where { $in | str starts-with $"($session) " })
+    if ($m | is-empty) { false } else { not (($m | first) | str contains "EXITED") }
+}
+
 def hcdev-runtime-dir [] {
     $env.XDG_RUNTIME_DIR? | default ($env.TMPDIR? | default "/tmp")
 }
@@ -451,10 +476,12 @@ export def --env "hcdev new" [
 # Start a session in an existing worktree whose Claude pane runs `hauto`, the
 # /task:auto stage driver (a headless plan process, then a fresh build session).
 # Errors as `hcdev wt` does: unknown, ambiguous, or not checked out. With
-# `--window` it opens in a new alacritty window and returns at once, even from
-# inside a zellij pane; a failure there holds the window open with its message.
-# That window carries WM_CLASS `hcdev-auto`, so a window-manager rule can send it
-# to a fixed desktop (leftwm: a `window_rules` entry on that class).
+# `--window` it opens in a new alacritty window, detached, and returns once that
+# session is up (or errors within 20s if it never comes up) — even from inside a
+# zellij pane; a failure in the window holds it open with its message. That
+# window carries WM_CLASS `hcdev-auto`, so a window-manager rule can send it to a
+# fixed desktop (leftwm: a `window_rules` entry on that class). Without
+# `--window` this stays in the foreground, same as `hcdev wt`.
 export def --env "hcdev auto" [
     task: string@hcdev-task-completions               # Task name
     --project (-p): string@hcdev-project-completions  # Disambiguate across projects
@@ -468,9 +495,14 @@ export def --env "hcdev auto" [
     let session = (hcdev-session-name $found.project $found.topic $found.task)
     if $window {
         let cmd = $"hcdev auto '($found.task)' --project '($found.project)' --topic '($found.topic)'"
-        let held = $"try { ($cmd) } catch {|e| print $e.msg; print ''; print 'Failed. Press enter to close.'; input }"
-        with-env {ZELLIJ: null, ZELLIJ_SESSION_NAME: null, ZELLIJ_PANE_ID: null} {
-            ^setsid -f alacritty --class hcdev-auto,hcdev-auto --working-directory $found.path --title $session -e nu --login -c $held
+        hcdev-spawn-window $found.path $session $cmd --class "hcdev-auto"
+        mut waited_ms = 0
+        while (not (hcdev-session-live $session)) and $waited_ms < 20000 {
+            sleep 250ms
+            $waited_ms = $waited_ms + 250
+        }
+        if not (hcdev-session-live $session) {
+            error make { msg: $"Session ($session) did not come up within 20s" }
         }
         print $"Opened ($session) in a new window"
         return
