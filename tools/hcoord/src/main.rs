@@ -2,6 +2,7 @@
 //! view of its `tasks.json` in the pane next to it, and a way to block on one task's
 //! pipeline state and on its pull request instead of polling them from a prompt.
 
+mod clock;
 mod merged;
 mod model;
 mod tui;
@@ -19,12 +20,14 @@ usage:
   hcoord merged <pr url> [--timeout <s>] [--ready]
                                                 block until the pull request is merged or something
                                                 blocks it; --ready also returns once it could be merged
-  hcoord status <coordinator notes dir>         one line of counts, for scripts
+  hcoord status <coordinator notes dir>         the counts, then each unfinished task's
+                                                phase and how long it has sat there
 
-`wait` prints one JSON line {phase, outcome}, plus {acceptance} when the run recorded
-one, and exits 0 when a state was reached, 2 on timeout, 1 when the file never became
-readable. `merged` prints one JSON line {pr, outcome, state, checks} with the same exit
-codes, 1 when `gh` fails.";
+`wait` prints one JSON line {phase, outcome}, plus {acceptance} when the run recorded one
+and {phase_since, written, unchanged_for} when the state file recorded them, and exits 0
+when a state was reached, 2 on timeout, 1 when the file never became readable. `merged`
+prints one JSON line {pr, outcome, state, checks} with the same exit codes, 1 when `gh`
+fails.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -64,16 +67,22 @@ fn main() -> ExitCode {
             None => usage(),
         },
         "status" => match args.get(1) {
-            Some(dir) => match model::Coordinator::load(&PathBuf::from(dir)) {
-                Ok(c) => {
-                    println!("{}", c.counts().summary());
-                    ExitCode::SUCCESS
+            Some(dir) => {
+                let dir = PathBuf::from(dir);
+                match model::Coordinator::load(&dir) {
+                    Ok(c) => {
+                        println!("{}", c.counts().summary());
+                        for line in c.phase_lines(&dir) {
+                            println!("{line}");
+                        }
+                        ExitCode::SUCCESS
+                    }
+                    Err(e) => {
+                        eprintln!("hcoord status: {e}");
+                        ExitCode::from(1)
+                    }
                 }
-                Err(e) => {
-                    eprintln!("hcoord status: {e}");
-                    ExitCode::from(1)
-                }
-            },
+            }
             None => usage(),
         },
         _ => usage(),

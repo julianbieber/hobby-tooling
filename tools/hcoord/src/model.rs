@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::clock;
+
 /// The file name a coordinator keeps its list in, inside its notes directory.
 pub const TASKS_FILE: &str = "tasks.json";
 
@@ -211,6 +213,25 @@ impl Coordinator {
         files
     }
 
+    /// One line per non-terminal task that has a readable state file, in list order,
+    /// naming its phase and how long it has sat there — what `status` prints under
+    /// the counts so telling a working session from a stalled one does not need
+    /// sampling `/proc` or reading a pane that cannot be read.
+    pub fn phase_lines(&self, dir: &Path) -> Vec<String> {
+        self.tasks
+            .iter()
+            .enumerate()
+            .filter_map(|(i, t)| {
+                let notes = self.task_notes_dir(dir, t);
+                let state = BuildState::load(&notes).ok().flatten()?;
+                if state.is_terminal() || state.phase.is_empty() {
+                    return None;
+                }
+                Some(format!("  {}. {} — {}", i + 1, t.task, state.phase_summary()))
+            })
+            .collect()
+    }
+
     /// Tally the statuses.
     pub fn counts(&self) -> Counts {
         let mut c = Counts::default();
@@ -300,6 +321,14 @@ pub struct BuildState {
     /// Named apart from the state file's `acceptance`, which is the observation itself.
     #[serde(default)]
     pub acceptance_result: Option<AcceptanceResult>,
+    /// When this file was last written, RFC 3339. Absent from a file written before
+    /// this field existed.
+    #[serde(default)]
+    pub written: Option<String>,
+    /// When `phase` last changed, RFC 3339. Carried forward unchanged by a write that
+    /// leaves the phase alone. Absent from a file written before this field existed.
+    #[serde(default)]
+    pub phase_since: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -341,6 +370,34 @@ impl BuildState {
     /// Whether the pipeline has ended, one way or another.
     pub fn is_terminal(&self) -> bool {
         matches!(self.phase.as_str(), "done" | "handed-off")
+    }
+
+    /// Seconds since `phase_since`, when the file recorded one that parses. Can come
+    /// back negative when the writing machine's clock runs ahead of this one's.
+    pub fn unchanged_for(&self) -> Option<i64> {
+        self.phase_since.as_deref().and_then(clock::seconds_since)
+    }
+
+    /// Seconds since `written`, when the file recorded one that parses.
+    pub fn written_ago(&self) -> Option<i64> {
+        self.written.as_deref().and_then(clock::seconds_since)
+    }
+
+    /// One line for a person or a script: `"<phase>, unchanged for <human>"`, with a
+    /// `", last write <human> ago"` clause added only when `written` parses and
+    /// differs from `phase_since`, or `"<phase>, no time recorded"` when the file
+    /// carries neither.
+    pub fn phase_summary(&self) -> String {
+        let Some(unchanged) = self.unchanged_for() else {
+            return format!("{}, no time recorded", self.phase);
+        };
+        let mut summary = format!("{}, unchanged for {}", self.phase, clock::human(unchanged));
+        if self.written != self.phase_since
+            && let Some(written_ago) = self.written_ago()
+        {
+            summary.push_str(&format!(", last write {} ago", clock::human(written_ago)));
+        }
+        summary
     }
 }
 
@@ -449,8 +506,7 @@ mod tests {
     fn human_and_terminal_phases() {
         let phase = |p: &str| BuildState {
             phase: p.into(),
-            pr: None,
-            acceptance_result: None,
+            ..Default::default()
         };
         assert!(phase("await-play").needs_human());
         assert!(phase("await-acceptance").needs_human());
@@ -498,5 +554,74 @@ mod tests {
         )
         .unwrap();
         assert!(state.acceptance_result.is_none());
+    }
+
+    // A write that changed the phase leaves `written` and `phase_since` equal, so the
+    // summary must not grow a redundant "last write" clause pointing at the same instant.
+    #[test]
+    fn phase_summary_with_both_timestamps_equal_has_no_last_write_clause() {
+        let state: BuildState = serde_json::from_str(
+            r#"{"phase":"implement","written":"2020-01-01T00:00:00Z",
+                "phase_since":"2020-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        assert!(state.unchanged_for().unwrap() > 0);
+        assert_eq!(state.written_ago(), state.unchanged_for());
+        assert!(!state.phase_summary().contains("last write"));
+    }
+
+    // A write that left the phase alone moves `written` forward but not `phase_since` —
+    // the one case the two timestamps exist to tell apart — so the summary must show both.
+    #[test]
+    fn phase_summary_with_differing_timestamps_names_both() {
+        let state: BuildState = serde_json::from_str(
+            r#"{"phase":"implement","written":"2020-01-01T00:04:00Z",
+                "phase_since":"2020-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        let summary = state.phase_summary();
+        assert!(summary.starts_with("implement, unchanged for"));
+        assert!(summary.contains("last write"));
+    }
+
+    // A state file with neither timestamp — the shape a session predating this field
+    // wrote — must read as "no time recorded" rather than panic or claim an age of zero.
+    #[test]
+    fn phase_summary_with_no_timestamps_says_so() {
+        let state: BuildState = serde_json::from_str(r#"{"phase":"implement"}"#).unwrap();
+        assert!(state.unchanged_for().is_none());
+        assert_eq!(state.phase_summary(), "implement, no time recorded");
+    }
+
+    // `status` shows only the tasks still worth watching: a done task and one with no
+    // state file yet are both silently skipped rather than printed with nothing to say.
+    #[test]
+    fn phase_lines_skips_done_and_missing_state() {
+        let root = std::env::temp_dir().join(format!("hcoord-phase-lines-{}", std::process::id()));
+        let coordinator = root.join("p/coordinator/b");
+        std::fs::create_dir_all(&coordinator).unwrap();
+        let running = root.join("p/b/b-one");
+        std::fs::create_dir_all(&running).unwrap();
+        std::fs::write(
+            running.join(STATE_FILE),
+            r#"{"phase":"implement","phase_since":"2020-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        let finished = root.join("p/b/b-two");
+        std::fs::create_dir_all(&finished).unwrap();
+        std::fs::write(finished.join(STATE_FILE), r#"{"phase":"done"}"#).unwrap();
+
+        let c = Coordinator::parse(
+            r#"{"project":"p","blurb":"b","tasks":[
+                {"task":"b-one","title":"One"},
+                {"task":"b-two","title":"Two"},
+                {"task":"b-three","title":"Three"}]}"#,
+        )
+        .unwrap();
+        let lines = c.phase_lines(&coordinator);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("b-one"));
+        assert!(lines[0].contains("implement"));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

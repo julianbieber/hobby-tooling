@@ -88,7 +88,7 @@ except where a sub-skill already does (`journal:resume`).
      ],
      "size_budget": "", "prior_art": "",
      "context_questions": [], "context_recorded": null, "context_gaps": [],
-     "rounds": 0 }
+     "rounds": 0, "written": "<RFC 3339>", "phase_since": "<RFC 3339>" }
    ```
 
    `phase` is one of `assess-split`, `plan`, `context`, `await-hmml-review`,
@@ -96,6 +96,8 @@ except where a sub-skill already does (`journal:resume`).
    `pr`, `journal`, `handed-off` (this task became a coordinator and its work
    lives in its subtasks), `done`. `context` and `await-hmml-review` are the two
    waiting states: the pipeline has asked me something and stops until I answer.
+   Every write sets `written` to that write's time; `phase_since` moves with it
+   only when the write also changes `phase`, and otherwise keeps its old value.
 
    **`is_subtask`** marks a task this pipeline created. It is written into the
    seeded state file, never inferred, and it permanently skips `assess-split` —

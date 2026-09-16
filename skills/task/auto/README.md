@@ -110,3 +110,10 @@ exit status and verdict. That is deliberately **data, not prose**, and it is
 what `hcoord wait` puts on its line and `hcoord tui` puts under the task. The
 whole point is that the coordinator sees what was checked without reading the
 pane it cannot read.
+
+Every write also carries `written` (when this write happened) and `phase_since`
+(when the current phase began). The two answer different questions: `written`
+says the pipeline is still alive even while it sits in one phase for a long
+task, and `phase_since` is what turns "still at `implement`" into "unchanged
+for 1h 12m" instead of a guess made by sampling `/proc` or reading a pane that
+cannot be read.

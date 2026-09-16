@@ -382,6 +382,17 @@ other exists — the third was added without touching `hcoord` at all, because
 `await-play` is not reported again at once. The timeout is 570 seconds because
 a Claude Code shell call gets ten minutes.
 
+**The file carries `written` and `phase_since`, because mtime cannot tell the
+two rewrites apart.** A phase that has not moved for an hour is either a
+healthy session doing something slow or a dead one, and the only distinguishing
+signal available to a script was sampling `/proc/<pid>/stat` for CPU ticks and
+reading a pane it cannot actually read (#46) — both unavailable to `hcoord`, and
+neither reliable. The file's own mtime looked like a substitute, but a write
+that leaves the phase unchanged moves the mtime exactly as much as one that
+advances it, so mtime alone cannot distinguish them. `written` records every
+write; `phase_since` records only the ones that changed the phase; `hcoord wait`
+and `hcoord status` both read the gap between them.
+
 `hcoord merged <pr>` is the same shape one layer further on: it polls `gh pr
 view` and returns `merged`, `blocked` with a reason, or `timeout` — plus
 `mergeable`, only with `--ready`, which is how a coordinator that was handed the
