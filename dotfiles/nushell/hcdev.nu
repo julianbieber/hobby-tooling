@@ -12,6 +12,7 @@
 #   hcdev notes                   - cd to this task's notes
 #   hcdev code                    - cd to this task's worktree
 #   hcdev list / attach           - manage running sessions
+#   hcdev close <task>            - kill its session, its processes, and its window
 
 const LAYOUT = "hobby-dev"
 const AUTO_LAYOUT = "hobby-auto"
@@ -76,13 +77,7 @@ def hcdev-known-tasks [] {
     } catch { [] }
 }
 
-# Find a task that is checked out, optionally narrowed by project and/or topic.
-# Ambiguity raises.
-#
-# Resolves against the notes tree so a task that exists but was `hwt rm`'d is
-# reported as removed and not as missing — `hcdev` opens an editor and a Claude
-# pane in the worktree, so `hwt restore` is the step in between.
-def hcdev-find-task [task_name: string, project?: string, topic?: string] {
+def hcdev-match-task [task_name: string, project?: string, topic?: string] {
     mut pool = (hcdev-known-tasks)
     if $project != null { $pool = ($pool | where project == $project) }
     if $topic != null { $pool = ($pool | where topic == $topic) }
@@ -98,8 +93,18 @@ def hcdev-find-task [task_name: string, project?: string, topic?: string] {
         $matches | each {|m| print $"  ($m.project)/($m.topic)/($m.task)" }
         error make { msg: $"Task '($task_name)' is ambiguous — narrow it with -p <project> or -t <topic>" }
     }
+    $matches | first
+}
 
-    let found = ($matches | first)
+# Find a task that is checked out, optionally narrowed by project and/or topic.
+# Ambiguity raises.
+#
+# Resolves against the notes tree so a task that exists but was `hwt rm`'d is
+# reported as removed and not as missing — `hcdev` opens an editor and a Claude
+# pane in the worktree, so `hwt restore` is the step in between.
+def hcdev-find-task [task_name: string, project?: string, topic?: string] {
+    let found = (hcdev-match-task $task_name $project $topic)
+    if $found == null { return null }
     if $found.topic == $COORDINATOR_TOPIC {
         error make { msg: $"'($found.task)' is a coordinator, not a worktree — run 'hcdev coordinator ($found.task) -p ($found.project)'" }
     }
@@ -252,6 +257,57 @@ def hcdev-session-live [session: string] {
     if ($m | is-empty) { false } else { not (($m | first) | str contains "EXITED") }
 }
 
+def hcdev-worktree-pids [dir: string] {
+    let result = (do -i {
+        ^find /proc -mindepth 2 -maxdepth 2 -type l "(" -name cwd -o -name exe ")" "(" -lname $dir -o -lname $"($dir)/*" ")" -printf "%h\n"
+    } | complete)
+    if $result.exit_code != 0 and ($result.stdout | str trim) == "" { return [] }
+    $result.stdout
+    | lines
+    | where { ($in | str trim) != "" }
+    | each { $in | str replace "/proc/" "" | into int }
+    | uniq
+}
+
+def hcdev-protected-pids [] {
+    let table = (try { ^ps -e -o pid= -o ppid= | lines | each {|l|
+        let parts = ($l | str trim | split row -r '\s+')
+        { pid: ($parts | get 0 | into int), ppid: ($parts | get 1 | into int) }
+    } } catch { [] })
+
+    mut protected = [$nu.pid]
+    mut current = $nu.pid
+    loop {
+        let row = ($table | where pid == $current)
+        if ($row | is-empty) { break }
+        let ppid = ($row | first | get ppid)
+        if $ppid == 0 or $ppid == 1 or $ppid in $protected { break }
+        $protected = ($protected | append $ppid)
+        $current = $ppid
+    }
+    $protected
+}
+
+def hcdev-close-processes [dir: string] {
+    let protected = (hcdev-protected-pids)
+    let targets = (hcdev-worktree-pids $dir | where { $in not-in $protected })
+    if ($targets | is-empty) { return 0 }
+
+    $targets | each {|p| ^kill -TERM $p | complete | ignore }
+
+    mut waited_ms = 0
+    while $waited_ms < 3000 {
+        let remaining = (hcdev-worktree-pids $dir | where { $in in $targets })
+        if ($remaining | is-empty) { break }
+        sleep 250ms
+        $waited_ms = $waited_ms + 250
+    }
+    let remaining = (hcdev-worktree-pids $dir | where { $in in $targets })
+    $remaining | each {|p| ^kill -KILL $p | complete | ignore }
+
+    $targets | length
+}
+
 def hcdev-runtime-dir [] {
     $env.XDG_RUNTIME_DIR? | default ($env.TMPDIR? | default "/tmp")
 }
@@ -398,6 +454,7 @@ export def main [] {
     print "  hcdev code                       cd to this task's worktree"
     print "  hcdev list                       List running hobby sessions"
     print "  hcdev attach <session>           Attach to an existing session"
+    print "  hcdev close <task> [-p] [-t]     Kill the session, stop its processes, close the window"
     print ""
     print $"Layout:  ~/.config/zellij/layouts/($LAYOUT).kdl"
     print $"Account: ($HOBBY_CONFIG_DIR)  \(via chobby in the Claude pane\)"
@@ -600,6 +657,46 @@ export def --env "hcdev attach" [
     session: string@hcdev-session-completions  # Session name
 ] {
     zellij attach $session
+}
+
+# Close a task's session: kill and delete its zellij session, stop every process
+# still running out of its worktree, and take its window with them (the window
+# dies with its pane process once the session is gone). Idempotent — a session
+# and worktree already gone is `Nothing to close`, not an error.
+#
+# Refuses a coordinator (the reserved topic) and refuses the session you are
+# currently in, so this can never be the thing that kills its own caller —
+# closing the session you're in from inside it is #48's job, not this one's.
+export def "hcdev close" [
+    task: string@hcdev-task-completions               # Task name
+    --project (-p): string@hcdev-project-completions  # Disambiguate across projects
+    --topic (-t): string@hcdev-topic-completions       # Disambiguate across topics
+] {
+    let found = (hcdev-match-task $task $project $topic)
+    if $found == null {
+        error make { msg: $"Task '($task)' not found" }
+    }
+    if $found.topic == $COORDINATOR_TOPIC {
+        error make { msg: $"'($found.task)' is a coordinator — hcdev close does not close coordinator sessions" }
+    }
+
+    let session = (hcdev-session-name $found.project $found.topic $found.task)
+    if $env.ZELLIJ_SESSION_NAME? == $session {
+        error make { msg: $"($session) is the session you are in — hcdev close can't close its own caller" }
+    }
+
+    let had_session = (hcdev-session-live $session)
+    do -i { ^zellij kill-session $session } | complete | ignore
+    do -i { ^zellij delete-session --force $session } | complete | ignore
+
+    let killed = if ($found.path | path exists) { hcdev-close-processes $found.path } else { 0 }
+
+    if not $had_session and $killed == 0 {
+        print "Nothing to close"
+    } else {
+        let session_note = if $had_session { "deleted" } else { "already gone" }
+        print $"Closed ($session): session ($session_note), ($killed) process\(es\) stopped"
+    }
 }
 
 # cd to the notes directory for the current task
