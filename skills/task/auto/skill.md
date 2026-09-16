@@ -246,11 +246,11 @@ is nobody to hand a running application to.
    counted in `rounds`; the cap exists because nobody is at the keyboard to stop
    a loop that is not converging.
 7. **Three rounds spent and something still fails** → write the final
-   `acceptance_result` with `passed: false`, set `phase: await-fix`,
-   `notify-send "<task>" "acceptance failing"` if it exists, print each failed
-   check with its command and evidence, and **end the turn**. No commit and no
-   PR: a change that cannot show its own acceptance is not one to open a PR for,
-   and a coordinator reading `await-fix` stops its list rather than waiting.
+   `acceptance_result` with `passed: false`, set `phase: await-fix`, print
+   each failed check with its command and evidence, and **end the turn**. No
+   commit and no PR: a change that cannot show its own acceptance is not one
+   to open a PR for, and a coordinator reading `await-fix` stops its list
+   rather than waiting.
 
 ______________________________________________________________________
 
@@ -267,8 +267,7 @@ what I am handed.
    Wait a few seconds, `head` the log: a build error is yours to fix before the
    gate. No `run` in the plan (a library, a tool without a UI) → the play step
    is the acceptance observation run as a command, its output printed.
-2. `notify-send "<task>" "ready to play"` if `notify-send` exists.
-3. Record `play` in the state file, set `phase: await-play`, write it, print:
+2. Record `play` in the state file, set `phase: await-play`, write it, print:
    - **what to try** — the acceptance observation verbatim, and where the app is;
    - the diff, one line per file, and any deviation from the plan;
    - build and test evidence, truncated as run;

@@ -200,15 +200,15 @@ line:
 - `outcome: timeout` (exit 2) → wait again. Nothing to report.
 - `outcome: human`, phase `await-fix` → the task ran its own acceptance and
   could not make it pass, so it opened no PR. Set `status: blocked` with the
-  failed check names from the line's `acceptance.failed` in `note`,
-  `notify-send`, and **stop the loop** with a summary. Like a red check in W5
+  failed check names from the line's `acceptance.failed` in `note`, and
+  **stop the loop** with a summary. Like a red check in W5
   this is a decision, not a wait: nobody is going to answer it in that window,
   and the tasks behind it would branch off work that is not landing.
 - `outcome: human`, any other phase → the session stopped at a gate. Set
   `status: awaiting-human` and `note` from the phase — `await-acceptance`:
   *needs acceptance criteria*, `await-play`: *ready to play*, anything else:
-  the phase name. `notify-send "<blurb>" "<task>: <note>"`. Print one line
-  naming the window (`hcdev-<project>-<topic>-<task>`) and what it wants. Then
+  the phase name. Print one line naming the window
+  (`hcdev-<project>-<topic>-<task>`) and what it wants. Then
   wait again with `--after <that phase>` so the call blocks until I have
   answered and the session has moved on (or subscribe to the idle notice again).
 - `outcome: done` → the session has finished and pushed. Read `prs.json` in the
@@ -228,8 +228,8 @@ is the one thing that takes the place of looking at the window.
 **W5 — Merge.** The list holds here until the PR has landed. The task is not
 `done` while it is open, and no `todo` starts behind it.
 
-1. `notify-send "<blurb>" "<task>: PR <url> ready to merge"` when `merge` is
-   `mine`, once, on arriving here — not on every wait.
+1. Print one line naming the PR URL and that it is ready to merge, when
+   `merge` is `mine`, once, on arriving here — not on every wait.
 2. Block on the PR. One shell call, ten minutes, then call again:
    ```bash
    hcoord merged <pr url>            # merge: mine
@@ -247,8 +247,8 @@ is the one thing that takes the place of looking at the window.
      A refusal from `gh` blocks the task: record what it said in `note` and
      stop. Merge commits, not squashes — that is how these repos merge.
    - `outcome: blocked` → a red check, a conflict, or a PR closed unmerged. Set
-     `status: blocked` with the line's `reason` in `note`, `notify-send`, and
-     **stop the loop** with a summary. It is a decision for me, and the tasks
+     `status: blocked` with the line's `reason` in `note`, and **stop the
+     loop** with a summary. It is a decision for me, and the tasks
      behind it would branch off work that is not landing.
    - `outcome: merged` → go to W6.
    - exit 1 → `gh` failed. `status: blocked`, `note` with the error, stop.
@@ -266,8 +266,8 @@ has already closed the issue; this confirms it rather than trusting it.
    ```bash
    gh issue close <number> --reason completed --comment "Merged in <pr url>."
    ```
-2. `status: done`, `updated`, clear `note`, keep `pr`. `notify-send` and a
-   journal line naming the PR. Back to W1.
+2. `status: done`, `updated`, clear `note`, keep `pr`. Print one line naming the task and its PR,
+   and a journal line naming the PR. Back to W1.
 
 `hwt`, `hcdev` and `hcoord` are all on `PATH`; each `nu -l -c` is a fresh
 login shell so the modules are loaded.

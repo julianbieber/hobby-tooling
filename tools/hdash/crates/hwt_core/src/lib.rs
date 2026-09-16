@@ -2,7 +2,7 @@
 //!
 //! Holds everything that is not Bevy-specific: well-known paths (`~/fun_worktrees`,
 //! the hobby notes repo, XDG config/cache files),
-//! detached process spawning (terminals, browsers, notifications), and human-friendly time
+//! detached process spawning (terminals, browsers), and human-friendly time
 //! formatting. Logging goes through the `log` facade, which Bevy's `LogPlugin` bridges into
 //! its tracing output.
 
@@ -135,11 +135,6 @@ pub fn spawn_detached(args: &[&str]) {
 /// Open a URL (e.g. a PR) in Firefox, detached.
 pub fn open_url(url: &str) {
     spawn_detached(&["-f", "firefox", url]);
-}
-
-/// Fire a desktop notification (via `notify-send`), detached. Best-effort.
-pub fn notify(summary: &str, body: &str) {
-    spawn_detached(&["-f", "notify-send", summary, body]);
 }
 
 // ---------------------------------------------------------------------------
