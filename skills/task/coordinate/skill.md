@@ -222,8 +222,8 @@ The `acceptance` object on a wait line — `{passed, checks, failed}`, each fail
 naming its command and exit status — is the evidence a task ran on itself. It is
 the whole of what this session learns about a task's correctness, and reading it
 is the one thing that takes the place of looking at the window.
-- exit 1 → the state file is unreadable. `status: blocked`, `note` with the
-  error, stop and report.
+- exit 1 → the state file never became readable within the timeout. `status:
+  blocked`, `note` with the error, stop and report.
 
 **W5 — Merge.** The list holds here until the PR has landed. The task is not
 `done` while it is open, and no `todo` starts behind it.

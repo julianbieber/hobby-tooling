@@ -69,6 +69,12 @@ transition — and returns when the phase is one a person has to answer
 default timeout is 570 seconds, under the ten minutes Claude Code allows a
 shell call, and a timeout is exit 2 so the coordinator simply calls again.
 
+A state file that cannot be read or parsed is retried on the same poll as one that
+does not exist yet, because the ordinary cause of both is the task session part-way
+through writing it — a zero-byte file is enough. Exit 1 therefore means the file stayed
+unreadable for the whole timeout, which is the only reading under which a coordinator
+blocking its list is right.
+
 The `await-*` prefix is what keeps the two sides independent: `/task:auto` names
 its gates and `wait` matches the shape, so `await-fix` — an unattended run whose
 acceptance would not pass — needed nothing here to be seen.
