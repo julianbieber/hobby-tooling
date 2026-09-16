@@ -1,6 +1,8 @@
 default_shell "nu"
 simplified_ui false
 scrollback_editor "hx"
+// The about tip comes up focused in every fresh window and swallows keystrokes.
+show_startup_tips false
 
 // If you'd like to override the default keybindings completely, be sure to change "keybinds" to "keybinds clear-defaults=true"
 keybinds clear-defaults=true {

@@ -546,6 +546,38 @@ The card is only rescanned by the **Refresh** button, so a restore that stopped 
 worktree left the card reading `Removed` and a second click could report nothing but
 "already present".
 
+## Resolving the Claude pane: `dump-layout` lies about the command, `list-panes` doesn't
+
+`hcdev auto`'s Claude pane has no dependable handle by construction: `hobby-auto`
+names it `claude`, but `zellij action dump-layout` reported that pane's *command*
+as `rust-analyzer` — its sibling's language server — in three of four live sessions
+checked (2026-09-16, zellij 0.44.3). The pane **names** it printed were right in
+all four, so the layout is not crossed; `dump-layout`'s command discovery just
+cannot be trusted, and why it attributes a descendant process to the wrong pane was
+not dug into.
+
+`zellij action list-panes -a --json` and `$ZELLIJ_PANE_ID` are not subject to that
+bug — checked against ground truth (`dump-screen --pane-id <id>`, which reads any
+pane without focusing it) in this task's own session, both agreed. So `hcdev
+claude-pane <task>` resolves via that JSON rather than the layout dump, and prefers
+an id the pane recorded for itself over inferring one: `hauto` writes
+`claude-pane.json` (`session`, `pane_id`, `worktree`, `recorded`) into the task's
+notes dir from `$ZELLIJ_PANE_ID` on every start, which is the issue's suggested
+"stable id recorded when hauto starts" — the *pane* stating its own id is
+authoritative in a way no derivation after the fact can be. The resolver falls back
+to the single live pane whose `terminal_command` is `hauto`/`chobby`, then to the
+single one whose `pane_command` starts with `claude`, and refuses rather than
+guessing when more than one pane matches a step.
+
+**The startup tip is suppressed in `config.kdl`, not the layout**, because it is a
+property of the zellij *client*, not of a layout: a floating `zellij:about` plugin
+pane comes up focused in every fresh window regardless of which layout opened it,
+and it swallows keystrokes until dismissed. `show_startup_tips false` is one line
+in the vendored config that both accounts share, so it silences the tip everywhere
+this config is used, work `cdev` sessions included — there is no per-session
+config short of rendering one, which `hobby-auto` (installed, not generated) does
+not do.
+
 ## HMML is a Bevy dialect here
 
 `lsps/hobby-mml-lsp/grammar.md` is the **source of truth** for HMML (v2) and

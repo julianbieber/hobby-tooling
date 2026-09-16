@@ -5,8 +5,11 @@
 # Runs from the task worktree (~/fun_worktrees/<project>/<topic>/<task>) and reads
 # build-task.json in the task's notes dir. The plan stage is headless and exits
 # when it has written plan.md; the build stage is interactive and runs to the PR.
-# Exit 1 when the cwd is not a task worktree or a stage ends without moving the
-# phase; otherwise the exit code of the last claude process.
+# Records this pane's own id to the notes dir on every start, so a caller can
+# resolve it authoritatively instead of guessing (`hcdev claude-pane`); pass
+# --record-pane to run only that step. Exit 1 when the cwd is not a task
+# worktree or a stage ends without moving the phase; otherwise the exit code
+# of the last claude process.
 
 set -uo pipefail
 
@@ -29,6 +32,24 @@ model_flag() {
   m=$(jaq -r '.model // empty' "$STATE" 2>/dev/null || true)
   [ -n "$m" ] && printf -- '--model\n%s\n' "$m"
 }
+record_pane() {
+  [ -n "${ZELLIJ_PANE_ID:-}" ] || return 1
+  local dir="$NOTES_BASE/$PROJECT/$TOPIC/$TASK"
+  mkdir -p "$dir"
+  jaq -n --arg session "$ZELLIJ_SESSION_NAME" --arg pane_id "terminal_$ZELLIJ_PANE_ID" \
+    --arg worktree "$PWD" --arg recorded "$(date -u +%FT%TZ)" \
+    '{session: $session, pane_id: $pane_id, worktree: $worktree, recorded: $recorded}' \
+    > "$dir/claude-pane.json"
+}
+
+if [ "${1:-}" = --record-pane ]; then
+  if record_pane; then
+    exit 0
+  fi
+  echo "hauto: \$ZELLIJ_PANE_ID is unset, not running inside zellij" >&2
+  exit 1
+fi
+record_pane || true
 
 while :; do
   before=$(phase)
