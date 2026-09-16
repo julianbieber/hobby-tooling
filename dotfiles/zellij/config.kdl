@@ -179,6 +179,16 @@ keybinds clear-defaults=true {
             };
             SwitchToMode "Normal";
         }
+        // Jump to this task's notes and back. One cdev session is one task, so
+        // the session holds a single `notes` tab; zj-notes creates it on first
+        // press, focuses it afterwards, and returns here when pressed from it.
+        bind "Alt m" {
+            Run "zj-notes" {
+                floating true
+                close_on_exit true
+            };
+            SwitchToMode "Normal";
+        }
     }
     shared_except "normal" "locked" {
         bind "Enter" "Esc" { SwitchToMode "Normal"; }
