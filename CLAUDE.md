@@ -447,10 +447,24 @@ is skipped for that task. It is in the file rather than in the conversation so
 a resumed session still knows. `hcoord merged` decides green from `gh`'s
 `statusCheckRollup`, and a repo with no checks at all counts as green: most
 hobby repos have no CI, and the alternative is a list that never moves. A
-merge that cannot be made — a failing check, a conflict, a `gh` refusal — is
-`await-fix` with the reason in `merge_result`, which the coordinator renders
-as a blocked card; on the coordinator's own merge call the same three cases
-are a **stop**, never a longer wait.
+merge that cannot be made — a conflict, a `gh` refusal, or a red check that
+`fix-ci` (below) could not clear — is `await-fix` with the reason in
+`merge_result`, which the coordinator renders as a blocked card; on the
+coordinator's own merge call the same three cases are a **stop**, never a
+longer wait.
+
+**A red check on a task's PR is that task's own diff, and its own session is
+the one holding the branch, the plan and the log** — handing it to a
+coordinator that deliberately knows nothing about the task would be the wrong
+place to fix it. `hcoord ci` separates the failure that is the diff's own from
+the three that are not: the base branch is already red there, a pinned
+revision now needs re-pinning (a project decision, not a repair), or the
+runner died (a bounded rerun, not a code change). The bound is three attempts
+and lives in the binary, not the prompt, so a session that loses count still
+stops. The mechanism is inert in a repo with no CI, which is every repo here
+— recorded in `business-context.md` `## ci-scope`, adding CI to
+`hobby-tooling` would change the merge gate for every task behind it, so it
+is deliberately not part of this change.
 
 **`/task:auto` commits, which `/task:build` never does.** A PR cannot open
 without commits and nobody is at the keyboard between the last gate and the PR,

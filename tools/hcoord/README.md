@@ -5,7 +5,7 @@
 | Type         | terminal app (ratatui) + CLI                                 |
 | Binary       | `hcoord`                                                     |
 | Owner        | @julianbieber                                                |
-| Dependencies | `gh` on PATH for `merged`; `hcdev coordinator` and `/task:coordinate` call it |
+| Dependencies | `gh` on PATH for `merged` and `ci`; `hcdev coordinator` and `/task:coordinate` call it |
 | Status       | experimental                                                 |
 
 ## Description
@@ -17,6 +17,8 @@ hcoord tui <coordinator notes dir>                         the left pane of `hcd
 hcoord wait <task notes dir> [--timeout <s>] [--after <phase>]
                                                            block until a task needs a person or is done
 hcoord merged <pr url> [--timeout <s>] [--ready]           block until its PR has landed
+hcoord ci <pr url> [--spent <n>] [--bound <n>] [--timeout <s>]
+                                                           classify a PR's failing checks
 hcoord status <coordinator notes dir>                      counts, then each task's phase and age
 ```
 
@@ -169,6 +171,49 @@ no CI at all, and the alternative is a list that never moves.
 Both shapes `statusCheckRollup` returns are read: a check run carries
 `conclusion` once it has finished and `status` until then, a commit status
 carries `state`. Reading only one of them would call a red build green.
+
+## `ci` is the fix loop's eyes
+
+A red check on a task's own PR is almost always that task's own diff, and the task's
+own session has everything a coordinator does not: the branch, the plan, and the
+failing log. `hcoord ci <pr url>` polls the same rollup `merged` does, and once the
+checks resolve prints one JSON line and exits — `{pr, outcome, spent, bound}`, plus
+`checks` when green and `case`, `reason`, `check`, `run`, `log` when the checks are
+failing:
+
+- **`green`** — every check passed, or the repo runs none. Same rule as `merged`: a
+  repo with no CI must not deadlock the loop, this one included.
+- **`fix`**, case `own-diff` — the failure is this diff's own. `/task:auto`'s
+  `fix-ci` phase reads `log` and repairs it.
+- **`rerun`**, case `flake` — the log or the verdict looks like a dead runner or a
+  network blip, not a code problem. `fix-ci` reruns the failed jobs and asks again.
+- **`blocked`**, case `not-mine` — the same check is already failing on the base
+  branch's tip. Repairing it here would be widening this diff to fix another task's
+  work.
+- **`blocked`**, case `decision` — the log matches a pinned-revision failure (a
+  `cargo` dependency resolved against a rev that no longer exists). Re-pinning is a
+  project decision, not a mechanical repair.
+- **`timeout`** — the checks never resolved. Call again.
+
+**The bound lives here, not in the prompt.** `--spent` is the number of `fix-ci`
+rounds already spent (`ci_result.rounds`), `--bound` defaults to 3
+(`business-context.md` `## fix-loop-bound`, matching the acceptance-repair cap
+`/task:auto`'s `verify` phase already uses). `fix` and `rerun` turn into `blocked`
+once `spent` reaches `bound`; `not-mine` and `decision` ignore the count entirely,
+because neither resolves by trying again — counting attempts against them would only
+delay the report.
+
+**Classification order matters, and a fact goes first.** A check already red on the
+base branch is not this diff's doing whatever its log says, so that comparison runs
+before any log is even read. Infrastructure comes next and outranks a pinned-revision
+match, because a cancelled run's log describes the runner dying, not the code.
+
+**The log evidence is read from the failing check's own job, not pasted from the
+caller.** `detailsUrl`/`targetUrl` on the check gives a GitHub Actions run and job id;
+`gh run view --job <job> --log`, kept to its last 20 signature-bearing lines (or its
+last 20 lines outright, when nothing looks like a failure) and capped at 2000
+characters. A check with no job behind its URL contributes an empty log rather than
+failing the call.
 
 ## Not part of the hdash workspace
 
