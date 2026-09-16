@@ -26,7 +26,7 @@ The stops are named so `hcoord wait` sees them, and which ones exist depends on
 |---|---|---|
 | start | `await-acceptance`, only when the brief does not say what done looks like | the same |
 | end | none. The plan writes the acceptance observation as commands and the `verify` phase runs them; the PR opens only when they pass | `await-play`, always |
-| failure | `await-fix` — the checks would not pass, or the PR could not be merged | — |
+| failure | `await-fix` — the checks would not pass, the PR could not be merged, or `fix-ci` spent its bound on a red check that would not go green | — |
 
 An unattended run has no reader, so a report it prints is not read: the window
 is off-screen and the pane is about seventeen columns wide. The checks replace
@@ -81,6 +81,8 @@ Task context from `pwd` (`~/fun_worktrees/PROJECT/TOPIC/TASK`). State file at
   "merge_result": { "by": "session", "outcome": "merged|blocked", "pr": "",
     "merge_commit": "", "reason": "", "check": "", "log": "", "tried": [],
     "base": "", "base_updated": true, "checked": "<RFC 3339>" },
+  "ci_result": { "checked": "<RFC 3339>", "outcome": "green|blocked", "rounds": 0,
+    "case": "", "check": "", "run": "", "log": "", "pr": "" },
   "play": { "command": "", "log": "" }, "feedback": [], "rounds": 0,
   "written": "<RFC 3339>", "phase_since": "<RFC 3339>" }
 ```
@@ -96,7 +98,7 @@ by the `merge` phase below.
 Phases: `acceptance`, `await-acceptance`, `plan`, `planned`, `build`,
 `implement`, `comments`, `standards`, then either `verify` and `await-fix`
 (unattended) or `play` and `await-play` (interactive), then `pr`, `merge`,
-`journal`, `done`.
+`fix-ci`, `journal`, `done`.
 
 The stage argument is required. `plan` runs from whatever phase is recorded up
 to `planned`; `build` runs from `planned` to `done`. A `build` invoked with no
@@ -358,12 +360,51 @@ for a person. Set `phase: merge` and continue in the same turn.
 6. Blocked — a red check, a conflict, a `gh` refusal, or the wait running
    out: write `merge_result` with `outcome: blocked`, `reason` (one line),
    `check` (the failing check's name when there is one), `log` (at most three
-   lines, truncated as rule 4 requires), `pr` and `tried`; set
-   `phase: await-fix`, print one line naming the PR and the reason, and **end
-   the turn**. Never rebase, never force, never close the PR:
-   `business-context.md` `## merge-conflicts` says a conflict means something
-   pushed to the default branch outside the run, which is exactly the
-   assumption being violated.
+   lines, truncated as rule 4 requires), `pr` and `tried`. **A red check**
+   (`hcoord merged`'s `reason` starts with `checks failing:`) sets
+   `phase: fix-ci` and continues in the same turn — the failing checks are
+   this session's own to look at before anyone is asked. **Everything else**
+   (a conflict, a closed PR, a `gh` refusal, or the wait running out) sets
+   `phase: await-fix`, prints one line naming the PR and the reason, and
+   **ends the turn**. Never rebase, never force, never
+   close the PR: `business-context.md` `## merge-conflicts` says a conflict
+   means something pushed to the default branch outside the run, which is
+   exactly the assumption being violated.
+
+## Phase `fix-ci` — the session repairs its own red checks
+
+A red check on a task's own PR is almost always that task's own diff, and this
+session holds what a coordinator does not: the branch, the plan, and the
+failing log. `hcoord ci` classifies the failure and applies the bound so a
+session that loses count still stops (`business-context.md`
+`## fix-loop-bound`).
+
+1. `hcoord ci <pr url> --spent <ci_result.rounds>`, Bash `timeout: 600000`.
+2. `outcome: green` → back to `merge` step 2, in the same turn: the checks
+   have to be watched again from the top, since `hcoord ci` only classifies a
+   failure it already saw.
+3. `outcome: fix` (`case: own-diff`) → the failure is this session's own,
+   like a failing test. Repair it reading only the files `log` names, build
+   and test truncated per rule 4, `/comment-pass` over what changed, commit
+   to the rule, push. Increment `rounds`, write `ci_result`, go back to 1.
+4. `outcome: rerun` (`case: flake`) → `gh run rerun --failed <run>` and
+   nothing else: the log says the runner died, not the diff. Increment
+   `rounds`, write `ci_result`, go back to 1.
+5. `outcome: blocked` → write `ci_result` with `outcome: blocked`, `case`,
+   `check`, `log` (at most three lines) and `rounds`; set `phase: await-fix`,
+   print one line naming the PR, the case and the reason, and **end the
+   turn**. `case: not-mine` and `case: decision` land here regardless of
+   `rounds`: neither resolves by trying again, so the bound never applies to
+   them.
+6. `outcome: timeout` → call 1 again. At most **four** calls per round, the
+   same cap the `merge` phase uses.
+
+`ci_result.rounds` counts CI-fix attempts and `acceptance_result.rounds`
+counts the pre-PR repair rounds from the `verify` phase — two counters that
+happen to share the number three by decision (`business-context.md`
+`## fix-loop-bound`), never one counter: a CI failure is discovered only
+after the PR is open, which is after the acceptance rounds have already
+finished spending themselves.
 
 ## Phase `journal`
 
@@ -378,3 +419,6 @@ with the context gaps under them. Set `phase: done`, write the state file
   question, and the turn ends.
 - A sub-skill's clarifying question is answered from the brief and the
   recorded context, or it is a gap. It never becomes a third gate.
+- A task that turns out unimplementable — its done-when cannot be satisfied,
+  or the split was wrong — writes `await-fix` with the reason at the point
+  that becomes clear, rather than building to a PR and stopping anyway.

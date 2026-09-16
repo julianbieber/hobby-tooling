@@ -2,6 +2,7 @@
 //! view of its `tasks.json` in the pane next to it, and a way to block on one task's
 //! pipeline state and on its pull request instead of polling them from a prompt.
 
+mod ci;
 mod clock;
 mod merged;
 mod model;
@@ -20,6 +21,9 @@ usage:
   hcoord merged <pr url> [--timeout <s>] [--ready]
                                                 block until the pull request is merged or something
                                                 blocks it; --ready also returns once it could be merged
+  hcoord ci <pr url> [--spent <n>] [--bound <n>] [--timeout <s>]
+                                                classify the pr's failing checks: fix, rerun, or
+                                                blocked naming which of the three cases it is
   hcoord status <coordinator notes dir>         the counts, then each unfinished task's
                                                 phase and how long it has sat there
 
@@ -27,7 +31,9 @@ usage:
 and {phase_since, written, unchanged_for} when the state file recorded them, and exits 0
 when a state was reached, 2 on timeout, 1 when the file never became readable. `merged`
 prints one JSON line {pr, outcome, state, checks} with the same exit codes, 1 when `gh`
-fails.";
+fails. `ci` prints one JSON line {pr, outcome, spent, bound}, plus {checks} when green
+and {case, reason, check, run, log} when the checks are failing, with the same exit
+codes as `merged`.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -61,6 +67,16 @@ fn main() -> ExitCode {
                 Ok((timeout, ready)) => merged::run(pr, timeout, ready),
                 Err(e) => {
                     eprintln!("hcoord merged: {e}");
+                    ExitCode::from(1)
+                }
+            },
+            None => usage(),
+        },
+        "ci" => match args.get(1) {
+            Some(pr) => match parse_ci_flags(&args[2..]) {
+                Ok((spent, bound, timeout)) => ci::run(pr, spent, bound, timeout),
+                Err(e) => {
+                    eprintln!("hcoord ci: {e}");
                     ExitCode::from(1)
                 }
             },
@@ -132,6 +148,35 @@ fn parse_merged_flags(rest: &[String]) -> Result<(u64, bool), String> {
     Ok((timeout, ready))
 }
 
+fn parse_ci_flags(rest: &[String]) -> Result<(u32, u32, u64), String> {
+    let mut spent = 0u32;
+    let mut bound = ci::DEFAULT_BOUND;
+    let mut timeout = merged::DEFAULT_TIMEOUT_SECS;
+    let mut it = rest.iter();
+    while let Some(flag) = it.next() {
+        let value = it.next().ok_or_else(|| format!("{flag} wants a value"))?;
+        match flag.as_str() {
+            "--spent" => {
+                spent = value
+                    .parse()
+                    .map_err(|_| format!("--spent wants a number, got {value:?}"))?;
+            }
+            "--bound" => {
+                bound = value
+                    .parse()
+                    .map_err(|_| format!("--bound wants a number, got {value:?}"))?;
+            }
+            "--timeout" => {
+                timeout = value
+                    .parse()
+                    .map_err(|_| format!("--timeout wants seconds, got {value:?}"))?;
+            }
+            other => return Err(format!("unexpected argument: {other}")),
+        }
+    }
+    Ok((spent, bound, timeout))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,5 +217,22 @@ mod tests {
         );
         assert!(parse_merged_flags(&args(&["--timeout"])).is_err());
         assert!(parse_merged_flags(&args(&["--bogus"])).is_err());
+    }
+
+    // The `fix-ci` phase spells `--spent`/`--bound` from `ci_result.rounds` on every
+    // call, so these are a contract with the skill rather than a convenience.
+    #[test]
+    fn ci_flags_default_and_parse() {
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            parse_ci_flags(&args(&[])).unwrap(),
+            (0, ci::DEFAULT_BOUND, merged::DEFAULT_TIMEOUT_SECS)
+        );
+        assert_eq!(
+            parse_ci_flags(&args(&["--spent", "2", "--bound", "3", "--timeout", "30"])).unwrap(),
+            (2, 3, 30)
+        );
+        assert!(parse_ci_flags(&args(&["--spent"])).is_err());
+        assert!(parse_ci_flags(&args(&["--bogus", "1"])).is_err());
     }
 }

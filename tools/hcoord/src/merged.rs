@@ -98,19 +98,27 @@ pub fn run(pr: &str, timeout_secs: u64, ready: bool) -> ExitCode {
     }
 }
 
-struct View {
-    state: String,
-    mergeable: String,
-    rollup: Vec<Check>,
+/// One snapshot of a PR's merge state, mergeability and check rollup, as `view` reads
+/// them from `gh pr view`.
+pub(crate) struct View {
+    pub(crate) state: String,
+    pub(crate) mergeable: String,
+    pub(crate) rollup: Vec<Check>,
 }
 
-struct Check {
-    name: String,
-    verdict: String,
+/// One entry from `statusCheckRollup`: its name, its verdict, and the URL a caller can
+/// pull its log from when it failed.
+pub(crate) struct Check {
+    pub(crate) name: String,
+    pub(crate) verdict: String,
+    pub(crate) details_url: String,
 }
 
 impl View {
-    fn checks(&self) -> Checks {
+    /// Reduces the rollup to one verdict: `Failing` if anything failed, else `Pending`
+    /// if anything has not concluded, else `Green`, else `None` when there is no
+    /// rollup at all.
+    pub(crate) fn checks(&self) -> Checks {
         if self.rollup.is_empty() {
             return Checks::None;
         }
@@ -151,9 +159,10 @@ impl View {
         None
     }
 
-    fn failed(&self) -> String {
-        let names: Vec<&str> = self
-            .rollup
+    /// The checks that neither succeeded nor are still running — what `ci` repairs and
+    /// what `failed` names.
+    pub(crate) fn failing(&self) -> Vec<&Check> {
+        self.rollup
             .iter()
             .filter(|c| {
                 !matches!(
@@ -170,13 +179,21 @@ impl View {
                         | ""
                 )
             })
+            .collect()
+    }
+
+    fn failed(&self) -> String {
+        self.failing()
+            .iter()
             .map(|c| c.name.as_str())
-            .collect();
-        names.join(", ")
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
-fn view(pr: &str) -> Result<View, String> {
+/// Runs `gh pr view --json state,mergeable,statusCheckRollup` for `pr` and parses its
+/// output. Err when `gh` cannot be run or exits non-zero.
+pub(crate) fn view(pr: &str) -> Result<View, String> {
     let out = Command::new("gh")
         .args([
             "pr",
@@ -196,7 +213,10 @@ fn view(pr: &str) -> Result<View, String> {
     parse(&String::from_utf8_lossy(&out.stdout))
 }
 
-fn parse(json: &str) -> Result<View, String> {
+/// Parses a `gh pr view --json state,mergeable,statusCheckRollup` response. Err only
+/// on malformed JSON; a response missing an expected field yields an empty default for
+/// it rather than failing.
+pub(crate) fn parse(json: &str) -> Result<View, String> {
     let value: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
     let string = |key: &str| {
         value
@@ -228,7 +248,16 @@ fn parse(json: &str) -> Result<View, String> {
                         .find(|v| !v.is_empty())
                         .unwrap_or("check")
                         .to_owned();
-                    Check { name, verdict }
+                    let details_url = [field("detailsUrl"), field("targetUrl")]
+                        .into_iter()
+                        .find(|v| !v.is_empty())
+                        .unwrap_or_default()
+                        .to_owned();
+                    Check {
+                        name,
+                        verdict,
+                        details_url,
+                    }
                 })
                 .collect()
         })
@@ -266,6 +295,7 @@ mod tests {
                 .map(|(name, verdict)| Check {
                     name: (*name).into(),
                     verdict: (*verdict).into(),
+                    details_url: String::new(),
                 })
                 .collect(),
         }
