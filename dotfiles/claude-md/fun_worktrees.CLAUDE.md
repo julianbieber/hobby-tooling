@@ -59,6 +59,7 @@ hwt restore <task>                       re-create a removed worktree
 hcdev wt <task>                          zellij session: Helix + Claude (hobby account)
 hcdev auto <task> [-w]                   the same, with Claude running /task:auto (plan, then build)
 hcdev coordinator <blurb>                from ~/fun_repos/<project>: task list + Claude
+hcdev close <task> [-p] [-t]             kill its session, stop its processes, close its window
 hcdev notes                              cd to this task's notes dir
 ```
 

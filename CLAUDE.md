@@ -522,6 +522,21 @@ instead. `hcdev-spawn-window` redirects the terminal's stdio to `/dev/null`
 (`o+e> /dev/null`) and `hcdev auto -w` then polls `hcdev-session-live` for up to 20s so
 its own exit code means "the window is up", not just "the fork succeeded".
 
+**Closing a session has the opposite failure: a name pattern can match the caller
+itself.** `hcdev close <task>` tears the session back down — stop what it started,
+`zellij kill-session` + `delete-session`, close the window — and the obvious way to
+find "what it started" is `pkill -f <worktree path>`. That kills the shell that
+typed the command, because the pattern is sitting right there in its own command
+line: exit 144, cleanup half-done. `hcdev-worktree-pids` matches structurally
+instead — a process whose `/proc/<pid>/cwd` or `/proc/<pid>/exe` resolves under the
+worktree — which is a fact about the process, not a string the caller's own argv can
+happen to contain. `hcdev-protected-pids` walks `$nu.pid` and its ancestors so the
+calling shell, its terminal and the Claude process above it are never swept even
+though their cwd is the worktree too. `hcdev close` also refuses a coordinator
+session (the reserved topic is a hand-rolled kill away from someone else's task
+list) and refuses the session you are currently in — ending your own session out
+from under yourself is `#48`'s problem, not this verb's.
+
 `Restore` also runs `hcdev wt` after `hwt restore`, as `Start task` does after `hwt new`.
 The card is only rescanned by the **Refresh** button, so a restore that stopped at the
 worktree left the card reading `Removed` and a second click could report nothing but
