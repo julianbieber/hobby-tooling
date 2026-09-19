@@ -1,12 +1,14 @@
 //! `hcoord` — what a coordinator session needs from outside the Claude pane: a live
-//! view of its `tasks.json` in the pane next to it, and a way to block on one task's
-//! pipeline state and on its pull request instead of polling them from a prompt.
+//! view of its `tasks.json` in the pane next to it, a way to block on one task's
+//! pipeline state and on its pull request instead of polling them from a prompt, and
+//! the seeding of a task's brief from the goal file its list was split from.
 
 mod ci;
 mod clock;
 mod goal;
 mod merged;
 mod model;
+mod seed;
 mod tui;
 mod wait;
 
@@ -31,6 +33,9 @@ usage:
                                                 check a goal file, and with --tasks that every
                                                 scenario is owned by exactly one task
   hcoord goal show <goal.md> <id>...            print the named scenarios verbatim
+  hcoord seed <coordinator notes dir> <task> [--force]
+                                                write the task's build-task.json and
+                                                business-context.md from tasks.json and its goal
 
 `wait` prints one JSON line {phase, outcome}, plus {acceptance} when the run recorded one
 and {phase_since, written, unchanged_for} when the state file recorded them, and exits 0
@@ -119,6 +124,16 @@ fn main() -> ExitCode {
             }
             _ => usage(),
         },
+        "seed" => match (args.get(1), args.get(2)) {
+            (Some(dir), Some(task)) => match parse_seed_flags(&args[3..]) {
+                Ok(force) => seed::run(&PathBuf::from(dir), task, force),
+                Err(e) => {
+                    eprintln!("hcoord seed: {e}");
+                    ExitCode::from(1)
+                }
+            },
+            _ => usage(),
+        },
         _ => usage(),
     }
 }
@@ -141,6 +156,17 @@ fn parse_goal_flags(rest: &[String]) -> Result<Option<PathBuf>, String> {
         }
     }
     Ok(tasks)
+}
+
+fn parse_seed_flags(rest: &[String]) -> Result<bool, String> {
+    let mut force = false;
+    for flag in rest {
+        match flag.as_str() {
+            "--force" => force = true,
+            other => return Err(format!("unexpected argument: {other}")),
+        }
+    }
+    Ok(force)
 }
 
 fn parse_wait_flags(rest: &[String]) -> Result<(u64, Option<String>), String> {
@@ -250,6 +276,16 @@ mod tests {
         );
         assert!(parse_merged_flags(&args(&["--timeout"])).is_err());
         assert!(parse_merged_flags(&args(&["--bogus"])).is_err());
+    }
+
+    // `--force` is the one way to overwrite a seeded task, so anything else after the
+    // task must be refused rather than read as consent.
+    #[test]
+    fn seed_flags_accept_only_force() {
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(!parse_seed_flags(&args(&[])).unwrap());
+        assert!(parse_seed_flags(&args(&["--force"])).unwrap());
+        assert!(parse_seed_flags(&args(&["--frce"])).is_err());
     }
 
     // The `fix-ci` phase spells `--spent`/`--bound` from `ci_result.rounds` on every

@@ -22,6 +22,8 @@ hcoord ci <pr url> [--spent <n>] [--bound <n>] [--timeout <s>]
 hcoord status <coordinator notes dir>                      counts, then each task's phase and age
 hcoord goal lint <goal.md> [--tasks <tasks.json>]          check a goal file, and its split
 hcoord goal show <goal.md> <id>...                         print scenarios verbatim
+hcoord seed <coordinator notes dir> <task> [--force]       write a task's build-task.json and
+                                                           business-context.md from its goal
 ```
 
 ## `tui` shows `tasks.json` and nothing else
@@ -236,3 +238,22 @@ owner and every task at least one scenario. `show` prints scenarios verbatim so 
 brief quotes them rather than paraphrasing. Both are plain text with `file:line`
 findings and exit 1 when there is one; nothing here is JSON because a person
 reads it.
+
+## `seed` writes a task's brief from the goal
+
+`hcoord seed <coordinator notes dir> <task>` is what `/task:coordinate` W3 calls
+when `tasks.json` names a `goal`, instead of assembling the state file in a
+prompt. It writes the task's `build-task.json` — `acceptance` being the task's
+scenarios exactly as `goal show` prints them, `goal` and `scenarios` recording
+where they came from, and a `brief` that quotes the coordinator's description, the
+goal's intent, the screens the scenarios name (with the capture's path when
+`screens/<name>.png` exists beside the goal), and what depends on the task. It
+also writes `business-context.md` with the goal's decision blocks that name the
+task or one of its scenarios as a whole word; when none does, no such file is
+written.
+
+It refuses, writing nothing, a goal that fails `lint` (an open `?` included), a
+task that owns no scenario, a list with no `goal`, and a task whose notes already
+hold a `build-task.json` — `--force` overwrites both files. It makes no network
+call: for a `gh-<n>` task the brief names the issue and the `Closes #<n>` line the
+PR needs, and the issue's own text is not read.

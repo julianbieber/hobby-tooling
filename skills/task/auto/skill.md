@@ -71,6 +71,7 @@ Task context from `pwd` (`~/fun_worktrees/PROJECT/TOPIC/TASK`). State file at
 ```json
 { "phase": "acceptance", "auto": true, "model": "sonnet",
   "coordinator": "<notes dir, or absent>", "merge": "mine|coordinator",
+  "goal": "<path to goal.md, when seeded from one>", "scenarios": ["S1"],
   "brief_source": "coordinator|description|issue", "brief": "<verbatim>",
   "acceptance": "<the done-when observation, verbatim>",
   "context_questions": [], "plan": "plan.md",
@@ -93,7 +94,8 @@ coordinator seeded it.** A state file this skill writes for itself sets
 `auto: false`, so a `hcdev auto <task>` typed by hand keeps the play gate.
 **`merge`** is seeded by the coordinator from its `tasks.json`; **absent means
 `mine`**, so a hand-typed `hcdev auto` never merges. `merge_result` is written
-by the `merge` phase below.
+by the `merge` phase below. `goal` and `scenarios` are written by `hcoord seed`
+and absent otherwise.
 
 Phases: `acceptance`, `await-acceptance`, `plan`, `planned`, `build`,
 `implement`, `comments`, `standards`, then either `verify` and `await-fix`

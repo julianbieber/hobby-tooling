@@ -7,12 +7,36 @@ use std::process::ExitCode;
 
 use crate::model::Coordinator;
 
-/// One `### <name> (<qualifier>)` under `## Screens`.
+/// One `### <name> (<qualifier>)` under `## Screens`, with the heading and everything
+/// beneath it kept verbatim so a brief can quote the drawing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Screen {
     pub name: String,
     pub qualifier: String,
     pub line: usize,
+    pub text: String,
+}
+
+/// One `- **<handle>** …` bullet under `## Decisions`, with its indented continuation
+/// lines, kept verbatim.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Decision {
+    pub handle: String,
+    pub text: String,
+    pub line: usize,
+}
+
+impl Decision {
+    /// Whether `id` — a scenario id or a task name — occurs in the block as a whole
+    /// word, so `S1` is not found in `S10` and a task name is not found in a longer one.
+    pub fn names(&self, id: &str) -> bool {
+        let word = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
+        self.text.match_indices(id).any(|(at, _)| {
+            let before = self.text[..at].chars().next_back();
+            let after = self.text[at + id.len()..].chars().next();
+            !before.is_some_and(word) && !after.is_some_and(word)
+        })
+    }
 }
 
 /// One `### S<n> <title>    screen: <name>` under `## Scenarios`, with its body
@@ -44,6 +68,8 @@ pub struct Widget {
 #[derive(Clone, Debug, Default)]
 pub struct Goal {
     pub sections: BTreeSet<String>,
+    pub intent: String,
+    pub decisions: Vec<Decision>,
     pub screens: Vec<Screen>,
     pub scenarios: Vec<Scenario>,
     pub widgets: Vec<Widget>,
@@ -66,6 +92,9 @@ pub fn parse(text: &str) -> Goal {
     let mut section = String::new();
     let mut current: Option<Scenario> = None;
     let mut in_table_header = false;
+    let mut in_screen = false;
+    let mut in_decision = false;
+    let mut intent = String::new();
 
     for (index, raw) in text.lines().enumerate() {
         let line = index + 1;
@@ -75,6 +104,8 @@ pub fn parse(text: &str) -> Goal {
             if let Some(s) = current.take() {
                 goal.scenarios.push(s);
             }
+            in_screen = false;
+            in_decision = false;
             section = name.split('(').next().unwrap_or("").trim().to_string();
             goal.sections.insert(section.clone());
             in_table_header = section == "Widgets";
@@ -86,6 +117,26 @@ pub fn parse(text: &str) -> Goal {
         }
 
         match section.as_str() {
+            "Intent" => {
+                intent.push_str(raw);
+                intent.push('\n');
+            }
+            "Decisions" => {
+                if let Some(rest) = raw.strip_prefix("- **") {
+                    let handle = rest.split("**").next().unwrap_or("").to_string();
+                    goal.decisions.push(Decision {
+                        handle,
+                        text: format!("{raw}\n"),
+                        line,
+                    });
+                    in_decision = true;
+                } else if trimmed.is_empty() || raw.starts_with("- ") {
+                    in_decision = false;
+                } else if in_decision && let Some(d) = goal.decisions.last_mut() {
+                    d.text.push_str(raw);
+                    d.text.push('\n');
+                }
+            }
             "Screens" => {
                 if let Some(head) = raw.strip_prefix("### ") {
                     let (name, qualifier) = split_qualifier(head);
@@ -93,7 +144,12 @@ pub fn parse(text: &str) -> Goal {
                         name,
                         qualifier,
                         line,
+                        text: format!("{raw}\n"),
                     });
+                    in_screen = true;
+                } else if in_screen && let Some(s) = goal.screens.last_mut() {
+                    s.text.push_str(raw);
+                    s.text.push('\n');
                 }
             }
             "Scenarios" => {
@@ -147,7 +203,21 @@ pub fn parse(text: &str) -> Goal {
     if let Some(s) = current.take() {
         goal.scenarios.push(s);
     }
+    for screen in &mut goal.screens {
+        screen.text = trim_blank_lines(&screen.text);
+    }
+    goal.intent = trim_blank_lines(&intent);
     goal
+}
+
+fn trim_blank_lines(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines.iter().position(|l| !l.trim().is_empty());
+    let end = lines.iter().rposition(|l| !l.trim().is_empty());
+    match (start, end) {
+        (Some(a), Some(b)) => lines[a..=b].iter().map(|l| format!("{l}\n")).collect(),
+        _ => String::new(),
+    }
 }
 
 /// Every check that holds within one goal file. Empty means clean.
@@ -355,6 +425,29 @@ pub fn run_lint(goal_path: &Path, tasks_path: Option<&Path>) -> ExitCode {
     ExitCode::from(1)
 }
 
+/// The text `hcoord goal show` prints for `ids`: per id, in the order asked, the
+/// scenario's heading reconstructed as `### <id> <title>    screen: <name>` and its
+/// body verbatim. `Err` names every id the goal lacks, and nothing is rendered then.
+pub fn show_text(goal: &Goal, ids: &[String]) -> Result<String, Vec<String>> {
+    let mut out = String::new();
+    let mut missing = Vec::new();
+    for id in ids {
+        match goal.scenarios.iter().find(|s| &s.id == id) {
+            Some(s) => {
+                let screen = s.screen.as_deref().unwrap_or("");
+                out.push_str(&format!("### {} {}    screen: {screen}\n", s.id, s.title));
+                out.push_str(&s.text);
+            }
+            None => missing.push(id.clone()),
+        }
+    }
+    if missing.is_empty() {
+        Ok(out)
+    } else {
+        Err(missing)
+    }
+}
+
 /// `hcoord goal show <goal.md> <id>...`: print the named scenarios verbatim,
 /// heading and body, in the order asked; exit 1 naming any id the goal lacks.
 pub fn run_show(goal_path: &Path, ids: &[String]) -> ExitCode {
@@ -365,23 +458,15 @@ pub fn run_show(goal_path: &Path, ids: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let goal = parse(&text);
-    let mut missing = Vec::new();
-    for id in ids {
-        match goal.scenarios.iter().find(|s| &s.id == id) {
-            Some(s) => {
-                let screen = s.screen.as_deref().unwrap_or("");
-                println!("### {} {}    screen: {screen}", s.id, s.title);
-                print!("{}", s.text);
-            }
-            None => missing.push(id.as_str()),
+    match show_text(&parse(&text), ids) {
+        Ok(out) => {
+            print!("{out}");
+            ExitCode::SUCCESS
         }
-    }
-    if missing.is_empty() {
-        ExitCode::SUCCESS
-    } else {
-        eprintln!("no such scenario: {}", missing.join(", "));
-        ExitCode::from(1)
+        Err(missing) => {
+            eprintln!("no such scenario: {}", missing.join(", "));
+            ExitCode::from(1)
+        }
     }
 }
 
@@ -619,5 +704,64 @@ mod tests {
             goal.scenarios[0].text,
             "    1. `cd there && run`\n    -> the list shows it\n    widgets: none new\n"
         );
+    }
+
+    // Pins `show_text` as the one renderer behind `run_show` and `seed`: order as asked,
+    // heading reconstructed, and every missing id named.
+    #[test]
+    fn show_text_renders_in_the_order_asked_and_names_what_is_missing() {
+        let goal = parse(CLEAN);
+        let out = show_text(&goal, &["S2".into(), "S1".into()]).unwrap();
+        assert!(out.starts_with("### S2 add one    screen: editor.main\n    1. click [+ add]\n"));
+        assert!(out.contains("### S1 open it    screen: editor.main\n    1. `cd there && run`\n"));
+        assert_eq!(
+            show_text(&goal, &["S1".into(), "S9".into()]),
+            Err(vec!["S9".to_string()])
+        );
+    }
+
+    // Pins that a decision keeps its indented continuation lines and that a blank line
+    // or the next bullet ends it.
+    #[test]
+    fn a_decision_keeps_its_continuation_lines_and_a_blank_line_ends_it() {
+        let text = CLEAN.replace(
+            "- **a** — \"said\"\n",
+            "- **a** — \"said\n  and more\"\n- **b** — \"next\"\n\nstray\n",
+        );
+        let goal = parse(&text);
+        assert_eq!(goal.decisions.len(), 2);
+        assert_eq!(goal.decisions[0].handle, "a");
+        assert_eq!(goal.decisions[0].text, "- **a** — \"said\n  and more\"\n");
+        assert_eq!(goal.decisions[1].text, "- **b** — \"next\"\n");
+    }
+
+    // Pins `names` as whole-word: `S1` is not found in `S10`, nor `b-one` in `b-one-more`.
+    #[test]
+    fn names_matches_whole_words_only() {
+        let d = Decision {
+            handle: "h".into(),
+            text: "- **h** — S10 and b-one-more, but also (S2).\n".into(),
+            line: 1,
+        };
+        assert!(!d.names("S1"));
+        assert!(!d.names("b-one"));
+        assert!(d.names("S10"));
+        assert!(d.names("S2"));
+    }
+
+    // Pins a screen's `text` as its heading and drawing up to the next heading, without
+    // trailing blank lines, and the intent body likewise.
+    #[test]
+    fn a_screen_keeps_its_drawing_up_to_the_next_heading() {
+        let goal = parse(CLEAN);
+        assert_eq!(
+            goal.screens[0].text,
+            "### editor.main (exists)\n    +---+\n"
+        );
+        assert_eq!(
+            goal.screens[1].text,
+            "### editor.main (target)\n    +---+\n    changes: x\n"
+        );
+        assert_eq!(goal.intent, "> words\n");
     }
 }

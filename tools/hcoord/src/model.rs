@@ -73,6 +73,9 @@ pub struct TaskEntry {
     /// Scenario ids of the coordinator's goal file this task owns; its acceptance.
     #[serde(default)]
     pub scenarios: Vec<String>,
+    /// Build-stage model for this task; the list's `model` when absent.
+    #[serde(default)]
+    pub model: Option<String>,
     /// Current status; `todo` when absent.
     #[serde(default = "default_status")]
     pub status: Status,
@@ -115,6 +118,9 @@ pub struct Coordinator {
     /// `YYYY-MM-DD` the coordinator was created.
     #[serde(default)]
     pub created: Option<String>,
+    /// Build-stage model for every task that names none.
+    #[serde(default)]
+    pub model: Option<String>,
     /// Who merges each task's PR; `mine` when absent.
     #[serde(default)]
     pub merge: MergeBy,
