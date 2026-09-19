@@ -64,10 +64,12 @@ every change, so the list you write is the list I see.
    { "project": "wusel", "blurb": "food-economy",
      "description": "<verbatim>", "created": "2026-09-11",
      "model": "sonnet", "merge": "mine",
+     "goal": "../../planning/food-economy/goal.md",
      "tasks": [
        { "task": "food-economy-fields", "topic": "food-economy",
          "title": "Fields grow wheat over the seasons",
          "done_when": "place a field, watch it fill by autumn",
+         "scenarios": ["S1"],
          "depends_on": [], "status": "todo",
          "pr": null, "note": null, "updated": null } ] }
    ```
@@ -75,6 +77,7 @@ every change, so the list you write is the list I see.
    `done`, `blocked`. `model` is what the build stage runs on; a task entry may
    carry its own `model` to override it. The plan stage always runs on the
    account default. `merge` is `mine` or `coordinator` and defaults to `mine`.
+   `goal` is optional; when present every task names the scenario ids it owns.
 4. **Branch on state.** Empty list and a description → *carve*. Empty list and
    no description → ask for one and stop. Non-empty list → *work*, unless a
    description was given as well, in which case ask whether it replaces or
@@ -148,7 +151,22 @@ are not `done`, and `done` now means merged.
    ```bash
    nu -l -c "hwt new '<task>' -p '<project>' -t '<topic>' -b '<base branch>' --no-cd"
    ```
-2. Seed the task's pipeline state at
+2. Seed the task's pipeline state. **When `tasks.json` names a `goal`**, run
+
+   ```bash
+   hcoord seed <coordinator notes dir> <task>
+   ```
+
+   It writes `build-task.json` and `business-context.md` into the task's notes
+   dir, and the brief is its: the coordinator's description, the goal's intent
+   and the decisions that name the task or its scenarios, the scenarios the task
+   owns exactly as `hcoord goal show` prints them (that is `acceptance`), the
+   screens they name, and what depends on the task. Do not write either file
+   yourself, and skip step 3. Exit 1 — the goal does not lint, the task owns no
+   scenario, or it is already seeded — is `status: blocked` with `note` from its
+   stderr line; stop the loop, the same shape as W4's exit 1.
+
+   **When it names no `goal`**, seed by hand as before, at
    `~/fun_repos/hobby-mimisbrunnr/notes/<project>/<topic>/<task>/build-task.json`:
    ```json
    { "phase": "acceptance", "auto": true,
@@ -170,9 +188,10 @@ are not `done`, and `done` now means merged.
    from the split, its `done_when`, what it depends on and what it must not
    break, and the recorded answers that concern it — copied verbatim under
    their handles, never summarised.
-3. Seed the task's `business-context.md` with those same answer blocks, copied
-   verbatim from the coordinator's file, so `/comment-pass` in that session
-   can cite them. Skip the file when no answer concerns the task.
+3. Only when seeding by hand: seed the task's `business-context.md` with those
+   same answer blocks, copied verbatim from the coordinator's file, so
+   `/comment-pass` in that session can cite them. Skip the file when no answer
+   concerns the task.
 4. Open the session in its own window:
    ```bash
    nu -l -c "hcdev auto '<task>' -p '<project>' -t '<topic>' --window"

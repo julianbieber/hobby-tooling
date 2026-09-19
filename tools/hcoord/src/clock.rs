@@ -56,6 +56,20 @@ pub fn parse_rfc3339(s: &str) -> Option<i64> {
     Some(days * 86400 + secs_of_day - offset_secs)
 }
 
+/// Render seconds since the Unix epoch as `YYYY-MM-DDTHH:MM:SSZ`, the shape
+/// `parse_rfc3339` reads back. Its first ten characters are the UTC date.
+pub fn rfc3339_utc(unix: i64) -> String {
+    let days = unix.div_euclid(86400);
+    let secs = unix.rem_euclid(86400);
+    let (year, month, day) = civil_from_days(days);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        secs / 3600,
+        (secs % 3600) / 60,
+        secs % 60
+    )
+}
+
 /// Seconds between `timestamp` and now, when it parses. Can come back negative
 /// when the writer's clock runs ahead of the reader's.
 pub fn seconds_since(timestamp: &str) -> Option<i64> {
@@ -99,9 +113,36 @@ fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
     era * 146097 + day_of_era - 719468
 }
 
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let day_of_era = z - era * 146097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36524 - day_of_era / 146096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_p = (5 * day_of_year + 2) / 153;
+    let day = (day_of_year - (153 * month_p + 2) / 5 + 1) as u32;
+    let month = if month_p < 10 {
+        month_p + 3
+    } else {
+        month_p - 9
+    } as u32;
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    (year, month, day)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Pins `rfc3339_utc` as the inverse of `parse_rfc3339` at the epoch and on a leap day.
+    #[test]
+    fn rfc3339_utc_round_trips_through_the_parser() {
+        for t in [0, 1_704_067_200, 1_709_208_000, 1_789_829_140] {
+            assert_eq!(parse_rfc3339(&rfc3339_utc(t)), Some(t));
+        }
+        assert_eq!(rfc3339_utc(1_709_208_000), "2024-02-29T12:00:00Z");
+    }
 
     // The epoch itself is the simplest fixed point days_from_civil has to land on.
     #[test]
