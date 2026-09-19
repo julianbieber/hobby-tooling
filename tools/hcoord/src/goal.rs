@@ -109,7 +109,7 @@ pub fn parse(text: &str) -> Goal {
                         s.steps += 1;
                     } else if trimmed.starts_with("->") {
                         s.arrows += 1;
-                    } else if trimmed == "hand" || trimmed.starts_with("hand ") {
+                    } else if is_hand(trimmed) {
                         s.hand = true;
                     } else if let Some(list) = trimmed.strip_prefix("widgets:") {
                         s.widgets = widget_names(list);
@@ -422,6 +422,13 @@ fn scenario_head(head: &str, line: usize) -> Scenario {
     }
 }
 
+fn is_hand(trimmed: &str) -> bool {
+    trimmed == "hand"
+        || trimmed
+            .strip_prefix("hand")
+            .is_some_and(|rest| rest.trim_start().starts_with("<-"))
+}
+
 fn is_step(trimmed: &str) -> bool {
     let digits: String = trimmed.chars().take_while(char::is_ascii_digit).collect();
     !digits.is_empty() && trimmed[digits.len()..].starts_with(". ")
@@ -505,6 +512,17 @@ mod tests {
     fn a_heading_parenthetical_is_not_part_of_the_name() {
         let text = CLEAN.replace("## Decisions", "## Decisions (my words, verbatim)");
         assert_eq!(lint(&parse(&text)), Vec::new());
+    }
+
+    // `hand` is a marker on its own line, optionally followed by a `<-` aside; a
+    // step or observation that happens to continue onto a line starting with the
+    // word must not turn a scriptable scenario into one nobody runs.
+    #[test]
+    fn hand_is_only_the_marker_on_its_own_line() {
+        let prose = CLEAN.replace("    hand\n", "    hand checks are counted\n");
+        assert!(!parse(&prose).scenarios[1].hand);
+        let aside = CLEAN.replace("    hand\n", "    hand      <- nobody can script it\n");
+        assert!(parse(&aside).scenarios[1].hand);
     }
 
     // A `?` is how an unanswered question is marked while the goal is being
