@@ -4,6 +4,7 @@
 
 mod ci;
 mod clock;
+mod goal;
 mod merged;
 mod model;
 mod tui;
@@ -26,6 +27,10 @@ usage:
                                                 blocked naming which of the three cases it is
   hcoord status <coordinator notes dir>         the counts, then each unfinished task's
                                                 phase and how long it has sat there
+  hcoord goal lint <goal.md> [--tasks <tasks.json>]
+                                                check a goal file, and with --tasks that every
+                                                scenario is owned by exactly one task
+  hcoord goal show <goal.md> <id>...            print the named scenarios verbatim
 
 `wait` prints one JSON line {phase, outcome}, plus {acceptance} when the run recorded one
 and {phase_since, written, unchanged_for} when the state file recorded them, and exits 0
@@ -101,6 +106,19 @@ fn main() -> ExitCode {
             }
             None => usage(),
         },
+        "goal" => match (args.get(1).map(String::as_str), args.get(2)) {
+            (Some("lint"), Some(path)) => match parse_goal_flags(&args[3..]) {
+                Ok(tasks) => goal::run_lint(&PathBuf::from(path), tasks.as_deref()),
+                Err(e) => {
+                    eprintln!("{e}\n\n{USAGE}");
+                    ExitCode::from(1)
+                }
+            },
+            (Some("show"), Some(path)) if args.len() > 3 => {
+                goal::run_show(&PathBuf::from(path), &args[3..])
+            }
+            _ => usage(),
+        },
         _ => usage(),
     }
 }
@@ -108,6 +126,21 @@ fn main() -> ExitCode {
 fn usage() -> ExitCode {
     eprintln!("{USAGE}");
     ExitCode::from(1)
+}
+
+fn parse_goal_flags(rest: &[String]) -> Result<Option<PathBuf>, String> {
+    let mut tasks = None;
+    let mut it = rest.iter();
+    while let Some(flag) = it.next() {
+        match flag.as_str() {
+            "--tasks" => {
+                let value = it.next().ok_or_else(|| format!("{flag} wants a value"))?;
+                tasks = Some(PathBuf::from(value));
+            }
+            other => return Err(format!("unexpected argument: {other}")),
+        }
+    }
+    Ok(tasks)
 }
 
 fn parse_wait_flags(rest: &[String]) -> Result<(u64, Option<String>), String> {

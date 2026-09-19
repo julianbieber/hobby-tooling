@@ -1202,6 +1202,40 @@ them. `just check-placeholders` no longer exists to find them:
 
 [bevy-website#2551]: https://github.com/bevyengine/bevy-website/pull/2551
 
+## A goal file is what an unattended run is judged against
+
+Seven coordinator runs and 48 merged PRs produced work that matched its
+description and missed what I pictured. The description I write is three to
+six lines of intent; every question, issue and acceptance after it was the
+model's reading of its own answers, and my picture of the screen never entered
+the record. Every divergence those runs left behind was an unstated screen, a
+spec at odds with itself, or a bound nobody named — and the one gate that would
+have shown it, a person at the running app, is off in every unattended run.
+
+So the front of the pipeline gains a **goal file**:
+`notes/<project>/planning/<blurb>/goal.md`, written once with me in one
+sitting, in screens (captured, then drawn as ASCII with `changes / unchanged /
+hides`) and scenarios (a gesture per step, one `->`, `hand` when nobody can
+script it), plus the widget inventory, my decisions verbatim, and what is
+deliberately left to the build. `skills/task/goal/README.md` is the format;
+`hcoord goal lint` checks the cross-references, and with `--tasks` that every
+scenario is owned by exactly one task. Nothing downstream paraphrases a
+scenario: a brief quotes it (`hcoord goal show`), and it is the acceptance.
+
+Two things the format decided against. **Not a grammar** — HMML and HSTRUCT
+each cost a parser and an LSP, and this is markdown with a linter that can
+grow into one if the shape holds. **No `Recommended` on a UX question** — in
+the planning sessions I picked the recommended option in 12 of 14, which is
+the model choosing dressed as a question; anything that is a picture is asked
+open.
+
+The first goal (`bevy_pbr_generator`, texture projects, 2026-09-19) added four
+sections the plan had not foreseen — Decisions inside the goal, Current state,
+a directory tree as a screen, Left to the build — which is why the format was
+written by writing one before any skill automates it. The interview skill, the
+seed from scenarios, `hand` in `verify`, and the judgement pass at the end of a
+run are the open work; the plan is in the task's notes.
+
 ## Task shaping lives in CLAUDE.md, not in the skill that applies it
 
 The rules for carving a project into issues — six of them, with one labelled
