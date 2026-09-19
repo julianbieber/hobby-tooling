@@ -20,6 +20,8 @@ hcoord merged <pr url> [--timeout <s>] [--ready]           block until its PR ha
 hcoord ci <pr url> [--spent <n>] [--bound <n>] [--timeout <s>]
                                                            classify a PR's failing checks
 hcoord status <coordinator notes dir>                      counts, then each task's phase and age
+hcoord goal lint <goal.md> [--tasks <tasks.json>]          check a goal file, and its split
+hcoord goal show <goal.md> <id>...                         print scenarios verbatim
 ```
 
 ## `tui` shows `tasks.json` and nothing else
@@ -222,3 +224,15 @@ workspace would put the Bevy dependency graph and its optimised-dependency
 profile in front of a tool that builds in ten seconds on its own. `hdash` reads
 the `status` field of `tasks.json` with `serde_json::Value` rather than
 depending on this crate, for the same reason — it reads `merge` the same way.
+
+## `goal` reads the UX spec a run is judged against
+
+A goal file (`skills/task/goal/README.md` has the format) is what a coordinator's
+tasks are split from: each task's `scenarios` names the ids it owns, and the
+coordinator's `goal` names the file. `lint` checks the file on its own — every
+scenario on a drawn screen, one observation each, every widget it names in the
+table, no `?` left — and with `--tasks` that every scenario has exactly one
+owner and every task at least one scenario. `show` prints scenarios verbatim so a
+brief quotes them rather than paraphrasing. Both are plain text with `file:line`
+findings and exit 1 when there is one; nothing here is JSON because a person
+reads it.

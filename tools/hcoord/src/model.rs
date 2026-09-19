@@ -70,6 +70,9 @@ pub struct TaskEntry {
     /// Tasks (by `task`) whose branch this one builds on.
     #[serde(default)]
     pub depends_on: Vec<String>,
+    /// Scenario ids of the coordinator's goal file this task owns; its acceptance.
+    #[serde(default)]
+    pub scenarios: Vec<String>,
     /// Current status; `todo` when absent.
     #[serde(default = "default_status")]
     pub status: Status,
@@ -115,6 +118,9 @@ pub struct Coordinator {
     /// Who merges each task's PR; `mine` when absent.
     #[serde(default)]
     pub merge: MergeBy,
+    /// The goal file the tasks were split from, relative to the notes directory.
+    #[serde(default)]
+    pub goal: Option<String>,
     /// The list, in the order it is worked.
     #[serde(default)]
     pub tasks: Vec<TaskEntry>,
@@ -231,7 +237,12 @@ impl Coordinator {
                 if state.is_terminal() || state.phase.is_empty() {
                     return None;
                 }
-                Some(format!("  {}. {} — {}", i + 1, t.task, state.phase_summary()))
+                Some(format!(
+                    "  {}. {} — {}",
+                    i + 1,
+                    t.task,
+                    state.phase_summary()
+                ))
             })
             .collect()
     }
