@@ -24,6 +24,9 @@ hcoord goal lint <goal.md> [--tasks <tasks.json>]          check a goal file, an
 hcoord goal show <goal.md> <id>...                         print scenarios verbatim
 hcoord seed <coordinator notes dir> <task> [--force]       write a task's build-task.json and
                                                            business-context.md from its goal
+hcoord capture <task notes dir> <scenario> --window <name> | --text <file>
+                                                           write screens/<scenario>.png for a hand
+                                                           scenario: an X11 window, or text rendered
 ```
 
 ## `tui` shows `tasks.json` and nothing else
@@ -111,6 +114,11 @@ carries that too:
  "name": "switch documents"}], "passed": false},
  "outcome": "human", "phase": "await-fix"}
 ```
+
+A scenario the goal marks `hand` is not in `failed` and is not counted as a pass:
+the object then carries `hand`, the number of checks nobody ran, and the tui tally
+reads `3 pass · 1 hand`. `hand` is absent when there were none, so a run without
+one prints the line it always did.
 
 That object is the point of the whole field. A coordinator cannot read the task's
 own pane — the window is off-screen and about seventeen columns wide — so the
@@ -257,3 +265,23 @@ task that owns no scenario, a list with no `goal`, and a task whose notes alread
 hold a `build-task.json` — `--force` overwrites both files. It makes no network
 call: for a `gh-<n>` task the brief names the issue and the `Closes #<n>` line the
 PR needs, and the issue's own text is not read.
+
+## A hand scenario is captured, not checked
+
+`hcoord capture <task notes dir> <scenario> --window <name> | --text <file>` writes
+`screens/<scenario>.png` into the task's notes directory and prints that relative
+path. `verify` calls it for each scenario a goal marks `hand`, and records the
+path on the check as `screen`.
+
+The artefact is always a png because the pass that judges a run looks at pictures.
+The two sources are there because a goal's screens are of two kinds: a window of
+the running application, or a file or a command's output. A png of rendered text is
+still the picture. `--text -` reads standard input, so `<cmd> | hcoord capture …
+--text -` captures a command's output without a temporary file.
+
+The window source captures only a window the X server has mapped. One parked on an
+off-screen tag fails rather than writing a blank image, and a name matching more than
+one visible window is refused rather than guessed at, because a capture of the wrong
+window is wrong silently. A failed capture writes nothing and exits 1; `verify`
+records the failure as the check's `note` and does not fail the run, since the
+scenario was one nobody could run in the first place.

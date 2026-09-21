@@ -84,6 +84,28 @@ cannot be written as commands is not one to guess at. The plan stage asks there
 proxy check, since a check that passes while the observation fails is worse
 than no check at all.
 
+## Why a hand scenario is captured rather than checked
+
+A goal marks a scenario `hand` when nobody can script it. The two tempting
+responses are both the failure this pipeline exists to avoid: skip it, so nothing
+ever looks, or write a command that passes while the observation was never made,
+which is worse because nothing downstream looks again — the run that shipped four
+of six scenarios failing is the evidence for how much a green report is worth.
+
+So the plan stage records a `hand` check with no command, and `verify` captures the
+screen the scenario names to `screens/<id>.png` in the task's notes directory. The
+capture turns "nobody looked" into an artefact a later pass can look at, and
+`hcoord wait` and `hcoord tui` count the hand checks apart from the passes so a
+coordinator sees what nobody ran. A hand check never blocks the PR: the scripted
+checks still have to pass, and a failed capture is a `note` on the check, because
+the scenario already said there was nothing to run.
+
+The mechanism is `hcoord capture`, not a paragraph of this prompt. A capture spelled
+in a prompt is re-derived on every run, and its details are exactly what a prompt
+gets wrong silently: only a window the X server has mapped captures, an ambiguous
+window name has to be refused rather than guessed at, and ImageMagick's policy
+blocks `label:@file` outright.
+
 ## What it commits, and why that is different from `/task:build`
 
 `/task:build` never commits; every sub-skill has that contract. This pipeline

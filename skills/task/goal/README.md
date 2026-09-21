@@ -97,7 +97,7 @@ Each section closes one class of divergence:
 | **Current state** | the target is a delta against something captured, not against a guess |
 | **Screens** with `changes / unchanged / hides` | panel overlap, leftover chrome, a control placed as a sibling when a row was meant |
 | **Scenarios** with a gesture per step and one `->` | the phantom slider, the invisible drag, the redo nobody mentioned |
-| `hand` | an honest statement that a scenario cannot be scripted; it is never proxied by a check that passes while the observation fails |
+| `hand` | an honest statement that a scenario cannot be scripted; it is never proxied by a check that passes while the observation fails. The plan stage writes it as a hand check with no command, `verify` captures the screen it names to `screens/<id>.png` in the task's notes dir, and `hcoord wait` / `hcoord tui` count it apart. Marking a scenario `hand` says its screen is worth a picture; it is not a way to opt out of acceptance |
 | **Widgets** | the affordance inventory, checked once for the whole goal instead of discovered twice in two builds |
 | **Left to the build** | the 16 / 24 / 128 bounds surfaced as choices, not buried |
 | **Tunables** | hillshade gain: exposed and set at judgement, not guessed and shipped |
