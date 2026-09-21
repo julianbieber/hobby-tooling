@@ -107,7 +107,8 @@ pub fn can_contain_methods(kind: SymbolKind) -> bool {
         || kind == SymbolKind::ENUM
 }
 
-fn range_contains(outer: &Range, inner: &Range) -> bool {
+/// Whether `inner` lies within `outer`. A range does not contain an equal range.
+pub fn range_contains(outer: &Range, inner: &Range) -> bool {
     let start = |r: &Range| (r.start.line, r.start.character);
     let end = |r: &Range| (r.end.line, r.end.character);
     start(outer) <= start(inner) && end(inner) <= end(outer) && outer != inner

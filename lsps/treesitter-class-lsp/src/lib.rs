@@ -1,4 +1,5 @@
 pub mod definition;
+pub mod document_symbol;
 pub mod fuzzy;
 pub mod grammars;
 pub mod indexer;
