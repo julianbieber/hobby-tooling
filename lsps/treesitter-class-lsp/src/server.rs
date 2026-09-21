@@ -10,8 +10,9 @@ use tower_lsp::{Client, LanguageServer};
 use crate::definition;
 use crate::document_symbol;
 use crate::fuzzy;
-use crate::indexer::{Index, IndexEntry, Indexer};
+use crate::indexer::{self, Index, IndexEntry, Indexer};
 use crate::languages::LanguageRegistry;
+use crate::references::{self, Reference};
 use crate::worktree;
 
 const COMPLETION_LIMIT: usize = 200;
@@ -100,6 +101,7 @@ impl LanguageServer for Backend {
                 workspace_symbol_provider: Some(OneOf::Left(true)),
                 definition_provider: Some(OneOf::Left(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
+                references_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -247,6 +249,96 @@ impl LanguageServer for Backend {
             Ok(None)
         } else {
             Ok(Some(GotoDefinitionResponse::Array(locations)))
+        }
+    }
+
+    async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        let uri = params.text_document_position.text_document.uri;
+        let pos = params.text_document_position.position;
+
+        let open_text = self.state.docs.read().await.get(&uri).cloned();
+        let text = match open_text {
+            Some(t) => t,
+            None => match uri.to_file_path().ok().and_then(|p| std::fs::read_to_string(p).ok()) {
+                Some(t) => t,
+                None => return Ok(None),
+            },
+        };
+        let Some(name) = definition::identifier_at(&text, pos) else {
+            return Ok(None);
+        };
+        let Some(root) = self.state.task_root.read().await.clone() else {
+            return Ok(None);
+        };
+
+        let language = uri.to_file_path().ok().and_then(|path| {
+            self.state
+                .indexer
+                .registry()
+                .resolve(&path)
+                .map(|info| info.name.clone())
+        });
+
+        let declarations: Vec<(PathBuf, Range)> = if params.context.include_declaration {
+            Vec::new()
+        } else {
+            let index = self.state.index.read().await;
+            index
+                .entries()
+                .iter()
+                .filter(|e| e.name == name)
+                .map(|e| (e.file.clone(), e.name_range))
+                .collect()
+        };
+
+        let state = Arc::clone(&self.state);
+        let found = tokio::task::spawn_blocking(move || {
+            let needle = name.as_bytes();
+            let mut found = Vec::new();
+            for path in indexer::source_files(&root) {
+                let Some(lang) = state.indexer.registry().resolve(&path) else {
+                    continue;
+                };
+                let Ok(source) = std::fs::read(&path) else {
+                    continue;
+                };
+                if source.contains(&0u8) || !source.windows(needle.len()).any(|w| w == needle) {
+                    continue;
+                }
+                let Some(tree) = state.indexer.parse(lang, &source) else {
+                    continue;
+                };
+                for range in references::occurrences_in(&tree, &source, &name) {
+                    found.push(Reference {
+                        file: path.clone(),
+                        language: lang.name.clone(),
+                        range,
+                    });
+                }
+            }
+            found
+        })
+        .await
+        .unwrap_or_default();
+
+        let found = if params.context.include_declaration {
+            found
+        } else {
+            references::without_declarations(found, &declarations)
+        };
+        let locations: Vec<Location> = references::order(found, language.as_deref())
+            .into_iter()
+            .filter_map(|r| {
+                Some(Location {
+                    uri: Url::from_file_path(&r.file).ok()?,
+                    range: r.range,
+                })
+            })
+            .collect();
+        if locations.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(locations))
         }
     }
 

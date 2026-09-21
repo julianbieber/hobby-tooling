@@ -149,6 +149,26 @@ fn range_from_ts_node(node: tree_sitter::Node) -> Range {
     }
 }
 
+/// Every regular file under `root` that the workspace holds, in walk order.
+///
+/// Dotfiles, symlinks and anything a repo's own `.gitignore` or
+/// `.git/info/exclude` names (build outputs, `node_modules/`) are skipped. The
+/// *global* gitignore (`~/.gitignore`, `~/.config/git/ignore`) is deliberately
+/// not honoured: users often set a catch-all `*` there to keep ad-hoc files out
+/// of `git status`, which would make this walk return zero files.
+pub fn source_files(root: &Path) -> impl Iterator<Item = PathBuf> {
+    WalkBuilder::new(root)
+        .hidden(true)
+        .follow_links(false)
+        .git_global(false)
+        .git_exclude(true)
+        .parents(false)
+        .build()
+        .filter_map(|result| result.ok())
+        .filter(|entry| entry.file_type().map(|t| t.is_file()).unwrap_or(false))
+        .map(|entry| entry.into_path())
+}
+
 pub struct Indexer {
     registry: LanguageRegistry,
     grammars: GrammarCache,
@@ -179,39 +199,27 @@ impl Indexer {
         &self.registry
     }
 
+    /// Parse `source` with `lang`'s grammar. `None` when the grammar will not
+    /// load or the parse fails.
+    pub fn parse(&self, lang: &LanguageInfo, source: &[u8]) -> Option<tree_sitter::Tree> {
+        let grammar = self.grammars.get_or_load(&self.registry, lang).ok()?;
+        let mut parser = Parser::new();
+        parser.set_language(&grammar.language).ok()?;
+        parser.parse(source, None)
+    }
+
     /// Index the whole workspace rooted at `root`, returning a fresh `Index`.
     pub fn index_root(&self, root: &Path) -> Index {
         let mut index = Index::default();
         let mut count_files = 0usize;
-        // Skip the *global* gitignore (`~/.gitignore`, `~/.config/git/ignore`)
-        // because users often set a catch-all `*` there to keep ad-hoc files
-        // out of `git status`; that would make this walker return zero files.
-        // Per-repo `.gitignore` and `.git/info/exclude` are still respected so
-        // we skip build outputs (`target/`, `node_modules/`, …).
-        for result in WalkBuilder::new(root)
-            .hidden(true)
-            .follow_links(false)
-            .git_global(false)
-            .git_exclude(true)
-            .parents(false)
-            .build()
-        {
-            let Ok(entry) = result else { continue };
-            if !entry
-                .file_type()
-                .map(|t| t.is_file())
-                .unwrap_or(false)
-            {
-                continue;
-            }
-            let path = entry.path();
-            let Some(lang) = self.registry.resolve(path) else {
+        for path in source_files(root) {
+            let Some(lang) = self.registry.resolve(&path) else {
                 continue;
             };
-            match self.index_file(path, lang) {
+            match self.index_file(&path, lang) {
                 Ok(entries) => {
                     if !entries.is_empty() {
-                        index.replace_file(path, entries);
+                        index.replace_file(&path, entries);
                     }
                     count_files += 1;
                 }
@@ -256,11 +264,7 @@ impl Indexer {
             None => return Ok(Vec::new()),
         };
 
-        let mut parser = Parser::new();
-        parser
-            .set_language(&grammar.language)
-            .with_context(|| format!("setting language {}", lang.name))?;
-        let Some(tree) = parser.parse(&source, None) else {
+        let Some(tree) = self.parse(lang, &source) else {
             return Ok(Vec::new());
         };
 
