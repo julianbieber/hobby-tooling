@@ -35,8 +35,23 @@ if command -v hauto >/dev/null 2>&1; then ok "hauto on PATH"; else warn "hauto n
 
 echo ""
 echo "Skills and hooks"
-n_sk=$(find "$CFG/commands" -mindepth 1 -maxdepth 2 -name '*.md' 2>/dev/null | wc -l)
-[ "$n_sk" -gt 0 ] && ok "$n_sk skills installed" || bad "no skills installed" "just install-skills"
+want_sk=0
+unlinked_sk=()
+while IFS= read -r src; do
+    want_sk=$((want_sk + 1))
+    rel=${src%/skill.md}; rel=${rel##*/skills/}
+    link="$CFG/commands/$rel.md"
+    if [ ! -h "$link" ] || [ "$(readlink -f "$link")" != "$(readlink -f "$src")" ]; then
+        unlinked_sk+=("/${rel//\//:}")
+    fi
+done < <(find "$HERE/../skills" -mindepth 2 -maxdepth 3 -name skill.md 2>/dev/null)
+if [ "${#unlinked_sk[@]}" -eq 0 ]; then
+    ok "$want_sk skills linked"
+else
+    bad "$((want_sk - ${#unlinked_sk[@]}))/$want_sk skills linked" "just install-skills — ${unlinked_sk[*]}"
+fi
+n_stale_sk=$(find "$CFG/commands" -mindepth 1 -maxdepth 2 -xtype l 2>/dev/null | wc -l)
+[ "$n_stale_sk" -eq 0 ] || bad "$n_stale_sk skill links point at nothing" "just install-skills"
 n_hk=$(ls "$CFG"/hooks/*.sh 2>/dev/null | wc -l)
 want_hk=$(find "$HERE/../hooks" -mindepth 2 -maxdepth 2 -name hook.sh 2>/dev/null | wc -l)
 [ "$n_hk" -eq "$want_hk" ] && ok "$want_hk hooks installed" || bad "$n_hk/$want_hk hooks installed" "just install-hooks"
