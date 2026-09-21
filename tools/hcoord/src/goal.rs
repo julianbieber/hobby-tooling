@@ -85,6 +85,10 @@ pub struct Finding {
 
 const REQUIRED_SECTIONS: [&str; 5] = ["Intent", "Decisions", "Screens", "Scenarios", "Widgets"];
 
+/// Sections whose text is a person's words recorded verbatim; a `?` there is
+/// theirs to ask, not a guess left in the goal.
+const VERBATIM_SECTIONS: [&str; 2] = ["Intent", "Decisions"];
+
 /// Parse the goal's text. Never fails: a malformed file parses to a `Goal` whose
 /// `lint` names what is wrong, so one pass reports everything at once.
 pub fn parse(text: &str) -> Goal {
@@ -112,7 +116,7 @@ pub fn parse(text: &str) -> Goal {
             continue;
         }
 
-        if has_open_marker(raw) {
+        if has_open_marker(raw) && !VERBATIM_SECTIONS.contains(&section.as_str()) {
             goal.open_markers.push(line);
         }
 
@@ -227,7 +231,9 @@ fn trim_blank_lines(text: &str) -> String {
 /// part of the name. The five required sections are present; every screen has a qualifier; every
 /// scenario names a screen that exists, has at least one step and exactly one
 /// `->`, and names only widgets the table lists; a widget that does not exist
-/// names what provides it; no `?` is left anywhere outside backticks.
+/// names what provides it; no `?` is left anywhere outside backticks, except
+/// in `Intent` and `Decisions`, whose text is a person's words recorded verbatim
+/// and may ask a question without leaving one open.
 pub fn lint(goal: &Goal) -> Vec<Finding> {
     let mut out = Vec::new();
     for name in REQUIRED_SECTIONS {
@@ -618,6 +624,18 @@ mod tests {
         let f = lint(&parse(&text));
         assert_eq!(f.len(), 1);
         assert!(f[0].message.contains("open question"));
+    }
+
+    // `Intent` and `Decisions` hold the person's words byte for byte, so a `?`
+    // they wrote is not a guess the goal has to resolve; the lint must not force
+    // their sentence to be reworded to pass.
+    #[test]
+    fn a_marker_in_verbatim_words_is_not_open() {
+        let text = CLEAN.replace(
+            "## Decisions\n",
+            "## Decisions\n- **picker** — \"can helix show a picker?\"\n",
+        );
+        assert_eq!(lint(&parse(&text)), Vec::new());
     }
 
     // A `?` inside backticks is code, not a question — `[ -f x ] && echo ok?`
