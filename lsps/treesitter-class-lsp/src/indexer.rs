@@ -79,7 +79,7 @@ impl Index {
 
 /// Which captures we consider "class-like". We also accept the typo
 /// `defintion.class` present in the Java query.
-fn classlike_kind_from_capture(name: &str) -> Option<SymbolKind> {
+fn definition_kind_from_capture(name: &str) -> Option<SymbolKind> {
     let name = name.strip_prefix('@').unwrap_or(name);
     match name {
         "definition.class" | "defintion.class" => Some(SymbolKind::CLASS),
@@ -87,7 +87,37 @@ fn classlike_kind_from_capture(name: &str) -> Option<SymbolKind> {
         "definition.interface" | "definition.trait" => Some(SymbolKind::INTERFACE),
         "definition.enum" => Some(SymbolKind::ENUM),
         "definition.type" => Some(SymbolKind::TYPE_PARAMETER),
+        "definition.function" => Some(SymbolKind::FUNCTION),
+        "definition.method" => Some(SymbolKind::METHOD),
         _ => None,
+    }
+}
+
+fn can_contain_methods(kind: SymbolKind) -> bool {
+    kind == SymbolKind::CLASS
+        || kind == SymbolKind::STRUCT
+        || kind == SymbolKind::INTERFACE
+        || kind == SymbolKind::ENUM
+}
+
+fn range_contains(outer: &Range, inner: &Range) -> bool {
+    let start = |r: &Range| (r.start.line, r.start.character);
+    let end = |r: &Range| (r.end.line, r.end.character);
+    start(outer) <= start(inner) && end(inner) <= end(outer) && outer != inner
+}
+
+fn promote_methods(entries: &mut [IndexEntry]) {
+    let containers: Vec<Range> = entries
+        .iter()
+        .filter(|e| can_contain_methods(e.kind))
+        .map(|e| e.range)
+        .collect();
+    for entry in entries.iter_mut() {
+        if entry.kind == SymbolKind::FUNCTION
+            && containers.iter().any(|c| range_contains(c, &entry.range))
+        {
+            entry.kind = SymbolKind::METHOD;
+        }
     }
 }
 
@@ -117,7 +147,7 @@ pub struct Indexer {
 struct CompiledQuery {
     query: Query,
     /// For each capture index in the query, the `SymbolKind` if it's a
-    /// class-like definition, otherwise `None` (skipped).
+    /// definition, otherwise `None` (skipped).
     def_kinds: Vec<Option<SymbolKind>>,
     /// Capture index of `@name` if present.
     name_idx: Option<u32>,
@@ -178,7 +208,7 @@ impl Indexer {
             }
         }
         tracing::info!(
-            "indexed {} files, {} class-like symbols under {}",
+            "indexed {} files, {} symbols under {}",
             count_files,
             index.entries.len(),
             root.display()
@@ -186,7 +216,7 @@ impl Indexer {
         index
     }
 
-    /// Parse a single file and return its class-like definitions. Returns an
+    /// Parse a single file and return its definitions (class-like, functions, methods). Returns an
     /// empty Vec on failure modes that aren't worth surfacing (missing query,
     /// unreadable file).
     pub fn index_file(
@@ -267,6 +297,7 @@ impl Indexer {
                 range,
             });
         }
+        promote_methods(&mut out);
         Ok(out)
     }
 
@@ -293,14 +324,14 @@ impl Indexer {
         let capture_names = query.capture_names().to_vec();
         let def_kinds: Vec<Option<SymbolKind>> = capture_names
             .iter()
-            .map(|n| classlike_kind_from_capture(n))
+            .map(|n| definition_kind_from_capture(n))
             .collect();
         let name_idx = capture_names
             .iter()
             .position(|n| n.trim_start_matches('@') == "name")
             .map(|i| i as u32);
 
-        // Skip languages whose queries don't yield any class-like captures.
+        // Skip languages whose queries don't yield any definition captures.
         if def_kinds.iter().all(|k| k.is_none()) {
             return None;
         }

@@ -173,12 +173,8 @@ impl LanguageServer for Backend {
         };
 
         let index = self.state.index.read().await;
-        let entries = index.entries();
-        let ranked = if prefix.is_empty() {
-            entries.iter().take(COMPLETION_LIMIT).collect::<Vec<_>>()
-        } else {
-            fuzzy::rank(entries, &prefix, COMPLETION_LIMIT)
-        };
+        let completable = index.entries().iter().filter(|e| is_completable(e));
+        let ranked = fuzzy::rank(completable, &prefix, COMPLETION_LIMIT);
 
         let items: Vec<CompletionItem> = ranked
             .into_iter()
@@ -284,6 +280,10 @@ fn char_col_to_byte_col(line: &str, char_col: usize) -> Option<usize> {
     } else {
         None
     }
+}
+
+fn is_completable(e: &IndexEntry) -> bool {
+    e.kind != SymbolKind::FUNCTION && e.kind != SymbolKind::METHOD
 }
 
 fn symbol_kind_to_completion_kind(k: SymbolKind) -> CompletionItemKind {

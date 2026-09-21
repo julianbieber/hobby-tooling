@@ -1,14 +1,14 @@
 # treesitter-class-lsp
 
 A small LSP that walks a directory, parses every source file with tree-sitter,
-and exposes the class/struct/interface/enum/trait/type names it finds through
-two LSP methods:
+and exposes the class/struct/interface/enum/trait/type, function and method names
+it finds through two LSP methods:
 
 - `textDocument/completion` — completion items for the current identifier
-  prefix.
+  prefix. Class-like names only; functions and methods are not offered.
 - `workspace/symbol` — fuzzy-searchable workspace-wide symbol list (the
-  canonical "jump to any class by name" endpoint, mapped to `<space>s` in Helix
-  and `Ctrl+T` in VS Code).
+  canonical "jump to any symbol by name" endpoint, mapped to `<space>s` in Helix
+  and `Ctrl+T` in VS Code). Every result carries its kind.
 
 It reuses the tree-sitter grammars and `tags.scm` queries that already live in a
 local Helix checkout, so there is no grammar to build.
@@ -27,11 +27,15 @@ outside `~/worktrees/` behaves the same way.
 
 ## Languages
 
-Any language supported by Helix whose grammar ships a `tags.scm` with class-like
+Any language supported by Helix whose grammar ships a `tags.scm` with definition
 captures (`@definition.class`, `@definition.struct`, `@definition.interface`,
-`@definition.enum`, `@definition.trait`, `@definition.type`) is picked up
-automatically — including Rust, Python, Java, Go, C/C++, TypeScript, and many
-more.
+`@definition.enum`, `@definition.trait`, `@definition.type`,
+`@definition.function`, `@definition.method`) is picked up automatically —
+including Rust, Python, Java, Go, C/C++, TypeScript, and many more.
+
+A `@definition.function` whose definition sits inside a class, struct, interface
+or enum definition of the same file is reported as a method, because several
+Helix queries (Python's, for one) capture methods as functions.
 
 Scala has no `tags.scm` in Helix, so a built-in fallback query ships in
 `src/builtin_queries/scala_tags.scm`.
@@ -76,7 +80,8 @@ language-servers = ["metals", "treesitter-class-lsp"]
 - `grammars.rs` — dynamically loads Helix's pre-built `.so` grammars via
   `libloading` and caches the resulting `tree_sitter::Language`s.
 - `indexer.rs` — walks the workspace with `ignore` (respects `.gitignore`),
-  parses each file, runs the tags query, extracts class-like definitions.
+  parses each file, runs the tags query, extracts class-like, function and
+  method definitions.
 - `fuzzy.rs` — `nucleo-matcher`-based ranking for completion and
   workspace-symbol queries.
 - `worktree.rs` — extracts the TASK directory from a worktree path.

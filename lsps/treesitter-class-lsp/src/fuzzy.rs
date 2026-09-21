@@ -5,15 +5,18 @@ use crate::indexer::IndexEntry;
 
 /// Rank all entries by fuzzy-matching the pattern against their names. If
 /// `pattern` is empty, returns entries in insertion order, capped at `limit`.
-pub fn rank<'a>(entries: &'a [IndexEntry], pattern: &str, limit: usize) -> Vec<&'a IndexEntry> {
+pub fn rank<'a, I>(entries: I, pattern: &str, limit: usize) -> Vec<&'a IndexEntry>
+where
+    I: IntoIterator<Item = &'a IndexEntry>,
+{
     if pattern.trim().is_empty() {
-        return entries.iter().take(limit).collect();
+        return entries.into_iter().take(limit).collect();
     }
     let mut matcher = Matcher::new(Config::DEFAULT);
     let pat = Pattern::parse(pattern, CaseMatching::Ignore, Normalization::Smart);
     let mut buf = Vec::new();
     let mut scored: Vec<(u32, &IndexEntry)> = entries
-        .iter()
+        .into_iter()
         .filter_map(|e| {
             let haystack = Utf32Str::new(&e.name, &mut buf);
             pat.score(haystack, &mut matcher).map(|s| (s, e))
