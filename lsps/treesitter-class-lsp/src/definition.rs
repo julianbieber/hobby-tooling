@@ -46,13 +46,27 @@ pub fn identifier_at(text: &str, pos: Position) -> Option<String> {
     Some(line[start..end].to_string())
 }
 
-/// Every entry named exactly `name`, ordered by file then position so the
-/// answer is stable across runs, and cut to [`DEFINITION_LIMIT`].
-pub fn lookup<'a>(entries: &'a [IndexEntry], name: &str) -> Vec<&'a IndexEntry> {
+/// Every entry named exactly `name`, in a stable order, cut to
+/// [`DEFINITION_LIMIT`].
+///
+/// Entries in `language` (the language of the buffer asking) come first; within
+/// each group the order is file, then position. The limit applies after that
+/// order, so it never drops a definition in `language` for one in another. A
+/// `language` of `None` puts every entry in the second group, leaving plain
+/// file-then-position order.
+pub fn lookup<'a>(
+    entries: &'a [IndexEntry],
+    name: &str,
+    language: Option<&str>,
+) -> Vec<&'a IndexEntry> {
     let mut found: Vec<&IndexEntry> = entries.iter().filter(|e| e.name == name).collect();
-    found.sort_by(|a, b| {
-        let key = |e: &IndexEntry| (e.range.start.line, e.range.start.character);
-        a.file.cmp(&b.file).then_with(|| key(a).cmp(&key(b)))
+    found.sort_by_key(|e| {
+        (
+            Some(e.language.as_str()) != language,
+            &e.file,
+            e.range.start.line,
+            e.range.start.character,
+        )
     });
     found.truncate(DEFINITION_LIMIT);
     found
@@ -64,7 +78,30 @@ fn is_identifier_char(c: char) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use tower_lsp::lsp_types::{Range, SymbolKind};
+
     use super::*;
+
+    fn entry(name: &str, language: &str, file: &str, line: u32) -> IndexEntry {
+        let range = Range {
+            start: Position { line, character: 0 },
+            end: Position { line, character: 1 },
+        };
+        IndexEntry {
+            name: name.to_string(),
+            language: language.to_string(),
+            kind: SymbolKind::CLASS,
+            file: PathBuf::from(file),
+            range,
+            name_range: range,
+        }
+    }
+
+    fn files<'a>(found: &[&'a IndexEntry]) -> Vec<&'a str> {
+        found.iter().map(|e| e.file.to_str().unwrap()).collect()
+    }
 
     fn at(line: u32, character: u32) -> Position {
         Position { line, character }
@@ -126,5 +163,53 @@ mod tests {
     #[test]
     fn multibyte_characters_before_the_name_do_not_shift_it() {
         assert_eq!(identifier_at("é = make()", at(0, 5)).as_deref(), Some("make"));
+    }
+
+    // Pins S4: a name defined in two languages lists the buffer's language first, though its file sorts later.
+    #[test]
+    fn buffers_language_is_listed_before_other_languages() {
+        let entries = [
+            entry("Shared", "protobuf", "a/service.proto", 3),
+            entry("Shared", "python", "z/service.py", 8),
+        ];
+        let found = lookup(&entries, "Shared", Some("python"));
+        assert_eq!(files(&found), ["z/service.py", "a/service.proto"]);
+    }
+
+    // Pins that ordering inside one language is still file then position, so the answer stays stable across runs.
+    #[test]
+    fn within_one_language_order_is_file_then_position() {
+        let entries = [
+            entry("Shared", "python", "b.py", 1),
+            entry("Shared", "python", "a.py", 9),
+            entry("Shared", "python", "a.py", 2),
+        ];
+        let found = lookup(&entries, "Shared", Some("python"));
+        let lines: Vec<u32> = found.iter().map(|e| e.range.start.line).collect();
+        assert_eq!(files(&found), ["a.py", "a.py", "b.py"]);
+        assert_eq!(lines, [2, 9, 1]);
+    }
+
+    // Pins that a buffer no language claims gets today's file-then-position order, not an empty or reshuffled answer.
+    #[test]
+    fn unknown_buffer_language_keeps_file_order() {
+        let entries = [
+            entry("Shared", "python", "z/service.py", 8),
+            entry("Shared", "protobuf", "a/service.proto", 3),
+        ];
+        let found = lookup(&entries, "Shared", None);
+        assert_eq!(files(&found), ["a/service.proto", "z/service.py"]);
+    }
+
+    // Pins that the cap is applied after the language ordering, so a foreign definition cannot crowd out the buffer's own.
+    #[test]
+    fn limit_keeps_the_buffers_language_over_earlier_files() {
+        let mut entries: Vec<IndexEntry> = (0..DEFINITION_LIMIT)
+            .map(|i| entry("Shared", "protobuf", &format!("a/{i:03}.proto"), 0))
+            .collect();
+        entries.push(entry("Shared", "python", "z.py", 0));
+        let found = lookup(&entries, "Shared", Some("python"));
+        assert_eq!(found.len(), DEFINITION_LIMIT);
+        assert_eq!(files(&found)[0], "z.py");
     }
 }

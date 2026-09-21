@@ -214,8 +214,16 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
+        let language = uri.to_file_path().ok().and_then(|path| {
+            self.state
+                .indexer
+                .registry()
+                .resolve(&path)
+                .map(|info| info.name.clone())
+        });
+
         let index = self.state.index.read().await;
-        let locations: Vec<Location> = definition::lookup(index.entries(), &name)
+        let locations: Vec<Location> = definition::lookup(index.entries(), &name, language.as_deref())
             .into_iter()
             .filter_map(|e| {
                 Some(Location {
