@@ -8,6 +8,7 @@ use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
 
 use crate::definition;
+use crate::document_symbol;
 use crate::fuzzy;
 use crate::indexer::{Index, IndexEntry, Indexer};
 use crate::languages::LanguageRegistry;
@@ -98,6 +99,7 @@ impl LanguageServer for Backend {
                 }),
                 workspace_symbol_provider: Some(OneOf::Left(true)),
                 definition_provider: Some(OneOf::Left(true)),
+                document_symbol_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -245,6 +247,33 @@ impl LanguageServer for Backend {
             Ok(None)
         } else {
             Ok(Some(GotoDefinitionResponse::Array(locations)))
+        }
+    }
+
+    async fn document_symbol(
+        &self,
+        params: DocumentSymbolParams,
+    ) -> Result<Option<DocumentSymbolResponse>> {
+        let Ok(path) = params.text_document.uri.to_file_path() else {
+            return Ok(None);
+        };
+        let Some(lang) = self.state.indexer.registry().resolve(&path).cloned() else {
+            return Ok(None);
+        };
+        let indexer = unsafe { extend_lifetime_ref(&self.state.indexer) };
+        let path_cloned = path.clone();
+        let entries = tokio::task::spawn_blocking(move || {
+            indexer.index_file(&path_cloned, &lang).unwrap_or_default()
+        })
+        .await
+        .unwrap_or_default();
+
+        let symbols = document_symbol::tree(&entries);
+        self.state.index.write().await.replace_file(&path, entries);
+        if symbols.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(DocumentSymbolResponse::Nested(symbols)))
         }
     }
 
