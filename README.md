@@ -128,7 +128,7 @@ which are actually installed here. Query files land in the checkout's
 | `hcoord` | The coordinator's task-list pane (ratatui) and `hcoord wait`, which blocks a coordinator on a task's pipeline state |
 | `hobby-mml-lsp` | HMML language server, routed to `.hmml` specs by file type |
 | 4 vendored LSPs | `claude-lsp`, `claude-skills-lsp`, `treesitter-class-lsp`, `path-lsp` — buildable without the work checkout |
-| 22 skills | Task loop (journal, resume, spawn, subtask, triage, reflect), HMML suite, comment review, PR + task:build, the unattended task:auto and task:coordinate, GitHub issues |
+| 24 skills | Task loop (journal, resume, spawn, subtask, triage, reflect), HMML suite, comment review, PR + task:build, the unattended task:auto and task:coordinate, the goal interview task:goal and the judgement pass task:judge, GitHub issues |
 
 ## Account Separation
 

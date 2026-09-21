@@ -5,7 +5,7 @@
 | Type         | file format, checked by `hcoord goal lint`                   |
 | Owner        | @julianbieber                                                |
 | Dependencies | `hcoord` on PATH; an app whose window can be captured        |
-| Status       | experimental — the interview skill (`skill.md`) is not written yet; the first goal was written by hand |
+| Status       | experimental — `/task:goal <blurb>` runs the interview; the first goal was written by hand along the same procedure |
 
 ## Description
 
@@ -126,23 +126,31 @@ What the lint cannot check is whether a scenario's `->` is reachable — whether
 `@range 0 2` can produce a value above 1 — and whether a `Depends on` agrees
 with what the scenarios assume. Those are the split's job, against the code.
 
-## Writing one by hand (until `skill.md` exists)
+## The procedure `/task:goal` runs
 
 1. Record the intent verbatim.
-2. Launch the app, capture every screen the intent touches
-   (`import -window $(xdotool search --name '<title>' | head -1) screens/<name>.png`
-   on X11; the app's own `capture` verb where it has a socket), draw each as
-   ASCII, and write **Current state** from the code.
+2. Launch the app, capture every screen the intent touches with
+   `hcoord capture`, draw each as ASCII, and write **Current state** from the
+   code.
 3. Draft the target screens and scenarios with every guess marked `?`.
-4. Ask the questions the `?`s are, open where the answer is a picture, closed
-   only where it is a binary technical choice. Record every answer verbatim
-   under **Decisions** and resolve its `?`.
-5. Hand the whole file over to be read once. `hcoord goal lint` must print `ok`.
-6. Split from the scenarios: each task owns a set of ids, a decision task
-   precedes any cluster that needs one, and a widget with `exists: no` becomes
-   an `enabling` task naming its consumer. Write `tasks.json` in the
-   coordinator's dir with `scenarios` per task and `goal` pointing at the file,
-   and lint with `--tasks`.
+4. **Questions gate.** Ask the questions the `?`s are, open where the answer is
+   a picture, closed only where it is a binary technical choice. Record every
+   answer verbatim under **Decisions** and resolve its `?`.
+5. **Read gate.** Hand the whole file over to be read once. `hcoord goal lint`
+   must print `ok`.
+6. Split from the scenarios: each task owns a set of ids, and a widget with
+   `exists: no` becomes an `enabling` task naming its consumer. Write
+   `tasks.json` in the coordinator's dir with `scenarios` per task and `goal`
+   pointing at the file, and lint with `--tasks`.
+
+Three choices in it:
+
+- **`hcoord capture` is the capture mechanism.** One command covers a window
+  and a file, and it refuses an ambiguous window title instead of guessing.
+- **No `AskUserQuestion`.** An answer picked from options is not my words, and
+  Decisions are verbatim.
+- **A decision task cannot appear in the split.** The lint requires every task
+  to own a scenario, so the decisions are made at the questions gate instead.
 
 ## First goal
 
