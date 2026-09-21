@@ -2,13 +2,21 @@
 
 A small LSP that walks a directory, parses every source file with tree-sitter,
 and exposes the class/struct/interface/enum/trait/type, function and method names
-it finds through two LSP methods:
+it finds through three LSP methods:
 
 - `textDocument/completion` — completion items for the current identifier
   prefix. Class-like names only; functions and methods are not offered.
 - `workspace/symbol` — fuzzy-searchable workspace-wide symbol list (the
   canonical "jump to any symbol by name" endpoint, mapped to `<space>s` in Helix
   and `Ctrl+T` in VS Code). Every result carries its kind.
+- `textDocument/definition` — the definitions named exactly like the identifier
+  under the cursor, wherever in the workspace they are. Resolution is by name
+  alone, so a name defined more than once answers every location (capped at 100,
+  ordered by file then position), which Helix shows as its picker. Each location
+  is the definition's **name**, not the head of the block. A name nothing defines
+  answers no location, so Helix prints `No definition found.` and the cursor
+  stays. The answer comes from the index, which is built from the files on disk:
+  an edit in a buffer is not seen until the file is saved.
 
 It reuses the tree-sitter grammars and `tags.scm` queries that already live in a
 local Helix checkout, so there is no grammar to build.
@@ -79,6 +87,8 @@ language-servers = ["metals", "treesitter-class-lsp"]
   and resolves `; inherits: …` directives in `tags.scm` query files.
 - `grammars.rs` — dynamically loads Helix's pre-built `.so` grammars via
   `libloading` and caches the resulting `tree_sitter::Language`s.
+- `definition.rs` — finds the identifier under a cursor and looks its name up in
+  the index.
 - `indexer.rs` — walks the workspace with `ignore` (respects `.gitignore`),
   parses each file, runs the tags query, extracts class-like, function and
   method definitions.
@@ -94,4 +104,6 @@ cargo clippy --all-targets -- -D warnings
 cargo run --example debug [path]            # print every indexed symbol
 cargo run --example lsp_client -- \
     target/debug/treesitter-class-lsp [path] [query]   # drive the real LSP over stdio
+cargo run -q --example goto -- <root> <file> <line> <col> [--append <text>]
+    # ask for one definition (1-based line and column) and print where it lands
 ```
