@@ -2,7 +2,7 @@
 
 A small LSP that walks a directory, parses every source file with tree-sitter,
 and exposes the class/struct/interface/enum/trait/type, function and method names
-it finds through three LSP methods:
+it finds through these LSP methods:
 
 - `textDocument/completion` — completion items for the current identifier
   prefix. Class-like names only; functions and methods are not offered.
@@ -23,6 +23,12 @@ it finds through three LSP methods:
   answers no location, so Helix prints `No definition found.` and the cursor
   stays. The answer comes from the index, which is built from the files on disk:
   an edit in a buffer is not seen until the file is saved.
+- `textDocument/references` — every use of the identifier under the cursor
+  across the workspace, in the buffer's own language first and then the rest,
+  each group ordered by file then position and capped at 1000. A mention inside a
+  comment or a string is not a reference. The definition itself is included
+  unless the client asks for `includeDeclaration: false`. The answer is read from
+  the files on disk, not from the index.
 
 It reuses the tree-sitter grammars and `tags.scm` queries that already live in a
 local Helix checkout, so there is no grammar to build.
@@ -99,6 +105,9 @@ language-servers = ["metals", "treesitter-class-lsp"]
 - `indexer.rs` — walks the workspace with `ignore` (respects `.gitignore`),
   parses each file, runs the tags query, extracts class-like, function and
   method definitions, and records each definition's containing class.
+- `references.rs` — finds every occurrence of a name in a parsed file (named leaf
+  nodes whose text equals the name, minus comments and strings) and orders the
+  places found across the workspace.
 - `fuzzy.rs` — `nucleo-matcher`-based ranking for completion and
   workspace-symbol queries.
 - `worktree.rs` — extracts the TASK directory from a worktree path.
@@ -113,4 +122,6 @@ cargo run --example lsp_client -- \
     target/debug/treesitter-class-lsp [path] [query]   # drive the real LSP over stdio
 cargo run -q --example goto -- <root> <file> <line> <col> [--append <text>]
     # ask for one definition (1-based line and column) and print where it lands
+cargo run -q --example references -- <root> <file> <line> <col> [--no-declaration]
+    # ask for every reference to the name there and print where each one is
 ```
