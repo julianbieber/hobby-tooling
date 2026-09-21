@@ -1232,9 +1232,17 @@ open.
 The first goal (`bevy_pbr_generator`, texture projects, 2026-09-19) added four
 sections the plan had not foreseen — Decisions inside the goal, Current state,
 a directory tree as a screen, Left to the build — which is why the format was
-written by writing one before any skill automates it. The interview skill, the
-seed from scenarios, `hand` in `verify`, and the judgement pass at the end of a
-run are the open work; the plan is in the task's notes.
+written by writing one before any skill automates it. The four pieces that
+automate it now exist: the interview (`/task:goal`), the seed from scenarios
+(`hcoord seed`), `hand` in `verify`, and the judgement pass (`/task:judge`).
+
+`/task:goal` encodes two decisions. **Its questions are asked open**, with no
+option list: `AskUserQuestion` is not in its `allowed-tools`, because an answer
+picked from offered options is the model's choosing and not my words, and
+Decisions are recorded verbatim. **Decisions are made at that gate and never
+become a task in the split**: `hcoord goal lint --tasks` requires every task to
+own a scenario, so a decision task would be rejected, and a question still open
+by the time of the split is a question the interview did not finish.
 
 ## Task shaping lives in CLAUDE.md, not in the skill that applies it
 
