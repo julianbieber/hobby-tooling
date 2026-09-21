@@ -20,6 +20,9 @@ pub struct IndexEntry {
     /// Just the name within `range`; equal to `range` when the tags query
     /// captured no `@name`.
     pub name_range: Range,
+    /// Name of the innermost class-like definition in the same file whose range
+    /// contains this one; `None` at file scope.
+    pub container: Option<String>,
 }
 
 impl IndexEntry {
@@ -96,7 +99,8 @@ fn definition_kind_from_capture(name: &str) -> Option<SymbolKind> {
     }
 }
 
-fn can_contain_methods(kind: SymbolKind) -> bool {
+/// Whether a definition of `kind` can hold methods of its own.
+pub fn can_contain_methods(kind: SymbolKind) -> bool {
     kind == SymbolKind::CLASS
         || kind == SymbolKind::STRUCT
         || kind == SymbolKind::INTERFACE
@@ -109,17 +113,22 @@ fn range_contains(outer: &Range, inner: &Range) -> bool {
     start(outer) <= start(inner) && end(inner) <= end(outer) && outer != inner
 }
 
-fn promote_methods(entries: &mut [IndexEntry]) {
-    let containers: Vec<Range> = entries
+fn attach_containers(entries: &mut [IndexEntry]) {
+    let containers: Vec<(Range, String)> = entries
         .iter()
         .filter(|e| can_contain_methods(e.kind))
-        .map(|e| e.range)
+        .map(|e| (e.range, e.name.clone()))
         .collect();
     for entry in entries.iter_mut() {
-        if entry.kind == SymbolKind::FUNCTION
-            && containers.iter().any(|c| range_contains(c, &entry.range))
-        {
-            entry.kind = SymbolKind::METHOD;
+        let innermost = containers
+            .iter()
+            .filter(|(range, _)| range_contains(range, &entry.range))
+            .max_by_key(|(range, _)| (range.start.line, range.start.character));
+        if let Some((_, name)) = innermost {
+            entry.container = Some(name.clone());
+            if entry.kind == SymbolKind::FUNCTION {
+                entry.kind = SymbolKind::METHOD;
+            }
         }
     }
 }
@@ -301,9 +310,10 @@ impl Indexer {
                 file: path.to_path_buf(),
                 range,
                 name_range: name_range_found.unwrap_or(range),
+                container: None,
             });
         }
-        promote_methods(&mut out);
+        attach_containers(&mut out);
         Ok(out)
     }
 
