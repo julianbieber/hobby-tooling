@@ -11,8 +11,10 @@ it finds through three LSP methods:
   and `Ctrl+T` in VS Code). Every result carries its kind.
 - `textDocument/definition` — the definitions named exactly like the identifier
   under the cursor, wherever in the workspace they are. Resolution is by name
-  alone, so a name defined more than once answers every location (capped at 100,
-  ordered by file then position), which Helix shows as its picker. Each location
+  alone, so a name defined more than once answers every location, which Helix
+  shows as its picker. Definitions in the buffer's own language come first, then
+  the rest, each group ordered by file then position; the cap of 100 applies
+  after that order. Each location
   is the definition's **name**, not the head of the block. A name nothing defines
   answers no location, so Helix prints `No definition found.` and the cursor
   stays. The answer comes from the index, which is built from the files on disk:

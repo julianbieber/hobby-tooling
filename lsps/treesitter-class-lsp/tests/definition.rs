@@ -11,7 +11,9 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 use treesitter_class_lsp::languages::LanguageRegistry;
 
-const LIB_PY: &str = "class Widget:\n    def draw(self):\n        pass\n\n\ndef make():\n    return Widget()\n";
+const LIB_PY: &str = "class Widget:\n    def draw(self):\n        pass\n\n\ndef make():\n    return Widget()\n\n\nclass Shared:\n    pass\n";
+const DEFS_PROTO: &str = "syntax = \"proto3\";\nservice Shared {\n}\n";
+const USE_PY: &str = "Shared()\n";
 const APP_PY: &str = "import json\n\nw = Widget()\nmake()\njson.dumps(w)\n";
 
 struct Fixture {
@@ -35,6 +37,8 @@ impl Fixture {
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("lib.py"), LIB_PY).unwrap();
         std::fs::write(root.join("app.py"), APP_PY).unwrap();
+        std::fs::write(root.join("defs.proto"), DEFS_PROTO).unwrap();
+        std::fs::write(root.join("use.py"), USE_PY).unwrap();
         Some(Self {
             root: std::fs::canonicalize(root).unwrap(),
         })
@@ -177,6 +181,19 @@ fn only_location(answer: &Value) -> (String, u64, u64) {
     (file, start["line"].as_u64().unwrap(), start["character"].as_u64().unwrap())
 }
 
+fn every_location(answer: &Value) -> Vec<(String, u64, u64)> {
+    answer
+        .as_array()
+        .expect("an array of locations")
+        .iter()
+        .map(|location| {
+            let start = &location["range"]["start"];
+            let file = location["uri"].as_str().unwrap().rsplit('/').next().unwrap();
+            (file.to_string(), start["line"].as_u64().unwrap(), start["character"].as_u64().unwrap())
+        })
+        .collect()
+}
+
 // Pins that a class use resolves to the class's name in `class Widget:`, not to the head of the block.
 #[test]
 fn class_use_resolves_to_the_name_of_its_definition() {
@@ -238,4 +255,24 @@ fn unsaved_edits_are_invisible_until_the_file_is_saved() {
     }
 
     assert_eq!(only_location(&saved), ("app.py".to_string(), 6, 4));
+}
+
+// Pins S4: a name defined in Python and in protobuf lists the Python definition first for a Python buffer, though `defs.proto` sorts before `lib.py`.
+#[test]
+fn definitions_in_the_buffers_language_are_listed_first() {
+    let Some(fx) = Fixture::new("ambiguous") else { return };
+    if LanguageRegistry::load().unwrap().resolve(Path::new("probe.proto")).is_none() {
+        eprintln!("skipping: no protobuf language configured");
+        return;
+    }
+    let mut server = Server::start(&fx.root);
+    let usage = fx.root.join("use.py");
+    server.open(&usage, USE_PY);
+
+    let answer = server.definition(&usage, 0, 1);
+
+    assert_eq!(
+        every_location(&answer),
+        [("lib.py".to_string(), 9, 6), ("defs.proto".to_string(), 1, 8)]
+    );
 }
