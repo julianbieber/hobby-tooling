@@ -25,7 +25,7 @@ The stops are named so `hcoord wait` sees them, and which ones exist depends on
 | | `auto: true` — a coordinator seeded it, nobody is at the machine | `auto` false or absent — I typed `hcdev auto` |
 |---|---|---|
 | start | `await-acceptance`, only when the brief does not say what done looks like | the same |
-| end | none. The plan writes the acceptance observation as commands and the `verify` phase runs them; the PR opens only when they pass | `await-play`, always |
+| end | none. The plan writes the acceptance observation as commands and the `verify` phase runs them; the PR opens when every scripted check passes; a `hand` scenario is captured, not run | `await-play`, always |
 | failure | `await-fix` — the checks would not pass, the PR could not be merged, or `fix-ci` spent its bound on a red check that would not go green | — |
 
 An unattended run has no reader, so a report it prints is not read: the window
@@ -75,10 +75,13 @@ Task context from `pwd` (`~/fun_worktrees/PROJECT/TOPIC/TASK`). State file at
   "brief_source": "coordinator|description|issue", "brief": "<verbatim>",
   "acceptance": "<the done-when observation, verbatim>",
   "context_questions": [], "plan": "plan.md",
-  "acceptance_checks": [ { "name": "", "command": "", "expect": "" } ],
+  "acceptance_checks": [ { "scenario": "S1", "command": "", "expect": "" },
+                         { "scenario": "S6", "hand": true } ],
   "acceptance_result": { "checked": "<RFC 3339>", "passed": false, "rounds": 0,
-    "checks": [ { "name": "", "command": "", "exit": 0, "pass": false,
-                  "note": "" } ] },
+    "checks": [ { "scenario": "S1", "command": "", "exit": 0, "state": "pass",
+                  "note": "" },
+                { "scenario": "S6", "state": "hand",
+                  "screen": "screens/S6.png", "note": "" } ] },
   "merge_result": { "by": "session", "outcome": "merged|blocked", "pr": "",
     "merge_commit": "", "reason": "", "check": "", "log": "", "tried": [],
     "base": "", "base_updated": true, "checked": "<RFC 3339>" },
@@ -89,7 +92,10 @@ Task context from `pwd` (`~/fun_worktrees/PROJECT/TOPIC/TASK`). State file at
 ```
 
 `acceptance_checks` is written by the plan stage, `acceptance_result` by
-`verify`; both are absent from an interactive run. **`auto` is true only when a
+`verify`; both are absent from an interactive run. A check is keyed by
+`scenario` when the run was seeded from a goal and by `name` otherwise; `state`
+is `pass`, `fail` or `hand`, and a `hand` check carries `screen` instead of a
+command and never decides `passed`. **`auto` is true only when a
 coordinator seeded it.** A state file this skill writes for itself sets
 `auto: false`, so a `hcdev auto <task>` typed by hand keeps the play gate.
 **`merge`** is seeded by the coordinator from its `tasks.json`; **absent means
@@ -149,8 +155,16 @@ output means pass. Together they have to amount to the observation itself, not
 to a proxy for it: a check that passes while the observation would fail is worse
 than no check, because nothing downstream looks again.
 
-If the observation cannot be expressed as commands at all, **do not invent a
-proxy**. Write the question — *what command would show me this, and what should
+When the state file carries `goal` and `scenarios`, there is exactly one check
+per owned scenario, keyed by its id. A scenario the goal marks `hand` — the
+marker is the word `hand` on a line of its own in the scenario's verbatim text,
+which is what `acceptance` holds — gets `{ "scenario": "S6", "hand": true }` and
+**no command**. It is not a check that cannot be written; it is one the goal
+already said nobody can run, so the `await-acceptance` stop below is not
+reached for it and no proxy is invented.
+
+If a scenario the goal did **not** mark `hand` cannot be expressed as commands
+at all, **do not invent a proxy**. Write the question — *what command would show me this, and what should
 it print?* — to `context_questions`, set `phase: await-acceptance`, print it as
 P1 does, and end the turn. That is the gate the coordinator already handles, so
 it costs no new kind of stop.
@@ -174,7 +188,8 @@ tags:
 
 ## Acceptance checks
 needs: run            <- only when a check requires the application running
-1. `<command>` — expect: <what in its output or exit status means pass>
+1. `S1` — `<command>` — expect: <what in its output or exit status means pass>
+2. `S6` — hand — screen: <the screen the scenario names, and how to reach it>
 (unattended only; an interactive run writes `interactive — play gate` here)
 
 ## Files
@@ -245,22 +260,41 @@ is nobody to hand a running application to.
    way the play gate does — detached, output to `<notes dir>/play.log` — wait a
    few seconds and `head` the log. A build error there is fixed before any check
    runs.
-2. Run each check in `acceptance_checks`, in order, capturing its exit status
-   and at most a few lines of its output. Truncate as rule 4 requires: a check
-   that prints a compiler log is filtered, not pasted.
-3. Kill the application (`pkill -f` on the recorded command) if one was launched.
-4. Write `acceptance_result` into the state file — `checked`, `passed`,
-   `rounds`, and one object per check with `name`, `command`, `exit`, `pass` and
-   a `note` of at most one line of evidence. **Write it whether the checks
-   passed or not**: it is what `hcoord wait` reports and what a coordinator has
-   instead of the pane.
-5. **All pass** → `phase: pr`, and continue to the PR section in the same turn.
-6. **Any fail** → the failure is this session's own, like a failing test. Fix it
+2. Run each check in `acceptance_checks` that carries a command, in order,
+   capturing its exit status and at most a few lines of its output. Truncate as
+   rule 4 requires: a check that prints a compiler log is filtered, not pasted.
+3. For each check with `hand: true`, capture the screen its scenario names,
+   while the application is still running when the screen is its window:
+
+   ```bash
+   hcoord capture <notes dir> <scenario> --window '<window name>'
+   <command> | hcoord capture <notes dir> <scenario> --text -
+   hcoord capture <notes dir> <scenario> --text <file>
+   ```
+
+   The window form is for a screen that is the running application's, the text
+   forms for a screen that is a file or a command's output. Record the check as
+   `{ "scenario": .., "state": "hand", "screen": "screens/<scenario>.png" }`.
+   **A capture that fails is recorded with the failure as its `note` and no
+   `screen`, and the run goes on**: the scenario said nobody can run it, so
+   there is nothing for a failure to mean beyond a missing picture.
+4. Kill the application (`pkill -f` on the recorded command) if one was launched.
+5. Write `acceptance_result` into the state file — `checked`, `passed`,
+   `rounds`, and one object per check with `scenario` (or `name`), `command`,
+   `exit`, `state` and a `note` of at most one line of evidence, plus `screen` on
+   a hand check. **Write it whether the checks passed or not**: it is what
+   `hcoord wait` reports and what a coordinator has instead of the pane.
+   `passed` is true when every check that ran passed; a hand check does not
+   count either way.
+6. **Every check that ran passes** → `phase: pr`, and continue to the PR section
+   in the same turn.
+7. **Any fail** → the failure is this session's own, like a failing test. Fix it
    reading only the files the failure names, then build, test, `/comment-pass`
-   over what changed, and run the checks again. **At most three repair rounds**,
-   counted in `rounds`; the cap exists because nobody is at the keyboard to stop
-   a loop that is not converging.
-7. **Three rounds spent and something still fails** → write the final
+   over what changed, and run the checks again. A hand check is not run again
+   and is not a failure to repair. **At most three repair rounds**, counted in
+   `rounds`; the cap exists because nobody is at the keyboard to stop a loop
+   that is not converging.
+8. **Three rounds spent and something still fails** → write the final
    `acceptance_result` with `passed: false`, set `phase: await-fix`, print
    each failed check with its command and evidence, and **end the turn**. No
    commit and no PR: a change that cannot show its own acceptance is not one

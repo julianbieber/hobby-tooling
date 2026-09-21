@@ -27,7 +27,9 @@ const POLL: Duration = Duration::from_secs(2);
 /// An unattended run's state file also carries what its acceptance checks did, and the
 /// line then carries `acceptance` as `{passed, checks, failed}`, each failure naming its
 /// command and exit status — the evidence a coordinator would otherwise have to read out
-/// of the task's own pane.
+/// of the task's own pane. `acceptance` also carries `hand`, the number of checks nobody
+/// ran because their scenario is `hand`, when that number is not zero; those checks are
+/// counted in `checks` and are never in `failed`.
 ///
 /// A run that merged its own PR carries `merge` as `{outcome, pr, reason, check,
 /// merge_commit}`, `reason`/`check`/`merge_commit` present only when recorded — this is
@@ -146,14 +148,19 @@ fn acceptance_json(acceptance: &AcceptanceResult) -> serde_json::Value {
     let failed: Vec<serde_json::Value> = acceptance
         .checks
         .iter()
-        .filter(|c| !c.pass)
-        .map(|c| serde_json::json!({ "name": c.name, "command": c.command, "exit": c.exit }))
+        .filter(|c| !c.is_hand() && !c.passed())
+        .map(|c| serde_json::json!({ "name": c.label(), "command": c.command, "exit": c.exit }))
         .collect();
-    serde_json::json!({
+    let mut object = serde_json::json!({
         "passed": acceptance.passed,
         "checks": acceptance.checks.len(),
         "failed": failed,
-    })
+    });
+    let hand = acceptance.hand();
+    if hand > 0 {
+        object["hand"] = serde_json::Value::from(hand);
+    }
+    object
 }
 
 #[cfg(test)]
@@ -268,6 +275,27 @@ mod tests {
             line(&failed, "human"),
             r#"{"acceptance":{"checks":2,"failed":[{"command":"hcoord wait .","exit":1,"name":"cli"}],"passed":false},"outcome":"human","phase":"await-fix"}"#
         );
+        let value: serde_json::Value = serde_json::from_str(&line(&failed, "human")).unwrap();
+        assert!(value["acceptance"].get("hand").is_none());
+    }
+
+    // What a coordinator needs to see when a scenario was left to hand: the count, apart
+    // from `failed`, and a run that passed everything it could run still reading as passed.
+    #[test]
+    fn the_line_counts_hand_checks_apart_from_the_ones_that_ran() {
+        let state: BuildState = serde_json::from_str(
+            r#"{"phase":"done","acceptance_result":{"passed":true,"checks":[
+                {"scenario":"S1","command":"a","exit":0,"state":"pass"},
+                {"scenario":"S2","command":"b","exit":0,"state":"pass"},
+                {"scenario":"S3","command":"c","exit":0,"state":"pass"},
+                {"scenario":"S6","state":"hand","screen":"screens/S6.png"}]}}"#,
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&line(&state, "done")).unwrap();
+        assert_eq!(value["acceptance"]["hand"], 1);
+        assert_eq!(value["acceptance"]["checks"], 4);
+        assert_eq!(value["acceptance"]["passed"], true);
+        assert_eq!(value["acceptance"]["failed"], serde_json::json!([]));
     }
 
     // The line a coordinator reads to go straight to done with the PR and make no merge

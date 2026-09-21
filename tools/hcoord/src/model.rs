@@ -270,27 +270,65 @@ impl Coordinator {
     }
 }
 
-/// One acceptance command an unattended run executed, and how it went.
+/// One acceptance check an unattended run recorded: a command it executed, or a `hand`
+/// scenario whose screen it captured instead.
 #[derive(Clone, Debug, Deserialize)]
 pub struct AcceptanceCheck {
-    /// What the check is called in the plan.
-    pub name: String,
-    /// The command as it was run, when the pipeline recorded one.
+    /// The goal scenario this check belongs to, when the run was seeded from a goal.
+    #[serde(default)]
+    pub scenario: Option<String>,
+    /// What the check is called in the plan, when the run was not seeded from a goal.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The command as it was run, when the pipeline recorded one. A `hand` check has none.
     #[serde(default)]
     pub command: Option<String>,
     /// The command's exit status, when the pipeline recorded one.
     #[serde(default)]
     pub exit: Option<i32>,
-    /// Whether this check passed. Absent in the file means it did not.
+    /// Whether this check passed. Absent in the file means it did not. Read only when
+    /// `state` is absent, which is every file written before `state` existed.
     #[serde(default)]
     pub pass: bool,
+    /// `pass`, `fail` or `hand`. Wins over `pass` when both are present.
+    #[serde(default)]
+    pub state: Option<String>,
+    /// The captured screen of a `hand` check, relative to the task's notes directory.
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub screen: Option<String>,
+}
+
+impl AcceptanceCheck {
+    /// What to call the check: its scenario id, else its name, else the empty string.
+    pub fn label(&self) -> &str {
+        self.scenario
+            .as_deref()
+            .or(self.name.as_deref())
+            .unwrap_or("")
+    }
+
+    /// Whether nobody ran this check: it is a `hand` scenario, recorded with a screen
+    /// instead of a verdict. It is neither a pass nor a failure.
+    pub fn is_hand(&self) -> bool {
+        self.state.as_deref() == Some("hand")
+    }
+
+    /// Whether the check passed. `state` decides when the file has one; a file written
+    /// before `state` existed has only the `pass` flag.
+    pub fn passed(&self) -> bool {
+        match self.state.as_deref() {
+            Some(state) => state == "pass",
+            None => self.pass,
+        }
+    }
 }
 
 /// What an unattended `/task:auto` run recorded about its own acceptance. Absent from
 /// the state file of an interactive run, which stops at the play gate instead.
 #[derive(Clone, Debug, Deserialize)]
 pub struct AcceptanceResult {
-    /// Whether every check passed.
+    /// Whether every check that ran passed.
     #[serde(default)]
     pub passed: bool,
     /// One entry per check, in the order the plan listed them.
@@ -299,25 +337,42 @@ pub struct AcceptanceResult {
 }
 
 impl AcceptanceResult {
-    /// The names of the checks that did not pass, in plan order.
+    /// The labels of the checks that ran and did not pass, in plan order. A `hand` check
+    /// is not a failure.
     pub fn failed(&self) -> Vec<&str> {
         self.checks
             .iter()
-            .filter(|c| !c.pass)
-            .map(|c| c.name.as_str())
+            .filter(|c| !c.is_hand() && !c.passed())
+            .map(|c| c.label())
             .collect()
     }
 
-    /// One line for the narrow coordinator pane: the tally, a pass or fail glyph, and the
-    /// first failing check's name when there is one. `passed` decides the glyph, so a
+    /// How many checks nobody ran, because their scenario is `hand`.
+    pub fn hand(&self) -> usize {
+        self.checks.iter().filter(|c| c.is_hand()).count()
+    }
+
+    /// One line for the narrow coordinator pane: the tally (`3 pass · 1 fail · 1 hand`,
+    /// naming only the non-zero counts after `pass`), a pass or fail glyph, and the
+    /// first failing check's label when there is one. `passed` decides the glyph, so a
     /// result whose flag disagrees with its checks reads as its flag.
     pub fn summary(&self) -> String {
         let total = self.checks.len();
-        let passed = self.checks.iter().filter(|c| c.pass).count();
+        let passed = self.checks.iter().filter(|c| c.passed()).count();
+        let hand = self.hand();
+        let failing = total - passed - hand;
         let tally = if total == 0 {
             String::new()
         } else {
-            format!("{passed}/{total} ")
+            let mut tally = format!("{passed} pass");
+            if failing > 0 {
+                tally.push_str(&format!(" · {failing} fail"));
+            }
+            if hand > 0 {
+                tally.push_str(&format!(" · {hand} hand"));
+            }
+            tally.push(' ');
+            tally
         };
         if self.passed {
             return format!("acceptance {tally}\u{2713}");
@@ -699,7 +754,7 @@ mod tests {
         .unwrap();
         let result = state.acceptance_result.unwrap();
         assert!(result.failed().is_empty());
-        assert_eq!(result.summary(), "acceptance 2/2 \u{2713}");
+        assert_eq!(result.summary(), "acceptance 2 pass \u{2713}");
 
         let failing: BuildState = serde_json::from_str(
             r#"{"phase":"await-fix","acceptance_result":{"checks":[
@@ -709,7 +764,38 @@ mod tests {
         .unwrap();
         let result = failing.acceptance_result.unwrap();
         assert_eq!(result.failed(), vec!["cli"]);
-        assert_eq!(result.summary(), "acceptance 1/2 \u{2717} cli");
+        assert_eq!(result.summary(), "acceptance 1 pass · 1 fail \u{2717} cli");
+    }
+
+    // A hand check is a scenario nobody ran, so it must be counted apart in the tally and
+    // must not read as a failure, or every goal with a `hand` scenario would fail its run.
+    #[test]
+    fn a_hand_check_is_counted_apart_in_the_tally_and_is_not_a_failure() {
+        let state: BuildState = serde_json::from_str(
+            r#"{"phase":"done","acceptance_result":{"passed":true,"checks":[
+                {"scenario":"S1","command":"a","exit":0,"state":"pass"},
+                {"scenario":"S2","command":"b","exit":0,"state":"pass"},
+                {"scenario":"S3","command":"c","exit":0,"state":"pass"},
+                {"scenario":"S6","state":"hand","screen":"screens/S6.png"}]}}"#,
+        )
+        .unwrap();
+        let result = state.acceptance_result.unwrap();
+        assert!(result.summary().contains("3 pass \u{b7} 1 hand"));
+        assert!(result.failed().is_empty());
+        assert_eq!(result.hand(), 1);
+
+        let mixed: AcceptanceResult = serde_json::from_str(
+            r#"{"passed":false,"checks":[
+                {"scenario":"S1","state":"pass"},
+                {"scenario":"S5","state":"fail"},
+                {"scenario":"S6","state":"hand"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(mixed.failed(), vec!["S5"]);
+        assert_eq!(
+            mixed.summary(),
+            "acceptance 1 pass \u{b7} 1 fail \u{b7} 1 hand \u{2717} S5"
+        );
     }
 
     // The interactive path stops at the play gate and writes no result block, so a state

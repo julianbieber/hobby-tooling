@@ -1,8 +1,10 @@
 //! `hcoord` — what a coordinator session needs from outside the Claude pane: a live
 //! view of its `tasks.json` in the pane next to it, a way to block on one task's
 //! pipeline state and on its pull request instead of polling them from a prompt, and
-//! the seeding of a task's brief from the goal file its list was split from.
+//! the seeding of a task's brief from the goal file its list was split from, and the
+//! capture of the screen a `hand` scenario names.
 
+mod capture;
 mod ci;
 mod clock;
 mod goal;
@@ -33,6 +35,9 @@ usage:
                                                 check a goal file, and with --tasks that every
                                                 scenario is owned by exactly one task
   hcoord goal show <goal.md> <id>...            print the named scenarios verbatim
+  hcoord capture <task notes dir> <scenario> --window <name> | --text <file>
+                                                write screens/<scenario>.png for a hand scenario:
+                                                an X11 window, or a file (- for stdin) rendered as text
   hcoord seed <coordinator notes dir> <task> [--force]
                                                 write the task's build-task.json and
                                                 business-context.md from tasks.json and its goal
@@ -124,6 +129,16 @@ fn main() -> ExitCode {
             }
             _ => usage(),
         },
+        "capture" => match (args.get(1), args.get(2)) {
+            (Some(dir), Some(scenario)) => match parse_capture_flags(&args[3..]) {
+                Ok(source) => capture::run(&PathBuf::from(dir), scenario, source),
+                Err(e) => {
+                    eprintln!("hcoord capture: {e}");
+                    ExitCode::from(1)
+                }
+            },
+            _ => usage(),
+        },
         "seed" => match (args.get(1), args.get(2)) {
             (Some(dir), Some(task)) => match parse_seed_flags(&args[3..]) {
                 Ok(force) => seed::run(&PathBuf::from(dir), task, force),
@@ -156,6 +171,23 @@ fn parse_goal_flags(rest: &[String]) -> Result<Option<PathBuf>, String> {
         }
     }
     Ok(tasks)
+}
+
+fn parse_capture_flags(rest: &[String]) -> Result<capture::Source, String> {
+    let mut source = None;
+    let mut it = rest.iter();
+    while let Some(flag) = it.next() {
+        let value = it.next().ok_or_else(|| format!("{flag} wants a value"))?;
+        let next = match flag.as_str() {
+            "--window" => capture::Source::Window(value.clone()),
+            "--text" => capture::Source::Text(PathBuf::from(value)),
+            other => return Err(format!("unexpected argument: {other}")),
+        };
+        if source.replace(next).is_some() {
+            return Err("give one of --window or --text, not both".to_owned());
+        }
+    }
+    source.ok_or_else(|| "give --window <name> or --text <file>".to_owned())
 }
 
 fn parse_seed_flags(rest: &[String]) -> Result<bool, String> {
@@ -286,6 +318,24 @@ mod tests {
         assert!(!parse_seed_flags(&args(&[])).unwrap());
         assert!(parse_seed_flags(&args(&["--force"])).unwrap());
         assert!(parse_seed_flags(&args(&["--frce"])).is_err());
+    }
+
+    // A capture from two sources at once, or from none, would write a picture of
+    // something the caller did not name, so both must be usage errors.
+    #[test]
+    fn capture_flags_want_exactly_one_source() {
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(matches!(
+            parse_capture_flags(&args(&["--window", "app"])),
+            Ok(capture::Source::Window(name)) if name == "app"
+        ));
+        assert!(matches!(
+            parse_capture_flags(&args(&["--text", "-"])),
+            Ok(capture::Source::Text(path)) if path.as_os_str() == "-"
+        ));
+        assert!(parse_capture_flags(&args(&[])).is_err());
+        assert!(parse_capture_flags(&args(&["--window", "a", "--text", "b"])).is_err());
+        assert!(parse_capture_flags(&args(&["--window"])).is_err());
     }
 
     // The `fix-ci` phase spells `--spent`/`--bound` from `ci_result.rounds` on every

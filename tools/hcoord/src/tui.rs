@@ -427,6 +427,49 @@ mod tests {
         );
     }
 
+    // The hand count has to reach the list itself, not only the wait line, or a
+    // coordinator watching the pane cannot tell a run that checked everything from one
+    // that left a scenario to a person.
+    #[test]
+    fn a_hand_check_shows_in_the_tally_under_the_task() {
+        let coordinator =
+            Coordinator::parse(r#"{"project":"p","blurb":"b","tasks":[{"task":"a","title":"A"}]}"#)
+                .unwrap();
+        let result: crate::model::AcceptanceResult = serde_json::from_str(
+            r#"{"passed":true,"checks":[
+                {"scenario":"S1","state":"pass"},
+                {"scenario":"S2","state":"pass"},
+                {"scenario":"S3","state":"pass"},
+                {"scenario":"S6","state":"hand","screen":"screens/S6.png"}]}"#,
+        )
+        .unwrap();
+        let app = App {
+            dir: PathBuf::new(),
+            loaded: Ok(Loaded {
+                coordinator,
+                prs: vec![Vec::new()],
+                acceptance: vec![Some((result.summary(), result.passed))],
+                merge: vec![None],
+            }),
+            seen: Vec::new(),
+            scroll: 0,
+            show_description: false,
+            body: Rect::new(0, 3, 40, 10),
+        };
+        let rendered: Vec<String> = app
+            .lines()
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![
+                "\u{b7} 1. A",
+                "    acceptance 3 pass \u{b7} 1 hand \u{2713}"
+            ]
+        );
+    }
+
     // A blocked merge is what a coordinator has instead of the session's pane when a
     // green PR still could not land — it has to reach the list between the note and the
     // PR link, the same slot the acceptance result takes.
