@@ -326,6 +326,11 @@ nothing is blocked (`task.json` → `done: true`), write the journal, and end. A
 blocked task is left blocked with its reason on the card; unblocking is a
 decision for me.
 
+When `tasks.json` names a `goal`, the last line printed names the pass: *"every
+task is done; `/task:judge` walks the goal's scenarios and records the verdict in
+`judgement.md`"*. This session does not run it. The judgement needs me, and this
+session is the one place I am already sitting.
+
 ## Journal
 
 The coordinator has no worktree, so `journal:write` cannot find it. Write
