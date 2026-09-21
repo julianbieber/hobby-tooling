@@ -102,7 +102,7 @@ Each section closes one class of divergence:
 | **Left to the build** | the 16 / 24 / 128 bounds surfaced as choices, not buried |
 | **Tunables** | hillshade gain: exposed and set at judgement, not guessed and shipped |
 
-A `?` anywhere outside backticks is an open question. It is how the file is
+A `?` anywhere outside backticks is an open question, except inside `Intent` and `Decisions`, where the words are mine and a question mark I wrote is not a guess. It is how the file is
 written — every guess is marked `?` and answered in my words — and a file with
 one left is not finished.
 
