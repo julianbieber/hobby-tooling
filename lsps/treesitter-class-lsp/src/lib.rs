@@ -1,3 +1,4 @@
+pub mod definition;
 pub mod fuzzy;
 pub mod grammars;
 pub mod indexer;

@@ -7,6 +7,7 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
 
+use crate::definition;
 use crate::fuzzy;
 use crate::indexer::{Index, IndexEntry, Indexer};
 use crate::languages::LanguageRegistry;
@@ -96,6 +97,7 @@ impl LanguageServer for Backend {
                     ..Default::default()
                 }),
                 workspace_symbol_provider: Some(OneOf::Left(true)),
+                definition_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -193,6 +195,42 @@ impl LanguageServer for Backend {
         }
     }
 
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let pos = params.text_document_position_params.position;
+
+        let open_text = self.state.docs.read().await.get(&uri).cloned();
+        let text = match open_text {
+            Some(t) => t,
+            None => match uri.to_file_path().ok().and_then(|p| std::fs::read_to_string(p).ok()) {
+                Some(t) => t,
+                None => return Ok(None),
+            },
+        };
+        let Some(name) = definition::identifier_at(&text, pos) else {
+            return Ok(None);
+        };
+
+        let index = self.state.index.read().await;
+        let locations: Vec<Location> = definition::lookup(index.entries(), &name)
+            .into_iter()
+            .filter_map(|e| {
+                Some(Location {
+                    uri: e.uri()?,
+                    range: e.name_range,
+                })
+            })
+            .collect();
+        if locations.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(GotoDefinitionResponse::Array(locations)))
+        }
+    }
+
     async fn symbol(
         &self,
         params: WorkspaceSymbolParams,
@@ -255,7 +293,7 @@ impl Backend {
 /// characters (alphanumeric + `_`).
 fn word_prefix_at(text: &str, pos: Position) -> Option<String> {
     let line = text.lines().nth(pos.line as usize)?;
-    let byte_col = char_col_to_byte_col(line, pos.character as usize)?;
+    let byte_col = definition::char_col_to_byte_col(line, pos.character as usize)?;
     let prefix: String = line[..byte_col]
         .chars()
         .rev()
@@ -265,21 +303,6 @@ fn word_prefix_at(text: &str, pos: Position) -> Option<String> {
         .rev()
         .collect();
     Some(prefix)
-}
-
-fn char_col_to_byte_col(line: &str, char_col: usize) -> Option<usize> {
-    let mut chars = 0;
-    for (byte_idx, _) in line.char_indices() {
-        if chars == char_col {
-            return Some(byte_idx);
-        }
-        chars += 1;
-    }
-    if chars == char_col {
-        Some(line.len())
-    } else {
-        None
-    }
 }
 
 fn is_completable(e: &IndexEntry) -> bool {

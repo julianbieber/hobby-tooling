@@ -17,6 +17,9 @@ pub struct IndexEntry {
     pub kind: SymbolKind,
     pub file: PathBuf,
     pub range: Range,
+    /// Just the name within `range`; equal to `range` when the tags query
+    /// captured no `@name`.
+    pub name_range: Range,
 }
 
 impl IndexEntry {
@@ -259,6 +262,7 @@ impl Indexer {
             // use the co-matched `@definition.*` kind for the symbol. Otherwise
             // fall back to the `@definition.*` capture itself (rust style).
             let mut name_text: Option<String> = None;
+            let mut name_range_found: Option<Range> = None;
             let mut def_kind: Option<SymbolKind> = None;
             let mut def_range: Option<Range> = None;
             let mut fallback_text: Option<String> = None;
@@ -277,6 +281,7 @@ impl Indexer {
                     if let Ok(text) = cap.node.utf8_text(&source) {
                         name_text = Some(text.to_string());
                     }
+                    name_range_found = Some(range_from_ts_node(cap.node));
                     if def_range.is_none() {
                         def_range = Some(range_from_ts_node(cap.node));
                     }
@@ -295,6 +300,7 @@ impl Indexer {
                 kind,
                 file: path.to_path_buf(),
                 range,
+                name_range: name_range_found.unwrap_or(range),
             });
         }
         promote_methods(&mut out);
