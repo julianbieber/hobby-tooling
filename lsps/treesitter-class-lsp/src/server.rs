@@ -222,8 +222,17 @@ impl LanguageServer for Backend {
                 .map(|info| info.name.clone())
         });
 
+        let path = uri.to_file_path().ok();
         let index = self.state.index.read().await;
-        let locations: Vec<Location> = definition::lookup(index.entries(), &name, language.as_deref())
+        let container = definition::receiver_at(&text, pos).and_then(|receiver| {
+            definition::receiver_type(&text, pos, &receiver, path.as_deref(), index.entries())
+        });
+        let locations: Vec<Location> = definition::lookup(
+            index.entries(),
+            &name,
+            language.as_deref(),
+            container.as_deref(),
+        )
             .into_iter()
             .filter_map(|e| {
                 Some(Location {

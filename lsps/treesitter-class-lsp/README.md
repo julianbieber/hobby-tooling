@@ -10,9 +10,13 @@ it finds through three LSP methods:
   canonical "jump to any symbol by name" endpoint, mapped to `<space>s` in Helix
   and `Ctrl+T` in VS Code). Every result carries its kind.
 - `textDocument/definition` — the definitions named exactly like the identifier
-  under the cursor, wherever in the workspace they are. Resolution is by name
-  alone, so a name defined more than once answers every location, which Helix
-  shows as its picker. Definitions in the buffer's own language come first, then
+  under the cursor, wherever in the workspace they are. A method call is resolved
+  through its receiver where the file says its type — `self`/`this` inside a
+  class body, an annotated variable, a variable assigned from a constructor call
+  (`bot = pkg.Client(...)`), or a receiver that is itself a class name — and
+  answers that class's method alone. Otherwise, including when the type resolves
+  to a class with no such method, resolution is by name alone: a name defined
+  more than once answers every location, which Helix shows as its picker. Definitions in the buffer's own language come first, then
   the rest, each group ordered by file then position; the cap of 100 applies
   after that order. Each location
   is the definition's **name**, not the head of the block. A name nothing defines
@@ -89,11 +93,12 @@ language-servers = ["metals", "treesitter-class-lsp"]
   and resolves `; inherits: …` directives in `tags.scm` query files.
 - `grammars.rs` — dynamically loads Helix's pre-built `.so` grammars via
   `libloading` and caches the resulting `tree_sitter::Language`s.
-- `definition.rs` — finds the identifier under a cursor and looks its name up in
-  the index.
+- `definition.rs` — finds the identifier under a cursor, works out the type of
+  the receiver it is called on from `self`/`this`, an annotation, a constructor
+  assignment or a class name, and looks the name up in the index.
 - `indexer.rs` — walks the workspace with `ignore` (respects `.gitignore`),
   parses each file, runs the tags query, extracts class-like, function and
-  method definitions.
+  method definitions, and records each definition's containing class.
 - `fuzzy.rs` — `nucleo-matcher`-based ranking for completion and
   workspace-symbol queries.
 - `worktree.rs` — extracts the TASK directory from a worktree path.
