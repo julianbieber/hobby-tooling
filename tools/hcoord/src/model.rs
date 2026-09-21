@@ -294,7 +294,6 @@ pub struct AcceptanceCheck {
     #[serde(default)]
     pub state: Option<String>,
     /// The captured screen of a `hand` check, relative to the task's notes directory.
-    #[allow(dead_code)]
     #[serde(default)]
     pub screen: Option<String>,
 }

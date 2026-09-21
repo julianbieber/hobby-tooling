@@ -27,6 +27,11 @@ hcoord seed <coordinator notes dir> <task> [--force]       write a task's build-
 hcoord capture <task notes dir> <scenario> --window <name> | --text <file>
                                                            write screens/<scenario>.png for a hand
                                                            scenario: an X11 window, or text rendered
+hcoord judge list <coordinator notes dir>                  the scenarios to judge, hand ones first
+hcoord judge show <coordinator notes dir> <scenario>       one scenario, its screens and its capture
+hcoord judge record <coordinator notes dir> <scenario> <ok|wrong|tune>
+                    [--words <file|->] [--follow-up <text>]
+                                                           write the verdict into judgement.md
 ```
 
 ## `tui` shows `tasks.json` and nothing else
@@ -285,3 +290,28 @@ one visible window is refused rather than guessed at, because a capture of the w
 window is wrong silently. A failed capture writes nothing and exits 1; `verify`
 records the failure as the check's `note` and does not fail the run, since the
 scenario was one nobody could run in the first place.
+
+## `judge` is the shape of the pass; the words are the skill's
+
+`hcoord judge list | show | record` is what `/task:judge` calls once a run is
+finished. The order the scenarios are judged in — hand ones first, then the goal's
+own — the lookup of each one's captured screen, and the format of `judgement.md`
+are here rather than in the prompt because a prompt re-derives them wrongly on
+every run. What stays in the skill is what only a conversation can do: asking me,
+and turning my words into a follow-up line or a changed default.
+
+The capture shown for a scenario is the `screen` its task recorded on the
+`acceptance_result` check in `build-task.json`, and failing that
+`screens/<id>.png` in the task's notes directory.
+
+`judgement.md` is written in the goal's scenario order however the scenarios were
+judged, because it is read afterwards as a report on the goal. `record` on a
+scenario already judged replaces its block, and the follow-up its earlier answer
+proposed with it. `--words -` reads the answer from standard input, so it reaches
+the file without passing through a shell's quoting. A `wrong` or a `tune` with no
+words is refused: the follow-up line and the tuning commit are both made from those
+words.
+
+The goal is not linted at judgement time, unlike at `seed` time. The run has already
+been built from it, and refusing to record a verdict because a `?` was left in the
+file would lose the one thing the pass exists to keep.

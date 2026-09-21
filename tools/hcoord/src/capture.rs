@@ -136,7 +136,9 @@ fn capture_window(name: &str, out: &Path) -> Result<(), String> {
     run_tool(&program, &args).map(|_| ())
 }
 
-fn read_text(path: &Path) -> Result<String, String> {
+/// The text of the file at `path`, or of standard input, read to its end, when `path`
+/// is `-`. `Err` is a message naming what could not be read.
+pub(crate) fn read_text(path: &Path) -> Result<String, String> {
     if path == Path::new("-") {
         let mut text = String::new();
         std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)
