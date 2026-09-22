@@ -1,0 +1,103 @@
+#!/bin/bash
+# zj-notes — jump between a task's code and its notes.
+#
+# One session is one task, so the session holds at most one `notes` tab.
+# Pressing the keybind focuses that tab, creating it on first use; pressing it
+# again from the notes tab returns to where you came from. Intended to be
+# launched in a floating pane via the `Alt m` keybind in
+# dotfiles/zellij/config.kdl.
+
+set -uo pipefail
+
+TAB="notes"
+LAYOUT="$HOME/.config/zellij/layouts/notes-task.kdl"
+
+die() {
+    printf 'zj-notes: %s\n' "$1" >&2
+    printf 'press any key to close\n' >&2
+    read -rsn1 || true
+    exit 1
+}
+
+current_tab() {
+    zellij action current-tab-info 2>/dev/null | sed -n 's/^name: //p'
+}
+
+tab_exists() {
+    zellij action query-tab-names 2>/dev/null | grep -qxF "$1"
+}
+
+state_file() {
+    local session="${ZELLIJ_SESSION_NAME:-default}"
+    local dir="${XDG_RUNTIME_DIR:-/tmp}/zj-notes"
+    mkdir -p "$dir" || return 1
+    printf '%s/%s\n' "$dir" "${session//[^A-Za-z0-9._-]/_}"
+}
+
+notes_dir_from() {
+    local dir="$1" mod cmd out entry
+    [[ -n "$dir" && -d "$dir" ]] || return 1
+    for entry in "claude-dev.nu:cdev notes" "hcdev.nu:hcdev notes"; do
+        mod="${entry%%:*}"
+        cmd="${entry#*:}"
+        [[ -e "$HOME/.config/nushell/$mod" ]] || continue
+        out=$(cd "$dir" && nu --no-config-file -c \
+            "use ~/.config/nushell/$mod *; $cmd; \$env.PWD" 2>/dev/null)
+        if [[ -n "$out" && -d "$out" ]]; then
+            printf '%s\n' "$out"
+            return 0
+        fi
+    done
+    return 1
+}
+
+layout_candidates() {
+    local dump base pane
+    dump=$(zellij action dump-layout 2>/dev/null) || return 0
+    base=$(printf '%s\n' "$dump" \
+        | sed -n 's/^[[:space:]]*cwd "\(.*\)"[[:space:]]*$/\1/p' | head -1)
+    [[ -n "$base" ]] || return 0
+    printf '%s\n' "$base"
+    printf '%s\n' "$dump" \
+        | sed -n 's/^.*[[:space:]]cwd="\([^"]*\)".*$/\1/p' \
+        | while IFS= read -r pane; do
+            case "$pane" in
+                /*) printf '%s\n' "$pane" ;;
+                *)  printf '%s/%s\n' "${base%/}" "$pane" ;;
+            esac
+        done
+}
+
+state=$(state_file) || die "cannot write state dir"
+current=$(current_tab)
+[[ -n "$current" ]] || die "not inside a zellij session"
+
+if [[ "$current" == "$TAB" ]]; then
+    origin=""
+    [[ -r "$state" ]] && origin=$(<"$state")
+    if [[ -n "$origin" ]] && tab_exists "$origin"; then
+        zellij action go-to-tab-name "$origin" >/dev/null
+    else
+        zellij action go-to-previous-tab >/dev/null
+    fi
+    exit 0
+fi
+
+printf '%s\n' "$current" >"$state"
+
+if tab_exists "$TAB"; then
+    zellij action go-to-tab-name "$TAB" >/dev/null
+    exit 0
+fi
+
+notes_dir=$(notes_dir_from "$PWD")
+if [[ -z "$notes_dir" ]]; then
+    while IFS= read -r candidate; do
+        notes_dir=$(notes_dir_from "$candidate") && break
+        notes_dir=""
+    done < <(layout_candidates)
+fi
+[[ -n "$notes_dir" ]] || die "no notes directory for this task (is it a cdev/hcdev session?)"
+
+zellij action new-tab --layout "$LAYOUT" --name "$TAB" --cwd "$notes_dir" >/dev/null \
+    || die "could not open the notes tab"

@@ -1,0 +1,11 @@
+// One full-width Helix pane on a task's notes directory, opened as the `notes`
+// tab of an hcdev session by zj-notes.
+//
+// No cwd here on purpose: zj-notes passes the task's notes directory through
+// `zellij action new-tab --cwd`, because new-tab panes inherit the zellij
+// server's env rather than the client's, so nothing can reach them by variable.
+layout {
+    pane command="hx" name="notes" close_on_exit=false {
+        args "."
+    }
+}

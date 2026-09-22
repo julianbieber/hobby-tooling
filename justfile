@@ -236,13 +236,15 @@ install-claude-md: _root-notice
 # config.kdl is a real file on any machine the old home dotfiles repo set up, and
 # `ln -sf` will not replace one. The helper moves it aside and says so.
 
-# Symlink the nushell modules + zellij config and layout
+# Symlink the nushell modules + zellij config, layout and notes tab
 install-shell: _root-notice
     @"{{REPO_ROOT}}"/scripts/link-dotfile.sh "{{REPO_ROOT}}/dotfiles/nushell/hwt.nu"   "{{NU_DIR}}/hwt.nu"
     @"{{REPO_ROOT}}"/scripts/link-dotfile.sh "{{REPO_ROOT}}/dotfiles/nushell/hcdev.nu" "{{NU_DIR}}/hcdev.nu"
     @"{{REPO_ROOT}}"/scripts/link-dotfile.sh "{{REPO_ROOT}}/dotfiles/zellij/config.kdl" "{{ZJ_DIR}}/config.kdl"
     @"{{REPO_ROOT}}"/scripts/link-dotfile.sh "{{REPO_ROOT}}/dotfiles/zellij/layouts/hobby-dev.kdl" "{{ZJ_LAYOUTS}}/hobby-dev.kdl"
     @"{{REPO_ROOT}}"/scripts/link-dotfile.sh "{{REPO_ROOT}}/dotfiles/zellij/layouts/hobby-auto.kdl" "{{ZJ_LAYOUTS}}/hobby-auto.kdl"
+    @"{{REPO_ROOT}}"/scripts/link-dotfile.sh "{{REPO_ROOT}}/dotfiles/zellij/layouts/notes-task.kdl" "{{ZJ_LAYOUTS}}/notes-task.kdl"
+    @"{{REPO_ROOT}}"/scripts/link-dotfile.sh "{{REPO_ROOT}}/bin/zj-notes" "{{BIN_DIR}}/zj-notes"
 
 # Add `use hwt.nu *` / `use hcdev.nu *` to config.nu (idempotent)
 wire-nushell:
@@ -455,8 +457,8 @@ test:
 uninstall:
     #!/usr/bin/env bash
     set -euo pipefail
-    rm -f "{{NU_DIR}}/hwt.nu" "{{NU_DIR}}/hcdev.nu" "{{ZJ_LAYOUTS}}/hobby-dev.kdl" "{{ZJ_LAYOUTS}}/hobby-auto.kdl"
-    rm -f "{{BIN_DIR}}/chobby" "{{BIN_DIR}}/hauto" "{{BIN_DIR}}/hx-claude"
+    rm -f "{{NU_DIR}}/hwt.nu" "{{NU_DIR}}/hcdev.nu" "{{ZJ_LAYOUTS}}/hobby-dev.kdl" "{{ZJ_LAYOUTS}}/hobby-auto.kdl" "{{ZJ_LAYOUTS}}/notes-task.kdl"
+    rm -f "{{BIN_DIR}}/chobby" "{{BIN_DIR}}/hauto" "{{BIN_DIR}}/hx-claude" "{{BIN_DIR}}/zj-notes"
     rm -f "$HOME/fun_worktrees/CLAUDE.md"
     rm -f "{{CONFIG_DIR}}/settings.json" "{{CONFIG_DIR}}/CLAUDE.md"
     rm -f "{{CONFIG_DIR}}"/commands/*.md "{{CONFIG_DIR}}"/hooks/*.sh

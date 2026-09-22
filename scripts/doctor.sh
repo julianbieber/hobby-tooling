@@ -105,6 +105,19 @@ for f in "config.kdl" "layouts/hobby-dev.kdl" "layouts/hobby-auto.kdl"; do
         bad "$name not linked" "just install-shell"
     fi
 done
+for pair in "bin/zj-notes:$HOME/.local/bin/zj-notes" \
+            "dotfiles/zellij/layouts/notes-task.kdl:$ZJ/layouts/notes-task.kdl"; do
+    src="$HERE/../${pair%%:*}"
+    dst="${pair#*:}"
+    name=$(basename "$dst")
+    if [ -h "$dst" ] && [ "$(readlink -f "$dst")" = "$(readlink -f "$src")" ]; then
+        ok "$name linked, from this checkout"
+    elif [ -e "$dst" ] || [ -h "$dst" ]; then
+        bad "$name resolves outside this checkout" "just install-shell"
+    else
+        bad "$name not linked" "just install-shell"
+    fi
+done
 
 echo ""
 echo "Repos"
