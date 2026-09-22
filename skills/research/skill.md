@@ -1,5 +1,5 @@
 ---
-description: Answer a question about a library, engine or dependency API as an answer-card file in the current task's research/ dir — slots, copied snippets and verbatim quotes with links, no prose — or which techniques/approaches exist to do something, as an option-matrix. Use whenever I ask how to do something with an API or crate, or which techniques/approaches exist for a problem, with or without /research.
+description: Answer a question about a library, engine or dependency API as an answer-card file in the current task's research/ dir — slots, copied snippets and verbatim quotes with links, no prose — or which techniques/approaches exist to do something, as an option-matrix, or how a technique or mechanism works, as an ASCII mechanism-figure. Use whenever I ask how to do something with an API or crate, which techniques/approaches exist for a problem, or how a technique or mechanism works, with or without /research.
 argument-hint: '<question in one sentence>'
 allowed-tools: Bash(hresearch:*), WebSearch, Read, Grep
 ---
@@ -14,9 +14,12 @@ this task's `research/` dir.
 
 A question asking which techniques, approaches or options exist for a problem
 — a survey of alternatives ("which techniques exist to …", "what approaches
-are there for …") — is an **option-matrix**. Anything else (how do I use this
-API, what does this function do) is an **answer-card**. Everything below step
-0 is common to both; where they differ it says which shape it's for.
+are there for …") — is an **option-matrix**. A question asking how a
+technique, algorithm or mechanism works internally ("how does a flow field
+pathfinder move many agents", "how does X work") is a **mechanism-figure**.
+Anything else — "how do I use this API", "what does this function do" — is an
+**answer-card**. Everything below step 0 is common to all three; where they
+differ it says which shape it's for.
 
 1. `hresearch new "<question verbatim>"` first. Its stdout is the sources
    dir — every other `hresearch` call in this run takes that path.
@@ -87,3 +90,34 @@ API, what does this function do) is an **answer-card**. Everything below step
    `src` or `none`) — fix the JSON and render again. Never write `card.json`
    or the `.md` by hand.
 8. Reply in the pane with exactly one line: the matrix's path.
+
+## Mechanism-figure
+
+4. `hresearch fetch` the source that explains the mechanism — a paper,
+   article, docs page or reference implementation.
+5. Draw the mechanism as an ASCII figure: its stages left to right or top to
+   bottom, joined by arrows (`───►`, `→`, `↓`), each stage a small box or grid
+   showing the data it holds. Labels are at most 5 words each, never a
+   sentence — draw the mechanism, don't caption each piece of it. Enough
+   detail that someone could implement from the figure alone, at most 78
+   columns and 30 lines.
+6. Write one caption line (≤ 16 words) with a `src` — the single sentence the
+   figure itself can't show.
+7. Render:
+   ```
+   hresearch render <dir> - <<'JSON'
+   { "shape": "figure",
+     "figure": "line one\nline two\n...",
+     "caption": {"text": "...", "src": 1} }
+   JSON
+   ```
+   `figure` may also be a JSON list of line strings. A `render:` error names
+   the line or the caption and the problem (a line too wide, a word run that
+   reads as prose, no drawing character anywhere, a caption with no `src` or
+   more than one line) — fix it and render again. Never hand-write the figure
+   around a rejection; redraw it. Never write `card.json` or the `.md` by
+   hand.
+8. Reply in the pane with exactly one line: the figure's path. The figure is
+   a notes file — it never gets written into the jam repo — and a throwaway
+   interactive visual (a plot, a live viewer) is allowed alongside it but is
+   never the default medium; the figure is the answer.

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Turn a fetched-source question into a fixed-slot answer-card, and check one
-against the sources it cites — the tool `/research` calls so a card's slots,
-snippets and quotes are verified by code rather than trusted from the session
-that wrote them.
+"""Turn a fetched-source question into a fixed-shape research file, and check
+one against the sources it cites — the tool `/research` calls so a file's
+slots, snippets and quotes are verified by code rather than trusted from the
+session that wrote them.
 """
 
 import argparse
@@ -22,7 +22,7 @@ WORKTREE_BASE = Path.home() / "fun_worktrees"
 STOPWORDS = {
     "how", "do", "i", "to", "the", "a", "an", "with", "in", "of", "for", "is", "what",
     "which", "techniques", "technique", "exist", "exists", "approaches", "ways",
-    "are", "there",
+    "are", "there", "does", "work", "works",
 }
 
 REQUIRED_SLOTS = ("verdict", "how", "snippet", "breaks")
@@ -36,6 +36,20 @@ CELL_MAX_CHARS = 32
 
 LABEL_WIDTH = 9
 DEFAULT_WIDTH = 78
+
+FIGURE_MIN_LINES = 3
+FIGURE_MAX_LINES = 30
+FIGURE_MAX_COLS = DEFAULT_WIDTH
+FIGURE_SEGMENT_MAX_WORDS = 5
+CAPTION_MAX_WORDS = 16
+CAPTION_MAX_CHARS = 120
+DRAWING_ASCII = set("|+/\\<>^=#")
+DRAWING_UNICODE_RANGES = (
+    (0x2500, 0x257F),
+    (0x2190, 0x21FF),
+    (0x2580, 0x259F),
+    (0x25A0, 0x25FF),
+)
 GITHUB_BLOB_RE = re.compile(r"^https://github\.com/([^/]+)/([^/]+)/blob/([^/]+)/([^#]+)")
 BLOCK_TAGS = {
     "p", "div", "li", "br", "tr", "h1", "h2", "h3", "h4", "h5", "h6",
@@ -625,6 +639,127 @@ def render_matrix(model: dict, sources_by_id: dict, question: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _is_drawing_char(ch: str) -> bool:
+    if ch in DRAWING_ASCII:
+        return True
+    cp = ord(ch)
+    return any(lo <= cp <= hi for lo, hi in DRAWING_UNICODE_RANGES)
+
+
+def _split_figure_segments(line: str) -> list:
+    segments = []
+    current = []
+    i = 0
+    n = len(line)
+    while i < n:
+        ch = line[i]
+        if ch == " " and i + 1 < n and line[i + 1] == " ":
+            j = i
+            while j < n and line[j] == " ":
+                j += 1
+            segments.append("".join(current))
+            current = []
+            i = j
+            continue
+        if _is_drawing_char(ch):
+            segments.append("".join(current))
+            current = []
+            i += 1
+            continue
+        current.append(ch)
+        i += 1
+    segments.append("".join(current))
+    return segments
+
+
+def validate_figure(card: dict, sources_by_id: dict, problems: list):
+    raw = card.get("figure")
+    if isinstance(raw, list):
+        if not all(isinstance(l, str) for l in raw):
+            problems.append("figure: list entries must be strings")
+            return None
+        lines = [l.rstrip() for l in raw]
+    elif isinstance(raw, str):
+        lines = [l.rstrip() for l in raw.split("\n")]
+    else:
+        problems.append("figure: must be a string or a list of strings")
+        return None
+
+    while lines and lines[0] == "":
+        lines.pop(0)
+    while lines and lines[-1] == "":
+        lines.pop()
+
+    ok = True
+    if not (FIGURE_MIN_LINES <= len(lines) <= FIGURE_MAX_LINES):
+        problems.append(f"figure: must have {FIGURE_MIN_LINES}-{FIGURE_MAX_LINES} lines, has {len(lines)}")
+        ok = False
+
+    for i, line in enumerate(lines, start=1):
+        if "\t" in line:
+            problems.append(f"figure: line {i}: contains a tab")
+            ok = False
+        if len(line) > FIGURE_MAX_COLS:
+            problems.append(f"figure: line {i}: wider than {FIGURE_MAX_COLS} columns")
+            ok = False
+        for segment in _split_figure_segments(line):
+            words = segment.split()
+            if len(words) > FIGURE_SEGMENT_MAX_WORDS:
+                problems.append(
+                    f"figure: line {i}: {len(words)}-word run is prose, "
+                    f"label at most {FIGURE_SEGMENT_MAX_WORDS}"
+                )
+                ok = False
+
+    if not any(_is_drawing_char(ch) for line in lines for ch in line):
+        problems.append("figure: no drawing character found — a figure of words only is prose")
+        ok = False
+
+    caption = card.get("caption")
+    parsed_caption = None
+    if not isinstance(caption, dict) or set(caption.keys()) != {"text", "src"}:
+        problems.append("caption: must be exactly {text, src}")
+        ok = False
+    else:
+        text = caption.get("text")
+        src = caption.get("src")
+        text_ok = True
+        if not isinstance(text, str) or not text.strip() or "\n" in text:
+            problems.append("caption: text must be a non-empty single-line string")
+            text_ok = False
+        elif len(text) > CAPTION_MAX_CHARS:
+            problems.append(f"caption: text exceeds {CAPTION_MAX_CHARS} chars")
+            text_ok = False
+        elif len(text.split()) > CAPTION_MAX_WORDS:
+            problems.append(f"caption: text exceeds {CAPTION_MAX_WORDS} words")
+            text_ok = False
+        src_ok = True
+        if not isinstance(src, int) or isinstance(src, bool) or src not in sources_by_id:
+            problems.append("caption: src is required and must be in sources.json")
+            src_ok = False
+        if text_ok and src_ok:
+            parsed_caption = {"text": text, "src": src}
+        else:
+            ok = False
+
+    if not ok:
+        return None
+    return {"lines": lines, "caption": parsed_caption}
+
+
+def render_figure(model: dict, sources_by_id: dict, question: str) -> str:
+    lines = model["lines"]
+    caption = model["caption"]
+    src = caption["src"]
+    body = [f"question: {question}", ""]
+    for line in lines:
+        body.append(f"    {line}" if line else "")
+    body.append(f"    {caption['text']} [{src}]")
+    body.append("")
+    body.append(f"[{src}] {sources_by_id[src]['url']}")
+    return "\n".join(body) + "\n"
+
+
 def cmd_render(dir_arg: str, source_arg) -> int:
     dir_ = Path(dir_arg)
     stem = dir_.name
@@ -643,7 +778,7 @@ def cmd_render(dir_arg: str, source_arg) -> int:
     card_json_path.write_text(json.dumps(card, indent=2) + "\n")
 
     shape = card.get("shape", "card")
-    if shape not in ("card", "matrix"):
+    if shape not in ("card", "matrix", "figure"):
         print("render: shape: unknown", file=sys.stderr)
         return 1
 
@@ -659,6 +794,14 @@ def cmd_render(dir_arg: str, source_arg) -> int:
                 print(f"render: {p}", file=sys.stderr)
             return 1
         text = render_matrix(model, sources_by_id, question)
+    elif shape == "figure":
+        problems = []
+        model = validate_figure(card, sources_by_id, problems)
+        if problems:
+            for p in problems:
+                print(f"render: {p}", file=sys.stderr)
+            return 1
+        text = render_figure(model, sources_by_id, question)
     else:
         def get_source_text(src_id):
             path = dir_ / f"{src_id}.txt"
@@ -715,6 +858,43 @@ def cmd_check_matrix(card_md: Path, dir_: Path, card: dict, sources_by_id: dict,
                     fetch_text(url)
                 except (urllib.error.URLError, OSError) as exc:
                     problems.append(f"--live fetch failed for [{i}] {url}: {exc}")
+
+    for line in output:
+        print(line)
+
+    if problems:
+        for p in problems:
+            print(f"check: {p}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_check_figure(card_md: Path, dir_: Path, card: dict, sources_by_id: dict,
+                      question: str, live: bool, require: list) -> int:
+    problems = []
+    if require:
+        problems.append("--require: not applicable to a figure")
+
+    model = validate_figure(card, sources_by_id, problems)
+
+    output = ["shape: figure"]
+    if model is not None:
+        lines = model["lines"]
+        width = max((len(l) for l in lines), default=0)
+        output.append(f"figure: {len(lines)} lines, {width} cols")
+        src = model["caption"]["src"]
+        output.append(f"caption: [{src}] {sources_by_id[src]['url']}")
+
+        rendered = render_figure(model, sources_by_id, question)
+        if not card_md.exists() or card_md.read_text() != rendered:
+            problems.append(f"card.md differs from its card.json ({card_md})")
+
+        if live:
+            url = sources_by_id[src]["url"]
+            try:
+                fetch_text(url)
+            except (urllib.error.URLError, OSError) as exc:
+                problems.append(f"--live fetch failed for [{src}] {url}: {exc}")
 
     for line in output:
         print(line)
@@ -811,6 +991,8 @@ def cmd_check(card_arg: str, live: bool, require: list) -> int:
     shape = card.get("shape", "card")
     if shape == "matrix":
         return cmd_check_matrix(card_md, dir_, card, sources_by_id, question, live, require)
+    if shape == "figure":
+        return cmd_check_figure(card_md, dir_, card, sources_by_id, question, live, require)
     return cmd_check_card(card_md, dir_, card, sources_by_id, question, date, live, require)
 
 
