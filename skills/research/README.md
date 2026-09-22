@@ -69,17 +69,84 @@ the card otherwise. `hresearch check --live <card.md>` re-fetches those
 sources fresh and re-runs the same check, which is how a card is audited after
 the fact rather than only trusted at write time.
 
+## The option-matrix screen
+
+A question of the form "which techniques exist to …" is answered as a
+**matrix** instead: `research/<stem>.md`, one row per criterion instead of
+slots of prose:
+
+```
+question: which techniques exist to simulate water flow
+
+                | heightfield pipes | shallow water eq | SPH particles |
+looks like      | rivers, pools     | waves, splash    | droplets      |
+cost per frame  | O(cells)          | O(cells), stiff  | O(n log n)    |
+jam-sized       | yes               | yes, careful dt  | small counts  |
+bevy precedent  | [1]               | [2]              | none found    |
+verdict         | start here        |                  |               |
+
+[1] <url>
+[2] <url>
+```
+
+**Criteria (first set)**, fixed by the tool rather than chosen per question —
+so "one row per criterion" is checkable against a known set:
+
+- **looks like** — what the technique produces or feels like in play.
+- **cost per frame** — the shape of its runtime cost.
+- **jam-sized** — whether it fits a jam's time and scope.
+- **bevy precedent** — a link to a Bevy example/crate/repo, or `none found`.
+
+## Matrix JSON
+
+```json
+{ "shape": "matrix",
+  "options": [
+    { "name": "heightfield pipes",
+      "cells": {
+        "looks like": {"text": "rivers, pools", "src": 1},
+        "cost per frame": {"text": "O(cells)"},
+        "jam-sized": {"text": "yes"},
+        "bevy precedent": {"src": 3}
+      } },
+    { "name": "cellular automaton",
+      "cells": {
+        "looks like": {"text": "falling sand"},
+        "cost per frame": {"text": "O(cells)"},
+        "jam-sized": {"text": "yes"},
+        "bevy precedent": {"none": true}
+      } }
+  ],
+  "verdict": {"option": "heightfield pipes", "text": "start here"} }
+```
+
+Rules `render` enforces:
+
+- 2–5 options, unique `name`s, each ≤ 32 chars.
+- Every option's `cells` has exactly the four criteria, no extras.
+- A non-precedent cell's `text` is a single line, ≤ 32 chars and ≤ 4 words
+  (a cited `[k]` suffix doesn't count as a word); `src` is optional and must
+  be in `sources.json`.
+- A `bevy precedent` cell is exactly `{"src": k}` (k in `sources.json`) or
+  `{"none": true}` — never a `text` cell.
+- `verdict.option` must name exactly one option; `verdict.text` is a
+  single line of ≤ 4 words.
+
 ## Commands
 
 ```
 hresearch new "<question>"          create the sources dir, print its path
 hresearch fetch <dir> <url>         fetch and store a source, print its id
-hresearch render <dir> - <<JSON     validate card.json and write the card
+hresearch render <dir> - <<JSON     validate card.json/matrix and write the file
 hresearch check <card.md> [--live] [--require <slot>]...
 ```
 
-`check` also verifies the `.md` is byte-identical to a re-render of its
-`card.json` — a hand edit to the file fails it.
+`check` prints `shape: card` or `shape: matrix` first, then shape-specific
+lines (a card's `slots:`/`claims:`, or a matrix's `criteria:`/`options:`/
+`verdict:`/one `precedent:` line per cited link). `--require` only applies to
+a card's slots — on a matrix it fails with `--require: not applicable to a
+matrix`. `check` also verifies the `.md` is byte-identical to a re-render of
+its `card.json` — a hand edit to the file fails it, for either shape.
 
 ## Install
 

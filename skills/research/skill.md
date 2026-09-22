@@ -1,24 +1,36 @@
 ---
-description: Answer a question about a library, engine or dependency API as an answer-card file in the current task's research/ dir — slots, copied snippets and verbatim quotes with links, no prose. Use whenever I ask how to do something with an API or crate, with or without /research.
+description: Answer a question about a library, engine or dependency API as an answer-card file in the current task's research/ dir — slots, copied snippets and verbatim quotes with links, no prose — or which techniques/approaches exist to do something, as an option-matrix. Use whenever I ask how to do something with an API or crate, or which techniques/approaches exist for a problem, with or without /research.
 argument-hint: '<question in one sentence>'
 allowed-tools: Bash(hresearch:*), WebSearch, Read, Grep
 ---
 
 Answer $ARGUMENTS (or, when invoked by description rather than `/research`, my
-last message) as an **answer-card**: a fixed-slot markdown file, never prose.
-This is research on the side of a jam entry where LLM-written code and assets
-are prohibited, so nothing here may write code or copy text into the jam repo
-— only cards in this task's `research/` dir.
+last message) as a fixed-shape markdown file, never prose. This is research on
+the side of a jam entry where LLM-written code and assets are prohibited, so
+nothing here may write code or copy text into the jam repo — only files in
+this task's `research/` dir.
 
-1. `hresearch new "<question verbatim>"` first. Its stdout is the card's
-   sources dir — every other `hresearch` call in this run takes that path.
+## 0. Pick the shape
+
+A question asking which techniques, approaches or options exist for a problem
+— a survey of alternatives ("which techniques exist to …", "what approaches
+are there for …") — is an **option-matrix**. Anything else (how do I use this
+API, what does this function do) is an **answer-card**. Everything below step
+0 is common to both; where they differ it says which shape it's for.
+
+1. `hresearch new "<question verbatim>"` first. Its stdout is the sources
+   dir — every other `hresearch` call in this run takes that path.
 2. Search with `WebSearch`. Every page you intend to cite is fetched with
    `hresearch fetch <dir> <url>` — never `WebFetch` for a page you'll cite,
-   because a cited quote has to be checkable against the stored copy `fetch`
-   makes. Read or `Grep` the stored `<id>.txt` files to find the sentences and
-   code you need.
+   because a cited quote or precedent has to be checkable against the stored
+   copy `fetch` makes. Read or `Grep` the stored `<id>.txt` files to find the
+   sentences and code you need.
 3. Prefer docs.rs (or the crate's own docs) for API facts, and a GitHub `blob`
-   link into the crate's `examples/` or source for the snippet.
+   link into the crate's `examples/` or source for a card's snippet or a
+   matrix's precedent.
+
+## Answer-card
+
 4. Fill the slots:
    - **verdict** — 1–2 items, the answer itself.
    - **how** — up to 6 numbered steps.
@@ -43,3 +55,35 @@ are prohibited, so nothing here may write code or copy text into the jam repo
    touch the jam repo checkout.
 6. Reply in the pane with exactly one line: the card's path. Nothing else —
    the card is the answer, not a summary of it.
+
+## Option-matrix
+
+4. Pick 2–5 techniques as columns — never more than 5; if more are genuinely
+   candidates, keep the strongest ones and drop the rest.
+5. The four criteria are fixed and every cell must be filled for every
+   column, in a few words, never a sentence:
+   - **looks like** — what it produces or feels like in play.
+   - **cost per frame** — the shape of its runtime cost.
+   - **jam-sized** — whether it fits a jam's time and scope, and the catch if
+     any.
+   - **bevy precedent** — for each technique, `hresearch fetch` a Bevy
+     example, crate or repo that implements it and cite it as `{"src": k}`;
+     `{"none": true}` when no precedent was found. Never a `text` cell here.
+6. `verdict` names exactly one column — pick one, never "it depends".
+7. Render:
+   ```
+   hresearch render <dir> - <<'JSON'
+   { "shape": "matrix",
+     "options": [ {"name": "...", "cells": {
+         "looks like": {"text": "...", "src": 1},
+         "cost per frame": {"text": "..."},
+         "jam-sized": {"text": "..."},
+         "bevy precedent": {"src": 2} } }, ... ],
+     "verdict": {"option": "...", "text": "..."} }
+   JSON
+   ```
+   A `render:` error names the cell and the problem (too many words, an
+   unknown criterion, a verdict naming no column, a precedent cell with no
+   `src` or `none`) — fix the JSON and render again. Never write `card.json`
+   or the `.md` by hand.
+8. Reply in the pane with exactly one line: the matrix's path.

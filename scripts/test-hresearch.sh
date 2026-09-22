@@ -199,6 +199,177 @@ else
     pass require-empty-fails
 fi
 
+MDIR=$(cd "$WORKTREE" && "$HRESEARCH" new "which techniques exist to simulate water flow")
+"$HRESEARCH" fetch "$MDIR" "$PAGE_URL" >/dev/null
+MATRIX_MD="$NOTES/research/$(basename "$MDIR").md"
+
+render_matrix() {
+    "$HRESEARCH" render "$MDIR" - <<< "$1"
+}
+
+OK_MATRIX='{
+  "shape": "matrix",
+  "options": [
+    {"name": "heightfield pipes", "cells": {
+        "looks like": {"text": "rivers, pools"},
+        "cost per frame": {"text": "O(cells)"},
+        "jam-sized": {"text": "yes"},
+        "bevy precedent": {"src": 1}}},
+    {"name": "SPH particles", "cells": {
+        "looks like": {"text": "droplets"},
+        "cost per frame": {"text": "O(n log n)"},
+        "jam-sized": {"text": "small counts"},
+        "bevy precedent": {"none": true}}}
+  ],
+  "verdict": {"option": "heightfield pipes", "text": "start here"}
+}'
+
+# matrix-render-ok: a valid matrix renders the question, every criterion, verdict, and a footnote
+if render_matrix "$OK_MATRIX" >/dev/null 2>&1 && [ -f "$MATRIX_MD" ]; then
+    missing=""
+    grep -qF "question: which techniques exist to simulate water flow" "$MATRIX_MD" || missing="$missing question-line"
+    for label in "looks like" "cost per frame" "jam-sized" "bevy precedent" "verdict"; do
+        grep -q "^$label" "$MATRIX_MD" || missing="$missing $label"
+    done
+    grep -qF "[1] $PAGE_URL" "$MATRIX_MD" || missing="$missing footnote"
+    [ -z "$missing" ] && pass matrix-render-ok || fail matrix-render-ok "missing:$missing"
+else
+    fail matrix-render-ok "render failed"
+fi
+
+# matrix-slug: the survey stopwords leave only the subject in the stem
+case "$(basename "$MDIR")" in
+    *-simulate-water-flow) pass matrix-slug ;;
+    *) fail matrix-slug "unexpected stem: $(basename "$MDIR")" ;;
+esac
+
+# matrix-rejects-long-cell: a 5-word cell is refused, no md written
+rm -f "$MATRIX_MD"
+LONG_CELL_MATRIX='{
+  "shape": "matrix",
+  "options": [
+    {"name": "heightfield pipes", "cells": {
+        "looks like": {"text": "one two three four five"},
+        "cost per frame": {"text": "O(cells)"},
+        "jam-sized": {"text": "yes"},
+        "bevy precedent": {"none": true}}},
+    {"name": "SPH particles", "cells": {
+        "looks like": {"text": "droplets"},
+        "cost per frame": {"text": "O(n log n)"},
+        "jam-sized": {"text": "small counts"},
+        "bevy precedent": {"none": true}}}
+  ],
+  "verdict": {"option": "heightfield pipes", "text": "start here"}
+}'
+if render_matrix "$LONG_CELL_MATRIX" >/dev/null 2>/tmp/hresearch-test-err; then
+    fail matrix-rejects-long-cell "render succeeded"
+elif [ -f "$MATRIX_MD" ]; then
+    fail matrix-rejects-long-cell "md written despite rejection"
+else
+    pass matrix-rejects-long-cell
+fi
+
+# matrix-rejects-missing-criterion: an option missing a criterion is refused
+rm -f "$MATRIX_MD"
+MISSING_CRIT_MATRIX='{
+  "shape": "matrix",
+  "options": [
+    {"name": "heightfield pipes", "cells": {
+        "looks like": {"text": "rivers, pools"},
+        "cost per frame": {"text": "O(cells)"},
+        "bevy precedent": {"none": true}}},
+    {"name": "SPH particles", "cells": {
+        "looks like": {"text": "droplets"},
+        "cost per frame": {"text": "O(n log n)"},
+        "jam-sized": {"text": "small counts"},
+        "bevy precedent": {"none": true}}}
+  ],
+  "verdict": {"option": "heightfield pipes", "text": "start here"}
+}'
+if render_matrix "$MISSING_CRIT_MATRIX" >/dev/null 2>/tmp/hresearch-test-err; then
+    fail matrix-rejects-missing-criterion "render succeeded"
+elif [ -f "$MATRIX_MD" ]; then
+    fail matrix-rejects-missing-criterion "md written despite rejection"
+else
+    pass matrix-rejects-missing-criterion
+fi
+
+# matrix-rejects-bad-verdict: a verdict naming no column is refused
+rm -f "$MATRIX_MD"
+BAD_VERDICT_MATRIX='{
+  "shape": "matrix",
+  "options": [
+    {"name": "heightfield pipes", "cells": {
+        "looks like": {"text": "rivers, pools"},
+        "cost per frame": {"text": "O(cells)"},
+        "jam-sized": {"text": "yes"},
+        "bevy precedent": {"none": true}}},
+    {"name": "SPH particles", "cells": {
+        "looks like": {"text": "droplets"},
+        "cost per frame": {"text": "O(n log n)"},
+        "jam-sized": {"text": "small counts"},
+        "bevy precedent": {"none": true}}}
+  ],
+  "verdict": {"option": "cellular automaton", "text": "start here"}
+}'
+if render_matrix "$BAD_VERDICT_MATRIX" >/dev/null 2>/tmp/hresearch-test-err; then
+    fail matrix-rejects-bad-verdict "render succeeded"
+elif [ -f "$MATRIX_MD" ]; then
+    fail matrix-rejects-bad-verdict "md written despite rejection"
+else
+    pass matrix-rejects-bad-verdict
+fi
+
+# matrix-rejects-precedent-without-src: a precedent cell with text only is refused
+rm -f "$MATRIX_MD"
+PRECEDENT_TEXT_MATRIX='{
+  "shape": "matrix",
+  "options": [
+    {"name": "heightfield pipes", "cells": {
+        "looks like": {"text": "rivers, pools"},
+        "cost per frame": {"text": "O(cells)"},
+        "jam-sized": {"text": "yes"},
+        "bevy precedent": {"text": "some crate"}}},
+    {"name": "SPH particles", "cells": {
+        "looks like": {"text": "droplets"},
+        "cost per frame": {"text": "O(n log n)"},
+        "jam-sized": {"text": "small counts"},
+        "bevy precedent": {"none": true}}}
+  ],
+  "verdict": {"option": "heightfield pipes", "text": "start here"}
+}'
+if render_matrix "$PRECEDENT_TEXT_MATRIX" >/dev/null 2>/tmp/hresearch-test-err; then
+    fail matrix-rejects-precedent-without-src "render succeeded"
+elif [ -f "$MATRIX_MD" ]; then
+    fail matrix-rejects-precedent-without-src "md written despite rejection"
+else
+    pass matrix-rejects-precedent-without-src
+fi
+
+# matrix-verdict-one-column: the verdict row has exactly one non-blank cell
+rm -f "$MATRIX_MD"
+render_matrix "$OK_MATRIX" >/dev/null 2>&1
+if [ "$(awk -F'|' '/^verdict /{n=0; for(i=2;i<NF;i++) if ($i ~ /[^ ]/) n++; print n}' "$MATRIX_MD")" = "1" ]; then
+    pass matrix-verdict-one-column
+else
+    fail matrix-verdict-one-column "expected exactly one non-blank verdict cell"
+fi
+
+# matrix-check-ok: check prints shape: matrix and exits 0 on a valid matrix
+if "$HRESEARCH" check "$MATRIX_MD" 2>/dev/null | grep -qx "shape: matrix"; then
+    pass matrix-check-ok
+else
+    fail matrix-check-ok "no 'shape: matrix' line"
+fi
+
+# matrix-check-detects-hand-edit: a manually edited matrix.md fails check
+echo "tampered" >> "$MATRIX_MD"
+if "$HRESEARCH" check "$MATRIX_MD" >/dev/null 2>&1; then
+    fail matrix-check-detects-hand-edit "check passed on a tampered file"
+else
+    pass matrix-check-detects-hand-edit
+fi
+
 if [ "$FAILED" -eq 0 ]; then
     echo "SELFTEST OK"
     exit 0
