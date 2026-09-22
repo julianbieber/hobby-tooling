@@ -44,6 +44,7 @@ opt alacritty "hdash launch actions"        "hdash buttons do nothing"
 opt gh        "issue skills + hdash"        "/pr-create, /gh-issue-*, hdash issues fail"
 opt cargo     "builds the Rust extras"      "no dashboard, no MML tooling"
 opt zk        "note search"                 "/zk-notes fails"
+opt python3   "hresearch (research cards)"  "research cards"
 
 echo ""
 echo "Discovered paths (override in ~/.config/hobby-tooling/paths.env — \`just local-paths\`):"
