@@ -1,0 +1,601 @@
+#!/usr/bin/env python3
+"""Turn a fetched-source question into a fixed-slot answer-card, and check one
+against the sources it cites — the tool `/research` calls so a card's slots,
+snippets and quotes are verified by code rather than trusted from the session
+that wrote them.
+"""
+
+import argparse
+import datetime
+import html.parser
+import json
+import re
+import sys
+import textwrap
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+NOTES_BASE = Path.home() / "fun_repos" / "hobby-mimisbrunnr" / "notes"
+WORKTREE_BASE = Path.home() / "fun_worktrees"
+
+STOPWORDS = {"how", "do", "i", "to", "the", "a", "an", "with", "in", "of", "for", "is", "what"}
+
+REQUIRED_SLOTS = ("verdict", "how", "snippet", "breaks")
+
+LABEL_WIDTH = 9
+DEFAULT_WIDTH = 78
+GITHUB_BLOB_RE = re.compile(r"^https://github\.com/([^/]+)/([^/]+)/blob/([^/]+)/([^#]+)")
+BLOCK_TAGS = {
+    "p", "div", "li", "br", "tr", "h1", "h2", "h3", "h4", "h5", "h6",
+    "pre", "section", "article", "dt", "dd", "table",
+}
+WS_RE = re.compile(r"\s+")
+
+
+def resolve_notes_dir(cwd: Path):
+    for base in (WORKTREE_BASE, NOTES_BASE):
+        try:
+            rel = cwd.relative_to(base)
+        except ValueError:
+            continue
+        parts = rel.parts
+        if len(parts) < 3:
+            continue
+        candidate = NOTES_BASE.joinpath(*parts[:3])
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
+def require_notes_dir() -> Path:
+    cwd = Path.cwd()
+    notes_dir = resolve_notes_dir(cwd)
+    if notes_dir is None:
+        print(f"hresearch: not in a hobby task (no notes dir for {cwd})", file=sys.stderr)
+        sys.exit(2)
+    return notes_dir
+
+
+def make_slug(question: str) -> str:
+    words = [w for w in re.findall(r"[a-z0-9]+", question.lower()) if w not in STOPWORDS]
+    return "-".join(words[:5]) or "question"
+
+
+def unique_stem(research: Path, sources_root: Path, stem: str) -> str:
+    candidate = stem
+    n = 1
+    while (research / f"{candidate}.md").exists() or (sources_root / candidate).exists():
+        n += 1
+        candidate = f"{stem}-{n}"
+    return candidate
+
+
+def cmd_new(question: str) -> int:
+    notes_dir = require_notes_dir()
+    research = notes_dir / "research"
+    sources_root = research / "sources"
+    date = datetime.date.today().isoformat()
+    stem = unique_stem(research, sources_root, f"{date}-{make_slug(question)}")
+    dir_ = sources_root / stem
+    dir_.mkdir(parents=True, exist_ok=True)
+    (dir_ / "question.txt").write_text(question.strip() + "\n")
+    print(dir_)
+    return 0
+
+
+def derive_fetch_url(url: str) -> str:
+    m = GITHUB_BLOB_RE.match(url)
+    if m:
+        owner, repo, ref, path = m.groups()
+        return f"https://raw.githubusercontent.com/{owner}/{repo}/{ref}/{path}"
+    return url
+
+
+class _TextExtractor(html.parser.HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+        self._skip = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("script", "style"):
+            self._skip += 1
+        if tag in BLOCK_TAGS:
+            self.parts.append("\n")
+
+    def handle_startendtag(self, tag, attrs):
+        if tag in BLOCK_TAGS:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in ("script", "style") and self._skip > 0:
+            self._skip -= 1
+        if tag in BLOCK_TAGS:
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        if not self._skip:
+            self.parts.append(data)
+
+
+def extract_text(markup: str) -> str:
+    p = _TextExtractor()
+    p.feed(markup)
+    return "".join(p.parts)
+
+
+def fetch_raw(url: str) -> tuple[str, str]:
+    req = urllib.request.Request(derive_fetch_url(url), headers={"User-Agent": "hresearch"})
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        content_type = resp.headers.get("Content-Type", "") or ""
+        body = resp.read()
+    return content_type, body.decode("utf-8", errors="replace")
+
+
+def fetch_text(url: str) -> str:
+    content_type, body = fetch_raw(url)
+    if "html" in content_type.lower() or body.lstrip().startswith("<"):
+        return extract_text(body)
+    return body
+
+
+def load_sources(sources_json: Path) -> list:
+    if sources_json.exists():
+        return json.loads(sources_json.read_text())
+    return []
+
+
+def save_sources(sources_json: Path, sources: list) -> None:
+    sources_json.write_text(json.dumps(sources, indent=2) + "\n")
+
+
+def now_rfc3339() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def cmd_fetch(dir_arg: str, url: str) -> int:
+    dir_ = Path(dir_arg)
+    dir_.mkdir(parents=True, exist_ok=True)
+    sources_json = dir_ / "sources.json"
+    sources = load_sources(sources_json)
+
+    for s in sources:
+        if s["url"] == url:
+            txt_path = dir_ / f"{s['id']}.txt"
+            print(f"[{s['id']}] {txt_path} ({count_lines(txt_path)} lines)")
+            return 0
+
+    try:
+        text = fetch_text(url)
+    except (urllib.error.URLError, OSError) as exc:
+        print(f"hresearch: fetch failed for {url}: {exc}", file=sys.stderr)
+        return 1
+
+    next_id = 1 + max((s["id"] for s in sources), default=0)
+    txt_path = dir_ / f"{next_id}.txt"
+    txt_path.write_text(text)
+    sources.append({"id": next_id, "url": url, "fetched": now_rfc3339()})
+    save_sources(sources_json, sources)
+    print(f"[{next_id}] {txt_path} ({count_lines(txt_path)} lines)")
+    return 0
+
+
+def count_lines(path: Path) -> int:
+    text = path.read_text()
+    if not text:
+        return 0
+    return text.count("\n") + (0 if text.endswith("\n") else 1)
+
+
+def norm(s: str) -> str:
+    return WS_RE.sub(" ", s.replace(" ", " ")).strip()
+
+
+def is_empty_slot(value) -> bool:
+    return isinstance(value, dict) and list(value.keys()) == ["empty"]
+
+
+def render_link(url: str, a: int, b: int) -> str:
+    if "github.com" in url:
+        base = url.split("#", 1)[0]
+        return f"{base}#L{a}-L{b}"
+    return url
+
+
+def find_line_range(source_text: str, code_lines: list):
+    first = next((l for l in code_lines if l.strip()), None)
+    if first is None:
+        return None
+    target = first.strip()
+    src_lines = source_text.split("\n")
+    for idx, line in enumerate(src_lines):
+        if line.strip() == target:
+            a = idx + 1
+            return (a, a + len(code_lines) - 1)
+    return None
+
+
+def check_items(slot_name, value, sources_by_id, problems):
+    if is_empty_slot(value):
+        return {"empty": value["empty"]}
+    if not isinstance(value, list) or not value:
+        problems.append(f"{slot_name}: must be a non-empty list, or {{'empty': reason}}")
+        return None
+    items = []
+    ok = True
+    for i, item in enumerate(value):
+        text = item.get("text") if isinstance(item, dict) else None
+        if not isinstance(text, str) or not text.strip() or "\n" in text:
+            problems.append(f"{slot_name}[{i}]: text must be a non-empty single-line string")
+            ok = False
+            continue
+        if len(text) > 160:
+            problems.append(f"{slot_name}[{i}]: text exceeds 160 chars")
+            ok = False
+        src = item.get("src")
+        if src is not None and src not in sources_by_id:
+            problems.append(f"{slot_name}[{i}]: src {src} not in sources.json")
+            ok = False
+            src = None
+        items.append({"text": text, "src": src})
+    return {"items": items} if ok else None
+
+
+def check_snippet(value, sources_by_id, get_source_text, problems):
+    if is_empty_slot(value):
+        return {"empty": value["empty"]}
+    if not isinstance(value, dict) or "code" not in value:
+        problems.append("snippet: must be {code, src}, or {'empty': reason}")
+        return None
+    code = value["code"]
+    src = value.get("src")
+    if not isinstance(code, str) or not code.strip():
+        problems.append("snippet: code must be a non-empty string")
+        return None
+    code_lines = code.rstrip("\n").split("\n")
+    if len(code_lines) > 25:
+        problems.append("snippet: exceeds 25 lines")
+    if src is None or src not in sources_by_id:
+        problems.append("snippet: src is required and must be in sources.json")
+        return None
+    try:
+        source_text = get_source_text(src)
+    except LookupError as exc:
+        problems.append(f"snippet: {exc}")
+        return None
+    if norm(code) not in norm(source_text):
+        problems.append(f"snippet: not verbatim in source [{src}]")
+        return None
+    url = sources_by_id[src]["url"]
+    a = b = None
+    if "github.com" in url:
+        rng = find_line_range(source_text, code_lines)
+        if rng is None:
+            problems.append(f"snippet: could not locate a line range in source [{src}]")
+            return None
+        a, b = rng
+    return {
+        "code_lines": textwrap.dedent("\n".join(code_lines)).split("\n"),
+        "src": src,
+        "url": url,
+        "range": (a, b),
+    }
+
+
+def check_breaks(value, sources_by_id, get_source_text, problems):
+    if is_empty_slot(value):
+        return {"empty": value["empty"]}
+    if not isinstance(value, list) or not value:
+        problems.append("breaks: must be a non-empty list, or {'empty': reason}")
+        return None
+    items = []
+    ok = True
+    for i, item in enumerate(value):
+        quote = item.get("quote") if isinstance(item, dict) else None
+        src = item.get("src") if isinstance(item, dict) else None
+        if not isinstance(quote, str) or not quote.strip():
+            problems.append(f"breaks[{i}]: quote must be a non-empty string")
+            ok = False
+            continue
+        if len(quote) > 300:
+            problems.append(f"breaks[{i}]: quote exceeds 300 chars")
+            ok = False
+        if src is None or src not in sources_by_id:
+            problems.append(f"breaks[{i}]: src is required and must be in sources.json")
+            ok = False
+            continue
+        try:
+            source_text = get_source_text(src)
+        except LookupError as exc:
+            problems.append(f"breaks[{i}]: {exc}")
+            ok = False
+            continue
+        if norm(quote) not in norm(source_text):
+            problems.append(f"breaks[{i}]: not verbatim in source [{src}]")
+            ok = False
+            continue
+        items.append({"quote": quote, "src": src, "url": sources_by_id[src]["url"]})
+    return {"items": items} if ok else None
+
+
+def evaluate(card: dict, sources_by_id: dict, get_source_text) -> tuple:
+    problems = []
+    for slot in REQUIRED_SLOTS:
+        if slot not in card:
+            problems.append(f"{slot}: missing")
+    if problems:
+        return problems, None
+
+    model = {
+        "verdict": check_items("verdict", card["verdict"], sources_by_id, problems),
+        "how": check_items("how", card["how"], sources_by_id, problems),
+        "snippet": check_snippet(card["snippet"], sources_by_id, get_source_text, problems),
+        "breaks": check_breaks(card["breaks"], sources_by_id, get_source_text, problems),
+    }
+    if problems:
+        return problems, None
+    return [], model
+
+
+def _row(label: str, text: str, width: int) -> str:
+    content = "│ " + f"{label:<{LABEL_WIDTH}}" + text
+    return content.ljust(width - 1) + "│"
+
+
+def cited_ids(model: dict) -> list:
+    ids = set()
+    for slot in ("verdict", "how"):
+        info = model[slot]
+        if "items" in info:
+            ids.update(i["src"] for i in info["items"] if i["src"] is not None)
+    if "src" in model["snippet"]:
+        ids.add(model["snippet"]["src"])
+    if "items" in model["breaks"]:
+        ids.update(i["src"] for i in model["breaks"]["items"])
+    return sorted(ids)
+
+
+def render_card(card: dict, model: dict, sources_by_id: dict, question: str, date: str) -> str:
+    fixed_lines = []
+
+    def add_fixed(label, text):
+        fixed_lines.append((label, text))
+
+    snippet = model["snippet"]
+    if "empty" in snippet:
+        add_fixed("snippet", f"empty: {snippet['empty']}")
+    else:
+        first = True
+        for line in snippet["code_lines"]:
+            add_fixed("snippet" if first else "", line)
+            first = False
+        a, b = snippet["range"]
+        link = render_link(snippet["url"], a, b) if a is not None else snippet["url"]
+        tag = f" [{snippet['src']}]"
+        add_fixed("", f"↳ {link}{tag}")
+
+    breaks = model["breaks"]
+    if "empty" in breaks:
+        add_fixed("breaks", f"empty: {breaks['empty']}")
+    else:
+        first = True
+        for item in breaks["items"]:
+            add_fixed("breaks" if first else "", f"\"{item['quote']}\"")
+            add_fixed("", f"— {item['url']} [{item['src']}]")
+            first = False
+
+    ids = cited_ids(model)
+    if ids:
+        first = True
+        for i in ids:
+            add_fixed("source" if first else "", f"[{i}] {sources_by_id[i]['url']}")
+            first = False
+    else:
+        add_fixed("source", "empty: no sources cited")
+
+    top_left = f"┌ {question} "
+    top_right = f" {date} ┐"
+
+    longest_fixed = max(
+        [len("│ " + f"{lbl:<{LABEL_WIDTH}}" + text) for lbl, text in fixed_lines]
+        + [len(top_left) + 1 + len(top_right)]
+    )
+    import os
+    width = int(os.environ.get("HRESEARCH_WIDTH", DEFAULT_WIDTH))
+    width = max(width, longest_fixed + 4)
+
+    lines = []
+    fill = width - len(top_left) - len(top_right)
+    if fill < 1:
+        fill = 1
+    lines.append(top_left + (" " * fill) + top_right)
+
+    text_width = (width - 1) - (2 + LABEL_WIDTH)
+
+    def wrapped_rows(label, entries):
+        first = True
+        for text in entries:
+            wrapped = textwrap.wrap(text, width=max(text_width, 1)) or [""]
+            for w in wrapped:
+                lines.append(_row(label if first else "", w, width))
+                first = False
+                label = ""
+
+    for slot, numbered in (("verdict", False), ("how", True)):
+        info = model[slot]
+        if "empty" in info:
+            lines.append(_row(slot, f"empty: {info['empty']}", width))
+            continue
+        entries = []
+        for i, item in enumerate(info["items"]):
+            tag = f"[{item['src']}]" if item["src"] is not None else "[unsourced]"
+            prefix = f"{i + 1}. " if numbered else ""
+            entries.append(f"{prefix}{item['text']} {tag}")
+        wrapped_rows(slot, entries)
+
+    for label, text in fixed_lines:
+        lines.append(_row(label, text, width))
+
+    lines.append("└" + ("─" * (width - 2)) + "┘")
+    return "\n".join(lines) + "\n"
+
+
+def cmd_render(dir_arg: str, source_arg) -> int:
+    dir_ = Path(dir_arg)
+    stem = dir_.name
+    research = dir_.parent.parent
+    card_json_path = dir_ / "card.json"
+
+    if source_arg == "-":
+        raw = sys.stdin.read()
+    else:
+        raw = card_json_path.read_text()
+    try:
+        card = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        print(f"render: card: invalid JSON: {exc}", file=sys.stderr)
+        return 1
+    card_json_path.write_text(json.dumps(card, indent=2) + "\n")
+
+    sources = load_sources(dir_ / "sources.json")
+    sources_by_id = {s["id"]: s for s in sources}
+
+    def get_source_text(src_id):
+        path = dir_ / f"{src_id}.txt"
+        if not path.exists():
+            raise LookupError(f"source [{src_id}] has no stored text")
+        return path.read_text()
+
+    problems, model = evaluate(card, sources_by_id, get_source_text)
+    if problems:
+        for p in problems:
+            print(f"render: {p}", file=sys.stderr)
+        return 1
+
+    question = (dir_ / "question.txt").read_text().strip()
+    date = stem[:10]
+    text = render_card(card, model, sources_by_id, question, date)
+
+    research.mkdir(parents=True, exist_ok=True)
+    md_path = research / f"{stem}.md"
+    md_path.write_text(text)
+    print(md_path)
+    return 0
+
+
+def cmd_check(card_arg: str, live: bool, require: list) -> int:
+    card_md = Path(card_arg)
+    stem = card_md.stem
+    dir_ = card_md.parent / "sources" / stem
+    card_json_path = dir_ / "card.json"
+
+    if not card_json_path.exists():
+        print(f"check: no card.json for {card_md}", file=sys.stderr)
+        return 1
+
+    card = json.loads(card_json_path.read_text())
+    sources = load_sources(dir_ / "sources.json")
+    sources_by_id = {s["id"]: s for s in sources}
+    question = (dir_ / "question.txt").read_text().strip()
+    date = stem[:10]
+
+    problems = []
+    live_cache = {}
+
+    def get_source_text(src_id):
+        if live:
+            if src_id not in live_cache:
+                url = sources_by_id[src_id]["url"]
+                try:
+                    live_cache[src_id] = fetch_text(url)
+                except (urllib.error.URLError, OSError) as exc:
+                    raise LookupError(f"--live fetch failed for [{src_id}] {url}: {exc}")
+            return live_cache[src_id]
+        path = dir_ / f"{src_id}.txt"
+        if not path.exists():
+            raise LookupError(f"source [{src_id}] has no stored text")
+        return path.read_text()
+
+    problems, model = evaluate(card, sources_by_id, get_source_text)
+
+    output = ["slots: verdict how snippet breaks source"]
+
+    if model is not None:
+        rendered = render_card(card, model, sources_by_id, question, date)
+        if not card_md.exists() or card_md.read_text() != rendered:
+            problems.append(f"card.md differs from its card.json ({card_md})")
+
+        snippet = model["snippet"]
+        if "empty" not in snippet:
+            a, b = snippet["range"]
+            link = render_link(snippet["url"], a, b) if a is not None else snippet["url"]
+            output.append(f"snippet: verbatim in {link}")
+
+        breaks = model["breaks"]
+        if "empty" not in breaks:
+            for item in breaks["items"]:
+                output.append(f"breaks: verbatim in {item['url']}")
+
+        sourced = unsourced = 0
+        for slot in ("verdict", "how"):
+            info = model[slot]
+            if "items" in info:
+                for item in info["items"]:
+                    if item["src"] is not None:
+                        sourced += 1
+                    else:
+                        unsourced += 1
+        output.append(f"claims: {sourced} sourced, {unsourced} unsourced")
+
+        for slot in require:
+            if slot not in model:
+                problems.append(f"--require {slot}: unknown slot")
+            elif "empty" in model[slot]:
+                problems.append(f"--require {slot}: slot is empty")
+
+    for line in output:
+        print(line)
+
+    if problems:
+        for p in problems:
+            print(f"check: {p}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def main(argv) -> int:
+    parser = argparse.ArgumentParser(prog="hresearch")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_new = sub.add_parser("new")
+    p_new.add_argument("question")
+
+    p_fetch = sub.add_parser("fetch")
+    p_fetch.add_argument("dir")
+    p_fetch.add_argument("url")
+
+    p_render = sub.add_parser("render")
+    p_render.add_argument("dir")
+    p_render.add_argument("source", nargs="?", default=None)
+
+    p_check = sub.add_parser("check")
+    p_check.add_argument("card")
+    p_check.add_argument("--live", action="store_true")
+    p_check.add_argument("--require", action="append", default=[])
+
+    args = parser.parse_args(argv)
+
+    if args.command == "new":
+        return cmd_new(args.question)
+    if args.command == "fetch":
+        return cmd_fetch(args.dir, args.url)
+    if args.command == "render":
+        return cmd_render(args.dir, args.source)
+    if args.command == "check":
+        return cmd_check(args.card, args.live, args.require)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

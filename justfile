@@ -160,6 +160,8 @@ install-chobby: _root-notice
     echo "  linked chobby -> {{BIN_DIR}}/chobby"
     ln -sf "{{REPO_ROOT}}/bin/hauto" "{{BIN_DIR}}/hauto"
     echo "  linked hauto -> {{BIN_DIR}}/hauto"
+    ln -sf "{{REPO_ROOT}}/bin/hresearch" "{{BIN_DIR}}/hresearch"
+    echo "  linked hresearch -> {{BIN_DIR}}/hresearch"
     case ":$PATH:" in
         *":{{BIN_DIR}}:"*) ;;
         *) echo "  WARNING: {{BIN_DIR}} is not on PATH — add it or chobby won't resolve." ;;
