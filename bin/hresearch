@@ -19,9 +19,20 @@ from pathlib import Path
 NOTES_BASE = Path.home() / "fun_repos" / "hobby-mimisbrunnr" / "notes"
 WORKTREE_BASE = Path.home() / "fun_worktrees"
 
-STOPWORDS = {"how", "do", "i", "to", "the", "a", "an", "with", "in", "of", "for", "is", "what"}
+STOPWORDS = {
+    "how", "do", "i", "to", "the", "a", "an", "with", "in", "of", "for", "is", "what",
+    "which", "techniques", "technique", "exist", "exists", "approaches", "ways",
+    "are", "there",
+}
 
 REQUIRED_SLOTS = ("verdict", "how", "snippet", "breaks")
+
+MATRIX_CRITERIA = ("looks like", "cost per frame", "jam-sized", "bevy precedent")
+PRECEDENT_CRITERION = "bevy precedent"
+MATRIX_MAX_OPTIONS = 5
+MATRIX_MIN_OPTIONS = 2
+CELL_MAX_WORDS = 4
+CELL_MAX_CHARS = 32
 
 LABEL_WIDTH = 9
 DEFAULT_WIDTH = 78
@@ -441,6 +452,179 @@ def render_card(card: dict, model: dict, sources_by_id: dict, question: str, dat
     return "\n".join(lines) + "\n"
 
 
+def _validate_precedent_cell(prefix: str, cell, sources_by_id: dict, problems: list):
+    if not isinstance(cell, dict):
+        problems.append(f"{prefix}: must be an object")
+        return None
+    if "none" in cell:
+        if cell.get("none") is not True or set(cell.keys()) != {"none"}:
+            problems.append(f"{prefix}: a 'none' cell must be exactly {{'none': true}}")
+            return None
+        return {"none": True}
+    if set(cell.keys()) - {"src"}:
+        problems.append(f"{prefix}: precedent cell takes only src, or 'none': true")
+        return None
+    src = cell.get("src")
+    if not isinstance(src, int) or isinstance(src, bool) or src not in sources_by_id:
+        problems.append(f"{prefix}: src is required and must be in sources.json, or 'none': true")
+        return None
+    return {"src": src}
+
+
+def _validate_text_cell(prefix: str, cell, sources_by_id: dict, problems: list):
+    if not isinstance(cell, dict):
+        problems.append(f"{prefix}: must be an object")
+        return None
+    if set(cell.keys()) - {"text", "src"}:
+        problems.append(f"{prefix}: unknown keys")
+        return None
+    text = cell.get("text")
+    if not isinstance(text, str) or not text.strip() or "\n" in text:
+        problems.append(f"{prefix}: text must be a non-empty single-line string")
+        return None
+    if len(text) > CELL_MAX_CHARS:
+        problems.append(f"{prefix}: text exceeds {CELL_MAX_CHARS} chars")
+        return None
+    if len(text.split()) > CELL_MAX_WORDS:
+        problems.append(f"{prefix}: text exceeds {CELL_MAX_WORDS} words")
+        return None
+    src = cell.get("src")
+    if src is not None:
+        if not isinstance(src, int) or isinstance(src, bool) or src not in sources_by_id:
+            problems.append(f"{prefix}: src {src} not in sources.json")
+            return None
+    return {"text": text, "src": src}
+
+
+def validate_matrix(card: dict, sources_by_id: dict, problems: list):
+    options = card.get("options")
+    if not isinstance(options, list) or not (MATRIX_MIN_OPTIONS <= len(options) <= MATRIX_MAX_OPTIONS):
+        problems.append(f"options: must be a list of {MATRIX_MIN_OPTIONS}-{MATRIX_MAX_OPTIONS} entries")
+        return None
+
+    ok = True
+    names = []
+    parsed_options = []
+    for i, opt in enumerate(options):
+        if not isinstance(opt, dict):
+            problems.append(f"options[{i}]: must be an object")
+            ok = False
+            continue
+        name = opt.get("name")
+        if not isinstance(name, str) or not name.strip() or len(name) > CELL_MAX_CHARS or "\n" in name:
+            problems.append(f"options[{i}].name: must be a non-empty single-line string of at most {CELL_MAX_CHARS} chars")
+            ok = False
+            name = None
+        cells = opt.get("cells")
+        if not isinstance(cells, dict):
+            problems.append(f"options[{i}].cells: must be an object")
+            ok = False
+            cells = {}
+        extra = set(cells) - set(MATRIX_CRITERIA)
+        missing = set(MATRIX_CRITERIA) - set(cells)
+        if extra:
+            problems.append(f"options[{i}].cells: unknown criteria {sorted(extra)}")
+            ok = False
+        if missing:
+            problems.append(f"options[{i}].cells: missing criteria {sorted(missing)}")
+            ok = False
+        parsed_cells = {}
+        for crit in MATRIX_CRITERIA:
+            if crit not in cells:
+                continue
+            prefix = f"options[{i}].cells.{crit}"
+            if crit == PRECEDENT_CRITERION:
+                parsed = _validate_precedent_cell(prefix, cells[crit], sources_by_id, problems)
+            else:
+                parsed = _validate_text_cell(prefix, cells[crit], sources_by_id, problems)
+            if parsed is None:
+                ok = False
+            else:
+                parsed_cells[crit] = parsed
+        if name is not None:
+            names.append(name)
+        parsed_options.append({"name": name, "cells": parsed_cells})
+
+    if len(set(names)) != len(names):
+        problems.append("options: names must be unique")
+        ok = False
+
+    verdict = card.get("verdict")
+    parsed_verdict = None
+    if not isinstance(verdict, dict):
+        problems.append("verdict: must be an object with option and text")
+        ok = False
+    else:
+        v_option = verdict.get("option")
+        v_text = verdict.get("text")
+        if v_option not in names:
+            problems.append("verdict.option: must name exactly one option")
+            ok = False
+        if not isinstance(v_text, str) or not v_text.strip() or "\n" in v_text:
+            problems.append("verdict.text: must be a non-empty single-line string")
+            ok = False
+        elif len(v_text.split()) > CELL_MAX_WORDS:
+            problems.append(f"verdict.text: exceeds {CELL_MAX_WORDS} words")
+            ok = False
+        else:
+            parsed_verdict = {"option": v_option, "text": v_text}
+
+    if not ok:
+        return None
+    return {"options": parsed_options, "verdict": parsed_verdict}
+
+
+def _matrix_cell_text(crit: str, opt: dict) -> str:
+    cell = opt["cells"][crit]
+    if crit == PRECEDENT_CRITERION:
+        if cell.get("none"):
+            return "none found"
+        return f"[{cell['src']}]"
+    text = cell["text"]
+    src = cell.get("src")
+    return f"{text} [{src}]" if src is not None else text
+
+
+def render_matrix(model: dict, sources_by_id: dict, question: str) -> str:
+    options = model["options"]
+    verdict = model["verdict"]
+    col_names = [opt["name"] for opt in options]
+    row_labels = list(MATRIX_CRITERIA) + ["verdict"]
+    label_width = max(len(l) for l in row_labels)
+
+    rows = [(crit, [_matrix_cell_text(crit, opt) for opt in options]) for crit in MATRIX_CRITERIA]
+    verdict_cells = [verdict["text"] if opt["name"] == verdict["option"] else "" for opt in options]
+    rows.append(("verdict", verdict_cells))
+
+    col_widths = []
+    for idx, name in enumerate(col_names):
+        w = len(name)
+        for _, cells in rows:
+            w = max(w, len(cells[idx]))
+        col_widths.append(w)
+
+    def fmt_row(label: str, cells: list) -> str:
+        parts = [f"{label:<{label_width}}"]
+        parts += [f"{c:<{w}}" for c, w in zip(cells, col_widths)]
+        return " | ".join(parts) + " |"
+
+    lines = [f"question: {question}", "", fmt_row("", col_names)]
+    for label, cells in rows:
+        lines.append(fmt_row(label, cells))
+    lines.append("")
+
+    ids = set()
+    for opt in options:
+        for crit in MATRIX_CRITERIA:
+            src = opt["cells"][crit].get("src")
+            if src is not None:
+                ids.add(src)
+    for i in sorted(ids):
+        lines.append(f"[{i}] {sources_by_id[i]['url']}")
+
+    return "\n".join(lines) + "\n"
+
+
 def cmd_render(dir_arg: str, source_arg) -> int:
     dir_ = Path(dir_arg)
     stem = dir_.name
@@ -458,24 +642,38 @@ def cmd_render(dir_arg: str, source_arg) -> int:
         return 1
     card_json_path.write_text(json.dumps(card, indent=2) + "\n")
 
-    sources = load_sources(dir_ / "sources.json")
-    sources_by_id = {s["id"]: s for s in sources}
-
-    def get_source_text(src_id):
-        path = dir_ / f"{src_id}.txt"
-        if not path.exists():
-            raise LookupError(f"source [{src_id}] has no stored text")
-        return path.read_text()
-
-    problems, model = evaluate(card, sources_by_id, get_source_text)
-    if problems:
-        for p in problems:
-            print(f"render: {p}", file=sys.stderr)
+    shape = card.get("shape", "card")
+    if shape not in ("card", "matrix"):
+        print("render: shape: unknown", file=sys.stderr)
         return 1
 
+    sources = load_sources(dir_ / "sources.json")
+    sources_by_id = {s["id"]: s for s in sources}
     question = (dir_ / "question.txt").read_text().strip()
-    date = stem[:10]
-    text = render_card(card, model, sources_by_id, question, date)
+
+    if shape == "matrix":
+        problems = []
+        model = validate_matrix(card, sources_by_id, problems)
+        if problems:
+            for p in problems:
+                print(f"render: {p}", file=sys.stderr)
+            return 1
+        text = render_matrix(model, sources_by_id, question)
+    else:
+        def get_source_text(src_id):
+            path = dir_ / f"{src_id}.txt"
+            if not path.exists():
+                raise LookupError(f"source [{src_id}] has no stored text")
+            return path.read_text()
+
+        problems, model = evaluate(card, sources_by_id, get_source_text)
+        if problems:
+            for p in problems:
+                print(f"render: {p}", file=sys.stderr)
+            return 1
+
+        date = stem[:10]
+        text = render_card(card, model, sources_by_id, question, date)
 
     research.mkdir(parents=True, exist_ok=True)
     md_path = research / f"{stem}.md"
@@ -484,22 +682,52 @@ def cmd_render(dir_arg: str, source_arg) -> int:
     return 0
 
 
-def cmd_check(card_arg: str, live: bool, require: list) -> int:
-    card_md = Path(card_arg)
-    stem = card_md.stem
-    dir_ = card_md.parent / "sources" / stem
-    card_json_path = dir_ / "card.json"
+def cmd_check_matrix(card_md: Path, dir_: Path, card: dict, sources_by_id: dict,
+                      question: str, live: bool, require: list) -> int:
+    problems = []
+    if require:
+        problems.append("--require: not applicable to a matrix")
 
-    if not card_json_path.exists():
-        print(f"check: no card.json for {card_md}", file=sys.stderr)
+    model = validate_matrix(card, sources_by_id, problems)
+
+    output = ["shape: matrix"]
+    if model is not None:
+        output.append(f"criteria: {', '.join(MATRIX_CRITERIA)}")
+        output.append(f"options: {len(model['options'])}")
+        output.append(f"verdict: {model['verdict']['option']}")
+
+        rendered = render_matrix(model, sources_by_id, question)
+        if not card_md.exists() or card_md.read_text() != rendered:
+            problems.append(f"card.md differs from its card.json ({card_md})")
+
+        precedent_ids = [
+            opt["cells"][PRECEDENT_CRITERION]["src"]
+            for opt in model["options"]
+            if "src" in opt["cells"][PRECEDENT_CRITERION]
+        ]
+        for i in precedent_ids:
+            output.append(f"precedent: [{i}] {sources_by_id[i]['url']}")
+
+        if live:
+            for i in sorted(set(precedent_ids)):
+                url = sources_by_id[i]["url"]
+                try:
+                    fetch_text(url)
+                except (urllib.error.URLError, OSError) as exc:
+                    problems.append(f"--live fetch failed for [{i}] {url}: {exc}")
+
+    for line in output:
+        print(line)
+
+    if problems:
+        for p in problems:
+            print(f"check: {p}", file=sys.stderr)
         return 1
+    return 0
 
-    card = json.loads(card_json_path.read_text())
-    sources = load_sources(dir_ / "sources.json")
-    sources_by_id = {s["id"]: s for s in sources}
-    question = (dir_ / "question.txt").read_text().strip()
-    date = stem[:10]
 
+def cmd_check_card(card_md: Path, dir_: Path, card: dict, sources_by_id: dict,
+                    question: str, date: str, live: bool, require: list) -> int:
     problems = []
     live_cache = {}
 
@@ -519,7 +747,7 @@ def cmd_check(card_arg: str, live: bool, require: list) -> int:
 
     problems, model = evaluate(card, sources_by_id, get_source_text)
 
-    output = ["slots: verdict how snippet breaks source"]
+    output = ["shape: card", "slots: verdict how snippet breaks source"]
 
     if model is not None:
         rendered = render_card(card, model, sources_by_id, question, date)
@@ -562,6 +790,28 @@ def cmd_check(card_arg: str, live: bool, require: list) -> int:
             print(f"check: {p}", file=sys.stderr)
         return 1
     return 0
+
+
+def cmd_check(card_arg: str, live: bool, require: list) -> int:
+    card_md = Path(card_arg)
+    stem = card_md.stem
+    dir_ = card_md.parent / "sources" / stem
+    card_json_path = dir_ / "card.json"
+
+    if not card_json_path.exists():
+        print(f"check: no card.json for {card_md}", file=sys.stderr)
+        return 1
+
+    card = json.loads(card_json_path.read_text())
+    sources = load_sources(dir_ / "sources.json")
+    sources_by_id = {s["id"]: s for s in sources}
+    question = (dir_ / "question.txt").read_text().strip()
+    date = stem[:10]
+
+    shape = card.get("shape", "card")
+    if shape == "matrix":
+        return cmd_check_matrix(card_md, dir_, card, sources_by_id, question, live, require)
+    return cmd_check_card(card_md, dir_, card, sources_by_id, question, date, live, require)
 
 
 def main(argv) -> int:
