@@ -27,6 +27,35 @@ STOPWORDS = {
 
 REQUIRED_SLOTS = ("verdict", "how", "snippet", "breaks")
 
+SHAPES = ("card", "matrix", "figure")
+
+_MATRIX_SURVEY_RE = re.compile(
+    r"\b(which|what)\b.*\b(techniques?|approaches|options|methods|algorithms|alternatives|ways)\b"
+)
+_MATRIX_PHRASE_RE = re.compile(r"\b(ways to|alternatives to|approaches to)\b")
+_CARD_HOW_DO_RE = re.compile(r"\bhow (do|can|should|would) (i|you|we)\b")
+_CARD_HOW_TO_RE = re.compile(r"\bhow to\b")
+_FIGURE_START_VERB_RE = re.compile(r"^how (does|do|is|are)\b")
+_FIGURE_START_ARTICLE_RE = re.compile(r"^how (a|an|the)\b")
+_FIGURE_EXPLAIN_RE = re.compile(r"^explain how\b")
+_FIGURE_WORKS_RE = re.compile(r"\bhow .*\bworks?\b")
+
+
+def classify_shape(question: str) -> str:
+    q = WS_RE.sub(" ", question.strip().lower())
+    if _MATRIX_SURVEY_RE.search(q) or _MATRIX_PHRASE_RE.search(q):
+        return "matrix"
+    if _CARD_HOW_DO_RE.search(q) or _CARD_HOW_TO_RE.search(q):
+        return "card"
+    if (
+        _FIGURE_START_VERB_RE.search(q)
+        or _FIGURE_START_ARTICLE_RE.search(q)
+        or _FIGURE_EXPLAIN_RE.search(q)
+        or _FIGURE_WORKS_RE.search(q)
+    ):
+        return "figure"
+    return "card"
+
 MATRIX_CRITERIA = ("looks like", "cost per frame", "jam-sized", "bevy precedent")
 PRECEDENT_CRITERION = "bevy precedent"
 MATRIX_MAX_OPTIONS = 5
@@ -96,7 +125,7 @@ def unique_stem(research: Path, sources_root: Path, stem: str) -> str:
     return candidate
 
 
-def cmd_new(question: str) -> int:
+def cmd_new(question: str, shape_override) -> int:
     notes_dir = require_notes_dir()
     research = notes_dir / "research"
     sources_root = research / "sources"
@@ -105,8 +134,34 @@ def cmd_new(question: str) -> int:
     dir_ = sources_root / stem
     dir_.mkdir(parents=True, exist_ok=True)
     (dir_ / "question.txt").write_text(question.strip() + "\n")
+    if shape_override is not None:
+        shape, origin = shape_override, "override"
+    else:
+        shape, origin = classify_shape(question), "from question"
+    (dir_ / "shape.txt").write_text(shape + "\n")
+    print(f"shape: {shape} ({origin})", file=sys.stderr)
     print(dir_)
     return 0
+
+
+def recorded_shape(dir_: Path):
+    p = dir_ / "shape.txt"
+    if not p.exists():
+        return None
+    return p.read_text().strip() or None
+
+
+def require_own_sources_dir(dir_arg: str) -> Path:
+    notes_dir = require_notes_dir()
+    sources_root = (notes_dir / "research" / "sources").resolve()
+    d = Path(dir_arg).resolve()
+    if d.parent != sources_root:
+        print(
+            f"hresearch: {dir_arg} is not a sources dir of this task ({notes_dir})",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    return d
 
 
 def derive_fetch_url(url: str) -> str:
@@ -180,8 +235,10 @@ def now_rfc3339() -> str:
 
 
 def cmd_fetch(dir_arg: str, url: str) -> int:
-    dir_ = Path(dir_arg)
-    dir_.mkdir(parents=True, exist_ok=True)
+    dir_ = require_own_sources_dir(dir_arg)
+    if not dir_.is_dir():
+        print(f"hresearch: {dir_arg} does not exist", file=sys.stderr)
+        return 2
     sources_json = dir_ / "sources.json"
     sources = load_sources(sources_json)
 
@@ -761,7 +818,7 @@ def render_figure(model: dict, sources_by_id: dict, question: str) -> str:
 
 
 def cmd_render(dir_arg: str, source_arg) -> int:
-    dir_ = Path(dir_arg)
+    dir_ = require_own_sources_dir(dir_arg)
     stem = dir_.name
     research = dir_.parent.parent
     card_json_path = dir_ / "card.json"
@@ -775,12 +832,21 @@ def cmd_render(dir_arg: str, source_arg) -> int:
     except json.JSONDecodeError as exc:
         print(f"render: card: invalid JSON: {exc}", file=sys.stderr)
         return 1
-    card_json_path.write_text(json.dumps(card, indent=2) + "\n")
 
     shape = card.get("shape", "card")
     if shape not in ("card", "matrix", "figure"):
         print("render: shape: unknown", file=sys.stderr)
         return 1
+
+    recorded = recorded_shape(dir_)
+    if recorded is not None and recorded != shape:
+        print(
+            f"render: shape: the question called for {recorded}, got {shape}",
+            file=sys.stderr,
+        )
+        return 1
+
+    card_json_path.write_text(json.dumps(card, indent=2) + "\n")
 
     sources = load_sources(dir_ / "sources.json")
     sources_by_id = {s["id"]: s for s in sources}
@@ -990,10 +1056,41 @@ def cmd_check(card_arg: str, live: bool, require: list) -> int:
 
     shape = card.get("shape", "card")
     if shape == "matrix":
-        return cmd_check_matrix(card_md, dir_, card, sources_by_id, question, live, require)
-    if shape == "figure":
-        return cmd_check_figure(card_md, dir_, card, sources_by_id, question, live, require)
-    return cmd_check_card(card_md, dir_, card, sources_by_id, question, date, live, require)
+        rc = cmd_check_matrix(card_md, dir_, card, sources_by_id, question, live, require)
+    elif shape == "figure":
+        rc = cmd_check_figure(card_md, dir_, card, sources_by_id, question, live, require)
+    else:
+        rc = cmd_check_card(card_md, dir_, card, sources_by_id, question, date, live, require)
+
+    recorded = recorded_shape(dir_)
+    if recorded is not None and recorded != shape:
+        print(f"check: shape {shape} but the question called for {recorded}", file=sys.stderr)
+        return 1
+    return rc
+
+
+def cmd_list() -> int:
+    notes_dir = require_notes_dir()
+    research = notes_dir / "research"
+    sources_root = research / "sources"
+    if not sources_root.is_dir():
+        return 0
+    for d in sorted(p for p in sources_root.iterdir() if p.is_dir()):
+        stem = d.name
+        question_path = d / "question.txt"
+        question = question_path.read_text().strip() if question_path.exists() else ""
+        card_json_path = d / "card.json"
+        if card_json_path.exists():
+            try:
+                shape = json.loads(card_json_path.read_text()).get("shape", "card")
+            except json.JSONDecodeError:
+                shape = recorded_shape(d) or "?"
+        else:
+            shape = recorded_shape(d) or "?"
+        md_path = research / f"{stem}.md"
+        file_field = str(md_path.relative_to(notes_dir)) if md_path.exists() else "-"
+        print(f"{stem}\t{shape}\t{file_field}\t{question}")
+    return 0
 
 
 def main(argv) -> int:
@@ -1002,6 +1099,9 @@ def main(argv) -> int:
 
     p_new = sub.add_parser("new")
     p_new.add_argument("question")
+    p_new.add_argument("--shape", choices=SHAPES, default=None)
+
+    sub.add_parser("list")
 
     p_fetch = sub.add_parser("fetch")
     p_fetch.add_argument("dir")
@@ -1019,7 +1119,9 @@ def main(argv) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "new":
-        return cmd_new(args.question)
+        return cmd_new(args.question, args.shape)
+    if args.command == "list":
+        return cmd_list()
     if args.command == "fetch":
         return cmd_fetch(args.dir, args.url)
     if args.command == "render":

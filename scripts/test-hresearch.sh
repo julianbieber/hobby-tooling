@@ -24,6 +24,7 @@ export HOME="$TMP"
 WORKTREE="$TMP/fun_worktrees/p/t/k"
 NOTES="$TMP/fun_repos/hobby-mimisbrunnr/notes/p/t/k"
 mkdir -p "$WORKTREE" "$NOTES" "$TMP/fixtures"
+cd "$WORKTREE"
 
 cat > "$TMP/fixtures/page.html" <<'EOF'
 <html><body>
@@ -523,6 +524,144 @@ if "$HRESEARCH" check "$FIGURE_MD" >/dev/null 2>&1; then
     fail figure-check-detects-hand-edit "check passed on a tampered file"
 else
     pass figure-check-detects-hand-edit
+fi
+
+SHAPE_TABLE=(
+    "how do I set up colliders with avian?|card"
+    "how to set up colliders with avian|card"
+    "what does Collider::trimesh_from_mesh do|card"
+    "which techniques exist to simulate water flow|matrix"
+    "what approaches are there for procedural terrain|matrix"
+    "how does a flow field pathfinder work|figure"
+    "how does a flow field pathfinder move many agents|figure"
+    "how a flow-field pathfinder moves 200 agents|figure"
+)
+
+# shape-classify: classify_shape's ordered rules yield the plan's table, and
+# `new` reports the winner as "(from question)"
+CLASSIFY_FAIL=""
+for row in "${SHAPE_TABLE[@]}"; do
+    q="${row%%|*}"
+    expected="${row##*|}"
+    cdir=$("$HRESEARCH" new "$q" 2>/tmp/hresearch-test-classify-err)
+    got="$(cat "$cdir/shape.txt" 2>/dev/null)"
+    if [ "$got" != "$expected" ] || ! grep -qF "shape: $expected (from question)" /tmp/hresearch-test-classify-err; then
+        CLASSIFY_FAIL="question '$q': expected $expected, got '$got', stderr: $(cat /tmp/hresearch-test-classify-err)"
+        break
+    fi
+done
+if [ -z "$CLASSIFY_FAIL" ]; then
+    pass shape-classify
+else
+    fail shape-classify "$CLASSIFY_FAIL"
+fi
+
+# shape-recorded: `new` writes the classified shape to shape.txt in the dir
+# it hands back, for each of the three shapes already in use above
+if [ "$(cat "$DIR/shape.txt" 2>/dev/null)" = "card" ] \
+    && [ "$(cat "$MDIR/shape.txt" 2>/dev/null)" = "matrix" ] \
+    && [ "$(cat "$FDIR/shape.txt" 2>/dev/null)" = "figure" ]; then
+    pass shape-recorded
+else
+    fail shape-recorded "DIR=$(cat "$DIR/shape.txt" 2>/dev/null) MDIR=$(cat "$MDIR/shape.txt" 2>/dev/null) FDIR=$(cat "$FDIR/shape.txt" 2>/dev/null)"
+fi
+
+# shape-override: `new --shape` records the flag's shape, not the classifier's,
+# and reports it as an override
+OVERRIDE_DIR=$("$HRESEARCH" new --shape matrix "how do I X" 2>/tmp/hresearch-test-override-err)
+if [ "$(cat "$OVERRIDE_DIR/shape.txt" 2>/dev/null)" = "matrix" ] \
+    && grep -qF "shape: matrix (override)" /tmp/hresearch-test-override-err; then
+    pass shape-override
+else
+    fail shape-override "shape.txt=$(cat "$OVERRIDE_DIR/shape.txt" 2>/dev/null) stderr=$(cat /tmp/hresearch-test-override-err)"
+fi
+
+# shape-mismatch-rejected: render refuses a card whose shape disagrees with
+# the one `new` recorded for the question, and writes neither card.json nor
+# the .md
+MISMATCH_DIR=$("$HRESEARCH" new "which techniques exist to grow crystals" 2>/dev/null)
+"$HRESEARCH" fetch "$MISMATCH_DIR" "$PAGE_URL" >/dev/null
+"$HRESEARCH" fetch "$MISMATCH_DIR" "$CODE_URL" >/dev/null
+MISMATCH_MD="$NOTES/research/$(basename "$MISMATCH_DIR").md"
+if "$HRESEARCH" render "$MISMATCH_DIR" - <<< "$OK_CARD" >/dev/null 2>/tmp/hresearch-test-mismatch-err; then
+    fail shape-mismatch-rejected "render succeeded"
+elif [ -f "$MISMATCH_MD" ] || [ -f "$MISMATCH_DIR/card.json" ]; then
+    fail shape-mismatch-rejected "card.json or md written despite rejection"
+elif grep -qF "render: shape: the question called for matrix, got card" /tmp/hresearch-test-mismatch-err; then
+    pass shape-mismatch-rejected
+else
+    fail shape-mismatch-rejected "unexpected stderr: $(cat /tmp/hresearch-test-mismatch-err)"
+fi
+
+# A second task, to prove a session's answers stay inside their own task.
+WORKTREE_B="$TMP/fun_worktrees/p/t/other"
+NOTES_B="$TMP/fun_repos/hobby-mimisbrunnr/notes/p/t/other"
+mkdir -p "$WORKTREE_B/src/deep" "$NOTES_B"
+
+K_MD_COUNT_BEFORE=$(find "$NOTES/research" -maxdepth 1 -name '*.md' | wc -l)
+
+CDIR_B=$(cd "$WORKTREE_B" && "$HRESEARCH" new "how do I set up colliders with avian?" 2>/dev/null)
+(cd "$WORKTREE_B" && "$HRESEARCH" fetch "$CDIR_B" "$PAGE_URL") >/dev/null
+(cd "$WORKTREE_B" && "$HRESEARCH" fetch "$CDIR_B" "$CODE_URL") >/dev/null
+(cd "$WORKTREE_B" && "$HRESEARCH" render "$CDIR_B" - <<< "$OK_CARD") >/dev/null
+
+MDIR_B=$(cd "$WORKTREE_B" && "$HRESEARCH" new "which techniques exist to simulate water flow" 2>/dev/null)
+(cd "$WORKTREE_B" && "$HRESEARCH" fetch "$MDIR_B" "$PAGE_URL") >/dev/null
+(cd "$WORKTREE_B" && "$HRESEARCH" render "$MDIR_B" - <<< "$OK_MATRIX") >/dev/null
+
+# session-subdir-cwd: `new` from a nested cwd inside the worktree still
+# resolves to that same task, not the outside-task case
+FDIR_B=$(cd "$WORKTREE_B/src/deep" && "$HRESEARCH" new "how a flow-field pathfinder moves 200 agents" 2>/dev/null)
+(cd "$WORKTREE_B/src/deep" && "$HRESEARCH" fetch "$FDIR_B" "$PAGE_URL") >/dev/null
+(cd "$WORKTREE_B/src/deep" && "$HRESEARCH" render "$FDIR_B" - <<< "$OK_FIGURE") >/dev/null
+case "$FDIR_B" in
+    "$NOTES_B/research/sources/"*) pass session-subdir-cwd ;;
+    *) fail session-subdir-cwd "unexpected dir: $FDIR_B" ;;
+esac
+
+# session-own-files: three distinct answers land under the second task's own
+# research/, and the first task's file count is unchanged by any of it
+K_MD_COUNT_AFTER=$(find "$NOTES/research" -maxdepth 1 -name '*.md' | wc -l)
+OTHER_MD_COUNT=$(find "$NOTES_B/research" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l)
+if [ "$OTHER_MD_COUNT" = 3 ] \
+    && [ -d "$NOTES_B/research/sources/$(basename "$CDIR_B")" ] \
+    && [ -d "$NOTES_B/research/sources/$(basename "$MDIR_B")" ] \
+    && [ -d "$NOTES_B/research/sources/$(basename "$FDIR_B")" ] \
+    && [ "$K_MD_COUNT_AFTER" = "$K_MD_COUNT_BEFORE" ]; then
+    pass session-own-files
+else
+    fail session-own-files "other=$OTHER_MD_COUNT k_before=$K_MD_COUNT_BEFORE k_after=$K_MD_COUNT_AFTER"
+fi
+
+# session-list: `list` from the second task prints exactly one line per
+# answer it holds, one of each shape
+LIST_OUT=$(cd "$WORKTREE_B" && "$HRESEARCH" list)
+LIST_LINE_COUNT=$(printf '%s\n' "$LIST_OUT" | grep -c .)
+LIST_SHAPES=$(printf '%s\n' "$LIST_OUT" | cut -f2 | sort | tr '\n' ',')
+if [ "$LIST_LINE_COUNT" = 3 ] && [ "$LIST_SHAPES" = "card,figure,matrix," ]; then
+    pass session-list
+else
+    fail session-list "unexpected output: $LIST_OUT"
+fi
+
+# session-no-cross-task: from the second task's worktree, fetch/render
+# against the first task's dir are refused and leave it byte-identical; a dir
+# under this task's own sources/ that `new` never made is refused too, and
+# never created
+cp "$DIR/sources.json" /tmp/hresearch-test-cross-sources-before.json
+cp "$CARD_MD" /tmp/hresearch-test-cross-card-before.md
+GHOST_DIR="$NOTES_B/research/sources/ghost"
+CROSS_OK=1
+(cd "$WORKTREE_B" && "$HRESEARCH" fetch "$DIR" "$PAGE_URL") >/dev/null 2>&1 && CROSS_OK=0
+(cd "$WORKTREE_B" && "$HRESEARCH" render "$DIR" - <<< "$OK_CARD") >/dev/null 2>&1 && CROSS_OK=0
+cmp -s "$DIR/sources.json" /tmp/hresearch-test-cross-sources-before.json || CROSS_OK=0
+cmp -s "$CARD_MD" /tmp/hresearch-test-cross-card-before.md || CROSS_OK=0
+(cd "$WORKTREE_B" && "$HRESEARCH" fetch "$GHOST_DIR" "$PAGE_URL") >/dev/null 2>&1 && CROSS_OK=0
+[ -d "$GHOST_DIR" ] && CROSS_OK=0
+if [ "$CROSS_OK" = 1 ]; then
+    pass session-no-cross-task
+else
+    fail session-no-cross-task "cross-task guard failed"
 fi
 
 if [ "$FAILED" -eq 0 ]; then
