@@ -132,6 +132,50 @@ Rules `render` enforces:
 - `verdict.option` must name exactly one option; `verdict.text` is a
   single line of ≤ 4 words.
 
+## The mechanism-figure screen
+
+A question of the form "how does X work" is answered as a **figure** instead:
+`research/<stem>.md`, an ASCII drawing of the mechanism with one sourced
+caption line underneath — no slots, no prose:
+
+```
+question: how does a flow field pathfinder move many agents
+
+    goal ●          cost field            flow field
+    ┌───────┐      ┌───────┐             ┌───────┐
+    │ . . ● │      │ 4 3 0 │             │ → → ● │
+    │ . █ . │ ───► │ 5 █ 1 │ ────────►   │ ↑ █ ↑ │
+    │ . . . │      │ 6 5 2 │             │ → → ↑ │
+    └───────┘      └───────┘             └───────┘
+    one BFS from the goal per frame; every agent reads one arrow [1]
+
+[1] <url>
+```
+
+## Figure JSON
+
+```json
+{ "shape": "figure",
+  "figure": "line one\nline two\n...",
+  "caption": {"text": "one BFS from the goal per frame; every agent reads one arrow", "src": 1} }
+```
+
+`figure` may be the multi-line string shown above, or an equivalent JSON list
+of line strings — both render identically. `caption` is always exactly
+`{text, src}`; unlike a card's slots, its `src` is never optional, because the
+line under the figure is where the figure's source has to live.
+
+Rules `render` enforces:
+
+- 3–30 lines, none over 78 columns, no tabs.
+- At least one drawing character somewhere in the figure — box-drawing,
+  arrows, block elements, geometric shapes, or one of `|+/\<>^=#` — or it's
+  prose with line breaks, not a figure.
+- Every run of words inside a line, split on 2+ spaces or on a drawing
+  character, is at most 5 words — a label, never a sentence.
+- `caption.text` is a single line, ≤ 120 chars and ≤ 16 words; `caption.src`
+  is required and must be in `sources.json`.
+
 ## Commands
 
 ```
@@ -141,12 +185,14 @@ hresearch render <dir> - <<JSON     validate card.json/matrix and write the file
 hresearch check <card.md> [--live] [--require <slot>]...
 ```
 
-`check` prints `shape: card` or `shape: matrix` first, then shape-specific
-lines (a card's `slots:`/`claims:`, or a matrix's `criteria:`/`options:`/
-`verdict:`/one `precedent:` line per cited link). `--require` only applies to
-a card's slots — on a matrix it fails with `--require: not applicable to a
-matrix`. `check` also verifies the `.md` is byte-identical to a re-render of
-its `card.json` — a hand edit to the file fails it, for either shape.
+`check` prints `shape: card`, `shape: matrix` or `shape: figure` first, then
+shape-specific lines: a card's `slots:`/`claims:`, a matrix's
+`criteria:`/`options:`/`verdict:`/one `precedent:` line per cited link, or a
+figure's `figure: <n> lines, <w> cols` and `caption: [k] <url>`. `--require`
+only applies to a card's slots — on a matrix or a figure it fails with
+`--require: not applicable to a <shape>`. `check` also verifies the `.md` is
+byte-identical to a re-render of its `card.json` — a hand edit to the file
+fails it, for any shape.
 
 ## Install
 

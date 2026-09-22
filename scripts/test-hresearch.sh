@@ -370,6 +370,161 @@ else
     pass matrix-check-detects-hand-edit
 fi
 
+FDIR=$(cd "$WORKTREE" && "$HRESEARCH" new "how does a flow field pathfinder work")
+"$HRESEARCH" fetch "$FDIR" "$PAGE_URL" >/dev/null
+FIGURE_MD="$NOTES/research/$(basename "$FDIR").md"
+
+render_figure() {
+    "$HRESEARCH" render "$FDIR" - <<< "$1"
+}
+
+FIGURE_LINES='goal *\n+-------+     +-------+\n| . . * | --> | 4 3 0 |\n| . # . |     | 5 # 1 |\n+-------+     +-------+'
+CAPTION_TEXT='one BFS run per frame; every agent reads an arrow'
+
+OK_FIGURE=$(python3 -c "
+import json
+print(json.dumps({
+    'shape': 'figure',
+    'figure': '$FIGURE_LINES',
+    'caption': {'text': '$CAPTION_TEXT', 'src': 1},
+}))
+")
+
+# figure-render-ok: a valid figure renders the question, indented lines, and a sourced caption
+if render_figure "$OK_FIGURE" >/dev/null 2>&1 && [ -f "$FIGURE_MD" ]; then
+    missing=""
+    grep -qF "question: how does a flow field pathfinder work" "$FIGURE_MD" || missing="$missing question-line"
+    grep -qF "    goal *" "$FIGURE_MD" || missing="$missing indent"
+    grep -qF "an arrow [1]" "$FIGURE_MD" || missing="$missing caption"
+    grep -qF "[1] $PAGE_URL" "$FIGURE_MD" || missing="$missing footnote"
+    [ -z "$missing" ] && pass figure-render-ok || fail figure-render-ok "missing:$missing"
+else
+    fail figure-render-ok "render failed"
+fi
+
+# figure-slug: "does"/"work" join the stopwords, leaving only the subject in the stem
+case "$(basename "$FDIR")" in
+    *-flow-field-pathfinder) pass figure-slug ;;
+    *) fail figure-slug "unexpected stem: $(basename "$FDIR")" ;;
+esac
+
+# figure-list-form: a figure given as a list of lines renders byte-identical to the string form
+STRING_RENDERED="$(cat "$FIGURE_MD")"
+rm -f "$FIGURE_MD"
+LIST_FIGURE=$(python3 -c "
+import json
+print(json.dumps({
+    'shape': 'figure',
+    'figure': '$FIGURE_LINES'.split(chr(10)),
+    'caption': {'text': '$CAPTION_TEXT', 'src': 1},
+}))
+")
+render_figure "$LIST_FIGURE" >/dev/null 2>&1
+if [ -f "$FIGURE_MD" ] && [ "$(cat "$FIGURE_MD")" = "$STRING_RENDERED" ]; then
+    pass figure-list-form
+else
+    fail figure-list-form "list form did not match string form"
+fi
+
+# figure-rejects-prose-line: a 6-word run outside any drawing character is prose, not a figure
+rm -f "$FIGURE_MD"
+PROSE_FIGURE=$(python3 -c "
+import json
+lines = 'goal *\nthis sentence has six whole words\n+-------+\n| 4 3 0 |\n+-------+'
+print(json.dumps({'shape': 'figure', 'figure': lines, 'caption': {'text': '$CAPTION_TEXT', 'src': 1}}))
+")
+if render_figure "$PROSE_FIGURE" >/dev/null 2>/tmp/hresearch-test-err; then
+    fail figure-rejects-prose-line "render succeeded"
+elif [ -f "$FIGURE_MD" ]; then
+    fail figure-rejects-prose-line "md written despite rejection"
+else
+    pass figure-rejects-prose-line
+fi
+
+# figure-rejects-wide-line: a line over 78 columns can't be read in one look
+rm -f "$FIGURE_MD"
+WIDE_FIGURE=$(python3 -c "
+import json
+wide = '+' + '-' * 77 + '+'
+lines = 'goal *\n' + wide + '\n+-------+'
+print(json.dumps({'shape': 'figure', 'figure': lines, 'caption': {'text': '$CAPTION_TEXT', 'src': 1}}))
+")
+if render_figure "$WIDE_FIGURE" >/dev/null 2>/tmp/hresearch-test-err; then
+    fail figure-rejects-wide-line "render succeeded"
+elif [ -f "$FIGURE_MD" ]; then
+    fail figure-rejects-wide-line "md written despite rejection"
+else
+    pass figure-rejects-wide-line
+fi
+
+# figure-rejects-no-drawing: a figure with no box/arrow character is prose wearing line breaks
+rm -f "$FIGURE_MD"
+NO_DRAWING_FIGURE='{
+  "shape": "figure",
+  "figure": "goal state\nmiddle state here\nfinal state now",
+  "caption": {"text": "one BFS run per frame; every agent reads an arrow", "src": 1}
+}'
+if render_figure "$NO_DRAWING_FIGURE" >/dev/null 2>/tmp/hresearch-test-err; then
+    fail figure-rejects-no-drawing "render succeeded"
+elif [ -f "$FIGURE_MD" ]; then
+    fail figure-rejects-no-drawing "md written despite rejection"
+else
+    pass figure-rejects-no-drawing
+fi
+
+# figure-rejects-caption-no-src: the caption line is the one place a figure must cite its source
+rm -f "$FIGURE_MD"
+NO_SRC_CAPTION_FIGURE=$(python3 -c "
+import json
+print(json.dumps({'shape': 'figure', 'figure': '$FIGURE_LINES', 'caption': {'text': '$CAPTION_TEXT'}}))
+")
+if render_figure "$NO_SRC_CAPTION_FIGURE" >/dev/null 2>/tmp/hresearch-test-err; then
+    fail figure-rejects-caption-no-src "render succeeded"
+elif [ -f "$FIGURE_MD" ]; then
+    fail figure-rejects-caption-no-src "md written despite rejection"
+else
+    pass figure-rejects-caption-no-src
+fi
+
+# figure-rejects-two-line-caption: the caption is one line under the figure, never a paragraph
+rm -f "$FIGURE_MD"
+TWO_LINE_CAPTION_FIGURE=$(python3 -c "
+import json
+print(json.dumps({'shape': 'figure', 'figure': '$FIGURE_LINES', 'caption': {'text': 'line one\nline two', 'src': 1}}))
+")
+if render_figure "$TWO_LINE_CAPTION_FIGURE" >/dev/null 2>/tmp/hresearch-test-err; then
+    fail figure-rejects-two-line-caption "render succeeded"
+elif [ -f "$FIGURE_MD" ]; then
+    fail figure-rejects-two-line-caption "md written despite rejection"
+else
+    pass figure-rejects-two-line-caption
+fi
+
+render_figure "$OK_FIGURE" >/dev/null 2>&1
+
+# figure-check-ok: check prints shape: figure and exits 0 on a valid figure
+if "$HRESEARCH" check "$FIGURE_MD" 2>/dev/null | grep -qx "shape: figure"; then
+    pass figure-check-ok
+else
+    fail figure-check-ok "no 'shape: figure' line"
+fi
+
+# figure-require-na: --require has nothing to name on a figure, which has no slots
+FIGREQ_OUT="$("$HRESEARCH" check --require caption "$FIGURE_MD" 2>&1)"
+if grep -q -- "--require: not applicable to a figure" <<< "$FIGREQ_OUT"; then
+    pass figure-require-na
+else
+    fail figure-require-na "expected not-applicable message"
+fi
+
+# figure-check-detects-hand-edit: a manually edited figure.md fails check, like the other shapes
+echo "tampered" >> "$FIGURE_MD"
+if "$HRESEARCH" check "$FIGURE_MD" >/dev/null 2>&1; then
+    fail figure-check-detects-hand-edit "check passed on a tampered file"
+else
+    pass figure-check-detects-hand-edit
+fi
+
 if [ "$FAILED" -eq 0 ]; then
     echo "SELFTEST OK"
     exit 0
