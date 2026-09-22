@@ -16,6 +16,40 @@ isn't wanted either, so a question gets answered as a **card**: a fixed set of
 slots, each either filled with something checkable or explicitly left empty —
 never a paragraph.
 
+## Picking the shape
+
+`hresearch new "<question>"` classifies the question and records the result
+in `shape.txt`, deterministically, on the lowercased question with whitespace
+collapsed, rules tried in this order:
+
+1. **matrix** — a survey word follows `which`/`what`
+   (`which techniques exist to …`, `what approaches are there for …`), or the
+   question contains `ways to`, `alternatives to` or `approaches to`.
+2. **card** — a how-to about the asker's own use: `how do/can/should/would
+   i/you/we …`, or `how to …`.
+3. **figure** — asks how a thing works: starts with `how does/do/is/are …` or
+   `how a/an/the …`, starts with `explain how`, or contains `how … works`.
+4. otherwise **card**.
+
+| question | shape |
+|---|---|
+| how do I set up colliders with avian? | card |
+| how to set up colliders with avian | card |
+| what does Collider::trimesh_from_mesh do | card |
+| which techniques exist to simulate water flow | matrix |
+| what approaches are there for procedural terrain | matrix |
+| how does a flow field pathfinder work | figure |
+| how does a flow field pathfinder move many agents | figure |
+| how a flow-field pathfinder moves 200 agents | figure |
+
+`new --shape card|matrix|figure` overrides the classifier — `new` records the
+flag's shape and reports it as `shape: <x> (override)` instead of
+`(from question)`. Once recorded, `render` refuses a `card.json` in any other
+shape (`render: shape: the question called for <x>, got <y>`), and `check`
+reports the same mismatch as a failure — a dir made before this existed, with
+no `shape.txt`, is unconstrained and renders in whatever shape its `card.json`
+names.
+
 ## The card screen
 
 A markdown file, `research/<date>-<slug>.md`, one per question:
@@ -41,6 +75,7 @@ nothing honest to fill renders `empty: <reason>`. No prose anywhere in it.
 research/<stem>.md                         the card, generated — never hand-edited
 research/sources/<stem>/
   question.txt                             the question, verbatim
+  shape.txt                                the shape `new` picked for this question
   sources.json                             [{id, url, fetched}]
   <id>.txt                                 the stored, fetched text of that source
   card.json                                the slots — the card's actual input
@@ -179,10 +214,12 @@ Rules `render` enforces:
 ## Commands
 
 ```
-hresearch new "<question>"          create the sources dir, print its path
+hresearch new "<question>" [--shape card|matrix|figure]
+                                     create the sources dir, print its path
 hresearch fetch <dir> <url>         fetch and store a source, print its id
 hresearch render <dir> - <<JSON     validate card.json/matrix and write the file
 hresearch check <card.md> [--live] [--require <slot>]...
+hresearch list                      one line per question in this task's research/
 ```
 
 `check` prints `shape: card`, `shape: matrix` or `shape: figure` first, then
@@ -193,6 +230,16 @@ only applies to a card's slots — on a matrix or a figure it fails with
 `--require: not applicable to a <shape>`. `check` also verifies the `.md` is
 byte-identical to a re-render of its `card.json` — a hand edit to the file
 fails it, for any shape.
+
+`list` prints `<stem>\t<shape>\t<file>\t<question>` for every question under
+the current task's `research/sources/`, `<file>` being the rendered `.md`'s
+path relative to the notes dir, or `-` before it's rendered.
+
+`fetch` and `render` both refuse a `dir` that isn't one of the current task's
+own sources dirs — a dir belonging to another task, or one `new` never
+created — exiting 2 rather than reading or writing into it. That, plus `new`
+always resolving the task from the current directory, is what keeps a
+session's answers out of another task's `research/`.
 
 ## Install
 

@@ -12,7 +12,10 @@ this task's `research/` dir.
 
 ## 0. Pick the shape
 
-A question asking which techniques, approaches or options exist for a problem
+`hresearch new "<question verbatim>"` decides the shape and reports it on
+stderr as `shape: <x> (from question)` — that is the shape this question is
+answered in, and `hresearch render` refuses a card in any other shape. A
+question asking which techniques, approaches or options exist for a problem
 — a survey of alternatives ("which techniques exist to …", "what approaches
 are there for …") — is an **option-matrix**. A question asking how a
 technique, algorithm or mechanism works internally ("how does a flow field
@@ -21,8 +24,16 @@ Anything else — "how do I use this API", "what does this function do" — is a
 **answer-card**. Everything below step 0 is common to all three; where they
 differ it says which shape it's for.
 
-1. `hresearch new "<question verbatim>"` first. Its stdout is the sources
-   dir — every other `hresearch` call in this run takes that path.
+Pass `--shape card|matrix|figure` on `new` only when the classifier's guess
+plainly contradicts what the question is actually asking (e.g. "what options
+does this function take" is an API question, not a survey — `--shape card`);
+judge the override against the same three definitions above, since that is
+what `render` will hold the answer to.
+
+1. `hresearch new "<question verbatim>"` first, once per question — never
+   render a later question into an earlier question's dir, and never pass a
+   dir this command did not just print in this task. Its stdout is the
+   sources dir — every other `hresearch` call in this run takes that path.
 2. Search with `WebSearch`. Every page you intend to cite is fetched with
    `hresearch fetch <dir> <url>` — never `WebFetch` for a page you'll cite,
    because a cited quote or precedent has to be checkable against the stored
@@ -31,6 +42,12 @@ differ it says which shape it's for.
 3. Prefer docs.rs (or the crate's own docs) for API facts, and a GitHub `blob`
    link into the crate's `examples/` or source for a card's snippet or a
    matrix's precedent.
+
+A `render: shape: the question called for <x>, got <y>` error means the JSON
+you sent is in the wrong shape for what this question was recorded as — fix
+the JSON to answer in shape `<x>` and render again. Never re-run `new` to get
+a different shape than the one it already picked; that is what `--shape` on
+the original `new` call is for.
 
 ## Answer-card
 
