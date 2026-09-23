@@ -151,7 +151,11 @@ fn excerpt(log: &str, max_lines: usize) -> String {
         .copied()
         .filter(|l| LOG_SIGNATURE_NEEDLES.iter().any(|n| l.contains(n)))
         .collect();
-    let chosen: &[&str] = if signature.is_empty() { &lines } else { &signature };
+    let chosen: &[&str] = if signature.is_empty() {
+        &lines
+    } else {
+        &signature
+    };
     let start = chosen.len().saturating_sub(max_lines);
     let joined = chosen[start..].join("\n");
     let char_count = joined.chars().count();
@@ -211,7 +215,8 @@ fn parse_base_checks(json: &str) -> Vec<String> {
                         .get("conclusion")
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or_default();
-                    status == "completed" && !matches!(conclusion, "success" | "neutral" | "skipped")
+                    status == "completed"
+                        && !matches!(conclusion, "success" | "neutral" | "skipped")
                 })
                 .filter_map(|e| {
                     e.get("name")

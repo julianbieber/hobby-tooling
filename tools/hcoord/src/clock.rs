@@ -47,7 +47,12 @@ pub fn parse_rfc3339(s: &str) -> Option<i64> {
         return None;
     }
 
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) || hour > 23 || minute > 59 || second > 60 {
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 60
+    {
         return None;
     }
 
@@ -112,10 +117,7 @@ mod tests {
     // A date away from the epoch, checked against its well-known Unix timestamp.
     #[test]
     fn parses_a_known_date() {
-        assert_eq!(
-            parse_rfc3339("2024-01-01T00:00:00Z"),
-            Some(1_704_067_200)
-        );
+        assert_eq!(parse_rfc3339("2024-01-01T00:00:00Z"), Some(1_704_067_200));
     }
 
     // An offset has to convert to UTC, not just be accepted and ignored.
