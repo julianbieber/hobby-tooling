@@ -827,8 +827,9 @@ then a sibling, which is what lets `crate:` be verified rather than decorative.
 
 ## The vendored language servers
 
-`lsps/` holds six servers. `hobby-mml-lsp` and `hobby-struct-lsp` implement this
-repo's own two languages (above); the other four — `claude-lsp`, `claude-skills-lsp`, `treesitter-class-lsp`,
+`lsps/` holds seven servers. `hobby-mml-lsp` and `hobby-struct-lsp` implement this
+repo's own two languages (above), and `hobby-research-lsp` opens a `.hresearch`
+file's links and `[k]` refs in the browser on goto-definition; the other four — `claude-lsp`, `claude-skills-lsp`, `treesitter-class-lsp`,
 `path-lsp` — are **copies** of crates that also exist in the work tooling checkout,
 vendored so a hobby-only machine can build them at all.
 
