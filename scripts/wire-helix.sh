@@ -43,6 +43,7 @@ source "$HERE/helix-paths.sh"
 HOBBY_ROOT="$(cd "$HERE/.." && pwd)"
 HMML_GRAMMAR="$HOBBY_ROOT/lsps/tree-sitter-hmml"
 HSTRUCT_GRAMMAR="$HOBBY_ROOT/lsps/tree-sitter-hstruct"
+HRESEARCH_GRAMMAR="$HOBBY_ROOT/lsps/tree-sitter-hresearch"
 
 [ -n "${1:-}" ] && HELIX_REPO="$1"
 
@@ -62,6 +63,7 @@ LOCAL="$CFG/languages.local.toml"
 INSTALLED="$CFG/languages.toml"
 QUERIES="$REPO/runtime/queries/hmml"
 HSTRUCT_QUERIES="$REPO/runtime/queries/hstruct"
+HRESEARCH_QUERIES="$REPO/runtime/queries/hresearch"
 LEGACY_QUERIES="$REPO/runtime/queries/mml-hobby"
 ORAC_QUERIES="$REPO/runtime/queries/orac"
 
@@ -223,6 +225,23 @@ TOML
     changed=1
 fi
 
+if grep -q '^name = "hresearch"$' "$LANGS"; then
+    echo "  languages.toml: hresearch language already present"
+else
+    cat >> "$LANGS" <<'TOML'
+
+# A research file written by `hresearch render`: an answer card, option matrix
+# or mechanism figure. Highlighting only; its snippet is injected as Rust.
+[[language]]
+name = "hresearch"
+scope = "source.hresearch"
+injection-regex = "hresearch"
+file-types = ["hresearch"]
+TOML
+    echo "  languages.toml: added hresearch language (routed by the .hresearch extension)"
+    changed=1
+fi
+
 # --- 4. the machine-local overlay --------------------------------------------
 # Rewritten from scratch every run, between markers, so the block tracks a moved
 # or deleted grammar checkout instead of going stale. Anything you add outside
@@ -246,6 +265,10 @@ echo "  local overlay: hmml grammar -> $HMML_GRAMMAR"
 grammars=$(printf '%s\n[[grammar]]\nname = "hstruct"\nsource = { path = "%s" }\n' \
     "$grammars" "$HSTRUCT_GRAMMAR")
 echo "  local overlay: hstruct grammar -> $HSTRUCT_GRAMMAR"
+
+grammars=$(printf '%s\n[[grammar]]\nname = "hresearch"\nsource = { path = "%s" }\n' \
+    "$grammars" "$HRESEARCH_GRAMMAR")
+echo "  local overlay: hresearch grammar -> $HRESEARCH_GRAMMAR"
 
 # The work `mml` language is a different dialect with a different grammar, and its
 # checkout is outside the hobby tree — so this one stays conditional.
@@ -335,6 +358,17 @@ else
     echo "  queries: installed hstruct/highlights.scm from the grammar"
     changed=1
 fi
+
+mkdir -p "$HRESEARCH_QUERIES"
+for q in highlights injections; do
+    if cmp -s "$HRESEARCH_GRAMMAR/queries/$q.scm" "$HRESEARCH_QUERIES/$q.scm"; then
+        echo "  queries: hresearch/$q.scm up to date"
+    else
+        cp "$HRESEARCH_GRAMMAR/queries/$q.scm" "$HRESEARCH_QUERIES/$q.scm"
+        echo "  queries: installed hresearch/$q.scm from the grammar"
+        changed=1
+    fi
+done
 
 # The orac grammar ships two query files, not one: `.orac` embeds Vega-Lite JSON
 # and CSV, and injections.scm is what hands those regions to the json and csv

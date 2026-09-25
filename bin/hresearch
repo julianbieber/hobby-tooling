@@ -63,6 +63,8 @@ MATRIX_MIN_OPTIONS = 2
 CELL_MAX_WORDS = 4
 CELL_MAX_CHARS = 32
 
+CARD_EXT = ".hresearch"
+
 LABEL_WIDTH = 9
 DEFAULT_WIDTH = 78
 
@@ -119,7 +121,7 @@ def make_slug(question: str) -> str:
 def unique_stem(research: Path, sources_root: Path, stem: str) -> str:
     candidate = stem
     n = 1
-    while (research / f"{candidate}.md").exists() or (sources_root / candidate).exists():
+    while (research / f"{candidate}{CARD_EXT}").exists() or (sources_root / candidate).exists():
         n += 1
         candidate = f"{stem}-{n}"
     return candidate
@@ -885,9 +887,9 @@ def cmd_render(dir_arg: str, source_arg) -> int:
         text = render_card(card, model, sources_by_id, question, date)
 
     research.mkdir(parents=True, exist_ok=True)
-    md_path = research / f"{stem}.md"
-    md_path.write_text(text)
-    print(md_path)
+    card_path = research / f"{stem}{CARD_EXT}"
+    card_path.write_text(text)
+    print(card_path)
     return 0
 
 
@@ -1087,8 +1089,8 @@ def cmd_list() -> int:
                 shape = recorded_shape(d) or "?"
         else:
             shape = recorded_shape(d) or "?"
-        md_path = research / f"{stem}.md"
-        file_field = str(md_path.relative_to(notes_dir)) if md_path.exists() else "-"
+        card_path = research / f"{stem}{CARD_EXT}"
+        file_field = str(card_path.relative_to(notes_dir)) if card_path.exists() else "-"
         print(f"{stem}\t{shape}\t{file_field}\t{question}")
     return 0
 

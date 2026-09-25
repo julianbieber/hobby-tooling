@@ -52,7 +52,8 @@ names.
 
 ## The card screen
 
-A markdown file, `research/<date>-<slug>.md`, one per question:
+A `.hresearch` file, `research/<date>-<slug>.hresearch`, one per question —
+Helix highlights it through `lsps/tree-sitter-hresearch`, the snippet as Rust:
 
 ```
 ┌ <question>                                              <date> ┐
@@ -72,7 +73,7 @@ nothing honest to fill renders `empty: <reason>`. No prose anywhere in it.
 ## File layout
 
 ```
-research/<stem>.md                         the card, generated — never hand-edited
+research/<stem>.hresearch                  the card, generated — never hand-edited
 research/sources/<stem>/
   question.txt                             the question, verbatim
   shape.txt                                the shape `new` picked for this question
@@ -100,14 +101,14 @@ on `snippet` and every `breaks` item.
 
 A `snippet`'s code and a `breaks` quote must appear, whitespace-normalised, in
 the stored text of the source they cite — `hresearch render` refuses to write
-the card otherwise. `hresearch check --live <card.md>` re-fetches those
+the card otherwise. `hresearch check --live <card.hresearch>` re-fetches those
 sources fresh and re-runs the same check, which is how a card is audited after
 the fact rather than only trusted at write time.
 
 ## The option-matrix screen
 
 A question of the form "which techniques exist to …" is answered as a
-**matrix** instead: `research/<stem>.md`, one row per criterion instead of
+**matrix** instead: `research/<stem>.hresearch`, one row per criterion instead of
 slots of prose:
 
 ```
@@ -170,7 +171,7 @@ Rules `render` enforces:
 ## The mechanism-figure screen
 
 A question of the form "how does X work" is answered as a **figure** instead:
-`research/<stem>.md`, an ASCII drawing of the mechanism with one sourced
+`research/<stem>.hresearch`, an ASCII drawing of the mechanism with one sourced
 caption line underneath — no slots, no prose:
 
 ```
@@ -218,7 +219,7 @@ hresearch new "<question>" [--shape card|matrix|figure]
                                      create the sources dir, print its path
 hresearch fetch <dir> <url>         fetch and store a source, print its id
 hresearch render <dir> - <<JSON     validate card.json/matrix and write the file
-hresearch check <card.md> [--live] [--require <slot>]...
+hresearch check <card.hresearch> [--live] [--require <slot>]...
 hresearch list                      one line per question in this task's research/
 ```
 
@@ -227,12 +228,12 @@ shape-specific lines: a card's `slots:`/`claims:`, a matrix's
 `criteria:`/`options:`/`verdict:`/one `precedent:` line per cited link, or a
 figure's `figure: <n> lines, <w> cols` and `caption: [k] <url>`. `--require`
 only applies to a card's slots — on a matrix or a figure it fails with
-`--require: not applicable to a <shape>`. `check` also verifies the `.md` is
+`--require: not applicable to a <shape>`. `check` also verifies the `.hresearch` is
 byte-identical to a re-render of its `card.json` — a hand edit to the file
 fails it, for any shape.
 
 `list` prints `<stem>\t<shape>\t<file>\t<question>` for every question under
-the current task's `research/sources/`, `<file>` being the rendered `.md`'s
+the current task's `research/sources/`, `<file>` being the rendered `.hresearch`'s
 path relative to the notes dir, or `-` before it's rendered.
 
 `fetch` and `render` both refuse a `dir` that isn't one of the current task's

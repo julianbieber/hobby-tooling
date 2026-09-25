@@ -71,7 +71,7 @@ the original `new` call is for.
    ```
    A `render:` error names the slot and the problem — fix the JSON (drop or
    re-copy the offending text, mark it unsourced, or empty the slot) and
-   render again. Never write `card.json` or the `.md` by hand, and never
+   render again. Never write `card.json` or the `.hresearch` by hand, and never
    touch the jam repo checkout.
 6. Reply in the pane with exactly one line: the card's path. Nothing else —
    the card is the answer, not a summary of it.
@@ -105,7 +105,7 @@ the original `new` call is for.
    A `render:` error names the cell and the problem (too many words, an
    unknown criterion, a verdict naming no column, a precedent cell with no
    `src` or `none`) — fix the JSON and render again. Never write `card.json`
-   or the `.md` by hand.
+   or the `.hresearch` by hand.
 8. Reply in the pane with exactly one line: the matrix's path.
 
 ## Mechanism-figure
@@ -132,7 +132,7 @@ the original `new` call is for.
    the line or the caption and the problem (a line too wide, a word run that
    reads as prose, no drawing character anywhere, a caption with no `src` or
    more than one line) — fix it and render again. Never hand-write the figure
-   around a rejection; redraw it. Never write `card.json` or the `.md` by
+   around a rejection; redraw it. Never write `card.json` or the `.hresearch` by
    hand.
 8. Reply in the pane with exactly one line: the figure's path. The figure is
    a notes file — it never gets written into the jam repo — and a throwaway

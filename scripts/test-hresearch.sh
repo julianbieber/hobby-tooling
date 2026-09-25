@@ -71,7 +71,7 @@ else
     fail fetch-html-text "quote not found after extraction"
 fi
 
-CARD_MD="$NOTES/research/$(basename "$DIR").md"
+CARD_MD="$NOTES/research/$(basename "$DIR").hresearch"
 
 render_card() {
     "$HRESEARCH" render "$DIR" - <<< "$1"
@@ -162,14 +162,14 @@ PY
 cp "$DIR/2.txt" "$GH_DIR/2.txt"
 cp "$DIR/1.txt" "$GH_DIR/1.txt"
 "$HRESEARCH" render "$GH_DIR" - <<< "$OK_CARD" >/dev/null 2>/tmp/hresearch-test-err
-GH_MD="$NOTES/research/$(basename "$GH_DIR").md"
+GH_MD="$NOTES/research/$(basename "$GH_DIR").hresearch"
 if grep -q "cubes.rs#L2-L5" "$GH_MD" 2>/dev/null; then
     pass snippet-line-range
 else
     fail snippet-line-range "no #L2-L5 fragment found"
 fi
 
-# check-detects-hand-edit: a manually edited card.md fails `check`
+# check-detects-hand-edit: a manually edited card file fails `check`
 rm -f "$CARD_MD"
 render_card "$OK_CARD" >/dev/null 2>&1
 echo "tampered" >> "$CARD_MD"
@@ -202,7 +202,7 @@ fi
 
 MDIR=$(cd "$WORKTREE" && "$HRESEARCH" new "which techniques exist to simulate water flow")
 "$HRESEARCH" fetch "$MDIR" "$PAGE_URL" >/dev/null
-MATRIX_MD="$NOTES/research/$(basename "$MDIR").md"
+MATRIX_MD="$NOTES/research/$(basename "$MDIR").hresearch"
 
 render_matrix() {
     "$HRESEARCH" render "$MDIR" - <<< "$1"
@@ -363,7 +363,7 @@ else
     fail matrix-check-ok "no 'shape: matrix' line"
 fi
 
-# matrix-check-detects-hand-edit: a manually edited matrix.md fails check
+# matrix-check-detects-hand-edit: a manually edited matrix file fails check
 echo "tampered" >> "$MATRIX_MD"
 if "$HRESEARCH" check "$MATRIX_MD" >/dev/null 2>&1; then
     fail matrix-check-detects-hand-edit "check passed on a tampered file"
@@ -373,7 +373,7 @@ fi
 
 FDIR=$(cd "$WORKTREE" && "$HRESEARCH" new "how does a flow field pathfinder work")
 "$HRESEARCH" fetch "$FDIR" "$PAGE_URL" >/dev/null
-FIGURE_MD="$NOTES/research/$(basename "$FDIR").md"
+FIGURE_MD="$NOTES/research/$(basename "$FDIR").hresearch"
 
 render_figure() {
     "$HRESEARCH" render "$FDIR" - <<< "$1"
@@ -518,7 +518,7 @@ else
     fail figure-require-na "expected not-applicable message"
 fi
 
-# figure-check-detects-hand-edit: a manually edited figure.md fails check, like the other shapes
+# figure-check-detects-hand-edit: a manually edited figure file fails check, like the other shapes
 echo "tampered" >> "$FIGURE_MD"
 if "$HRESEARCH" check "$FIGURE_MD" >/dev/null 2>&1; then
     fail figure-check-detects-hand-edit "check passed on a tampered file"
@@ -578,11 +578,11 @@ fi
 
 # shape-mismatch-rejected: render refuses a card whose shape disagrees with
 # the one `new` recorded for the question, and writes neither card.json nor
-# the .md
+# the .hresearch
 MISMATCH_DIR=$("$HRESEARCH" new "which techniques exist to grow crystals" 2>/dev/null)
 "$HRESEARCH" fetch "$MISMATCH_DIR" "$PAGE_URL" >/dev/null
 "$HRESEARCH" fetch "$MISMATCH_DIR" "$CODE_URL" >/dev/null
-MISMATCH_MD="$NOTES/research/$(basename "$MISMATCH_DIR").md"
+MISMATCH_MD="$NOTES/research/$(basename "$MISMATCH_DIR").hresearch"
 if "$HRESEARCH" render "$MISMATCH_DIR" - <<< "$OK_CARD" >/dev/null 2>/tmp/hresearch-test-mismatch-err; then
     fail shape-mismatch-rejected "render succeeded"
 elif [ -f "$MISMATCH_MD" ] || [ -f "$MISMATCH_DIR/card.json" ]; then
@@ -598,7 +598,7 @@ WORKTREE_B="$TMP/fun_worktrees/p/t/other"
 NOTES_B="$TMP/fun_repos/hobby-mimisbrunnr/notes/p/t/other"
 mkdir -p "$WORKTREE_B/src/deep" "$NOTES_B"
 
-K_MD_COUNT_BEFORE=$(find "$NOTES/research" -maxdepth 1 -name '*.md' | wc -l)
+K_MD_COUNT_BEFORE=$(find "$NOTES/research" -maxdepth 1 -name '*.hresearch' | wc -l)
 
 CDIR_B=$(cd "$WORKTREE_B" && "$HRESEARCH" new "how do I set up colliders with avian?" 2>/dev/null)
 (cd "$WORKTREE_B" && "$HRESEARCH" fetch "$CDIR_B" "$PAGE_URL") >/dev/null
@@ -621,8 +621,8 @@ esac
 
 # session-own-files: three distinct answers land under the second task's own
 # research/, and the first task's file count is unchanged by any of it
-K_MD_COUNT_AFTER=$(find "$NOTES/research" -maxdepth 1 -name '*.md' | wc -l)
-OTHER_MD_COUNT=$(find "$NOTES_B/research" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l)
+K_MD_COUNT_AFTER=$(find "$NOTES/research" -maxdepth 1 -name '*.hresearch' | wc -l)
+OTHER_MD_COUNT=$(find "$NOTES_B/research" -maxdepth 1 -name '*.hresearch' 2>/dev/null | wc -l)
 if [ "$OTHER_MD_COUNT" = 3 ] \
     && [ -d "$NOTES_B/research/sources/$(basename "$CDIR_B")" ] \
     && [ -d "$NOTES_B/research/sources/$(basename "$MDIR_B")" ] \
