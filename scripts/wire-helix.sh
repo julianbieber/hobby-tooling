@@ -155,6 +155,14 @@ else
     changed=1
 fi
 
+if grep -q '^hobby-research-lsp = ' "$LANGS"; then
+    echo "  languages.toml: hobby-research-lsp server already registered"
+else
+    sed -i '/^\[language-server\]/a hobby-research-lsp = { command = "hobby-research-lsp" }' "$LANGS"
+    echo "  languages.toml: registered hobby-research-lsp"
+    changed=1
+fi
+
 # --- 3. the hmml language, routed by extension -------------------------------
 # No ordering constraint: `hmml` and `mml` claim disjoint file types, so this can
 # simply be appended. (Before the rename both claimed `.mml` and this block had
@@ -231,14 +239,23 @@ else
     cat >> "$LANGS" <<'TOML'
 
 # A research file written by `hresearch render`: an answer card, option matrix
-# or mechanism figure. Highlighting only; its snippet is injected as Rust.
+# or mechanism figure. Its snippet is injected as Rust; goto-definition on a
+# link or a [k] ref opens it in the browser.
 [[language]]
 name = "hresearch"
 scope = "source.hresearch"
 injection-regex = "hresearch"
 file-types = ["hresearch"]
+language-servers = ["hobby-research-lsp"]
 TOML
     echo "  languages.toml: added hresearch language (routed by the .hresearch extension)"
+    changed=1
+fi
+
+# A checkout wired before the server existed has the language without it.
+if ! awk '/^name = "hresearch"$/ { on = 1 } on && /^\[/ { exit } on && /^language-servers = / { found = 1 } END { exit !found }' "$LANGS"; then
+    sed -i '/^file-types = \["hresearch"\]$/a language-servers = ["hobby-research-lsp"]' "$LANGS"
+    echo "  languages.toml: hresearch now served by hobby-research-lsp"
     changed=1
 fi
 

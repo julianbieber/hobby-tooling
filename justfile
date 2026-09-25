@@ -63,6 +63,7 @@ bootstrap: preflight clone-notes git-identity bootstrap-config install-chobby in
     @echo "    just install-coord     the coordinator task-list TUI (Rust build)"
     @echo "    just install-mml       forked HMML language server (Rust build)"
     @echo "    just install-struct    HSTRUCT structure checker + server (Rust build)"
+    @echo "    just install-research  .hresearch link-opening language server (Rust build)"
     @echo "    just install-lsps      the hobby language servers Helix references"
     @echo "    just helix-build       rebuild hx itself from the discovered checkout"
     @echo ""
@@ -70,7 +71,7 @@ bootstrap: preflight clone-notes git-identity bootstrap-config install-chobby in
     @echo "════════════════════════════════════════════════════════════════"
 
 # Bootstrap plus every optional Rust build and the MCP servers.
-bootstrap-full: bootstrap install-mcps install-dash install-coord install-mml install-struct install-lsps
+bootstrap-full: bootstrap install-mcps install-dash install-coord install-mml install-struct install-research install-lsps
     @echo "Full install done. Still need: chobby, then /login."
 
 # Say so when invoked from a worktree — the install still targets the main checkout,
@@ -404,6 +405,10 @@ install-struct:
     cd lsps/hobby-struct-lsp && cargo install --path struct-lsp
     cd lsps/hobby-struct-lsp && cargo install --path struct-parser
 
+# Build + install the .hresearch language server: goto-definition on a link opens it
+install-research:
+    cd lsps/hobby-research-lsp && cargo install --path . --locked
+
 # A repo with no structure.hstruct is skipped in the sweep rather than reported:
 # most have none yet, and listing them all would bury the ones that do.
 #
@@ -438,6 +443,7 @@ doctor:
 test:
     cd lsps/hobby-mml-lsp && cargo test --workspace
     cd lsps/hobby-struct-lsp && cargo test --workspace
+    cd lsps/hobby-research-lsp && cargo test
     cd lsps/claude-lsp && cargo test
     cd lsps/claude-skills-lsp && cargo test
     cd lsps/treesitter-class-lsp && cargo test

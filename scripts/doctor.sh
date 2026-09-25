@@ -166,6 +166,7 @@ done
 for b in hobby-struct-lsp hobby-struct-parser; do
     if command -v "$b" >/dev/null 2>&1; then ok "$b built"; else warn "$b not built" "just install-struct"; fi
 done
+if command -v hobby-research-lsp >/dev/null 2>&1; then ok "hobby-research-lsp built"; else warn "hobby-research-lsp not built" "just install-research"; fi
 echo ""
 echo "Helix"
 if resolve_repo; then

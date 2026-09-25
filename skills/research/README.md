@@ -53,7 +53,9 @@ names.
 ## The card screen
 
 A `.hresearch` file, `research/<date>-<slug>.hresearch`, one per question —
-Helix highlights it through `lsps/tree-sitter-hresearch`, the snippet as Rust:
+Helix highlights it through `lsps/tree-sitter-hresearch`, the snippet as Rust,
+and `gd` on a link, or on a `[k]` ref, opens it in the browser
+(`lsps/hobby-research-lsp`):
 
 ```
 ┌ <question>                                              <date> ┐
