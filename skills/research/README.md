@@ -136,6 +136,19 @@ its `crate@version`; the picker's container column reads
 `<project>/<task> <crate>@<version> <tag>`, and Enter opens the card at the line
 naming the identifier. `just install-research && just wire-helix` attaches it.
 
+**stale** lists every card that pins a crate below the newest version of that
+crate in a `Cargo.lock`, one line per card and crate:
+`<date> <shape> <crate>@<pinned> -> <locked> <question>  <path>`. It reads the
+worktree's lock, or the file named with `--lock <path>` from anywhere, and
+exits 2 when it has neither. It is a report and never deletes or edits a card.
+It exits 0 when it listed something and 1 when it did not.
+
+**retract** `<card.hresearch> "<reason>"` hides a wrong card from `search`,
+`space S` and `stale`, and keeps the reason in
+`research/sources/<stem>/retracted.json` next to the card, so it travels with
+the notes repo. Deleting that file un-retracts the card. A missing card exits 1
+and an empty reason exits 2.
+
 ## Card JSON
 
 ```json
@@ -275,6 +288,10 @@ hresearch check <card.hresearch> [--live] [--require <slot>]...
 hresearch list                      one line per question in this task's research/
 hresearch search [<term>...] [--crate <name>[@<ver>]] [--shape card|matrix|figure] [--project <p>]
                                      search every project's cards, from any directory
+hresearch stale [--lock <Cargo.lock>]
+                                     cards pinned below the lock, a report only
+hresearch retract <card.hresearch> "<reason>"
+                                     hide a wrong card from search, space S and stale
 ```
 
 `check` prints `shape: card`, `shape: matrix` or `shape: figure` first, then
