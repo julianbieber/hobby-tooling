@@ -664,6 +664,170 @@ else
     fail session-no-cross-task "cross-task guard failed"
 fi
 
+SEARCH_NOTES="$TMP/fun_repos/hobby-mimisbrunnr/notes"
+
+fixture_card() {
+    local proj="$1" stem="$2" shape="$3" question="$4" urls="$5" card="$6"
+    local research="$SEARCH_NOTES/$proj/topic/task/research"
+    local dir="$research/sources/$stem"
+    mkdir -p "$dir"
+    printf '%s\n' "$question" > "$dir/question.txt"
+    printf '%s\n' "$shape" > "$dir/shape.txt"
+    python3 -c '
+import json, sys
+urls = sys.argv[1].split()
+print(json.dumps([{"id": i + 1, "url": u, "fetched": "2026-10-02T00:00:00Z"} for i, u in enumerate(urls)]))
+' "$urls" > "$dir/sources.json"
+    printf '%s\n' "$card" > "$dir/card.json"
+    printf 'rendered\n' > "$research/$stem.hresearch"
+}
+
+fixture_card sa 2026-10-01-tilemap-grid card "how to draw a tilemap grid" \
+    "https://github.com/bevyengine/bevy/blob/v0.19.1/examples/2d/tilemap_chunk.rs https://docs.rs/bevy/0.19.1/bevy/sprite_render/struct.TilemapChunk.html https://github.com/bevyengine/bevy/blob/v0.19.1/crates/bevy_sprite_render/src/lib.rs" \
+    '{"shape":"card","verdict":[{"text":"use the chunk","src":1}],"how":[{"text":"spawn it","src":1}],"snippet":{"code":"commands.spawn(TilemapChunk::default());","src":1},"breaks":{"empty":"none"}}'
+fixture_card sb 2026-10-02-avian-gravity card "how to turn off gravity" \
+    "https://github.com/avianphysics/avian/blob/v0.7.0/crates/avian2d/src/lib.rs https://docs.rs/avian2d/0.7.0/avian2d/struct.GravityScale.html" \
+    '{"shape":"card","verdict":[{"text":"set the scale to zero","src":2}],"how":{"empty":"n/a"},"snippet":{"empty":"n/a"},"breaks":{"empty":"n/a"}}'
+fixture_card sb 2026-10-03-unpinned-thing card "how to frobnicate widgets" \
+    "https://docs.rs/frob/latest/frob/struct.Widget.html https://github.com/o/frob/blob/main/src/lib.rs" \
+    '{"shape":"card","verdict":[{"text":"call frobnicate","src":1}],"how":{"empty":"n/a"},"snippet":{"empty":"n/a"},"breaks":{"empty":"n/a"}}'
+fixture_card sb 2026-10-04-which-physics matrix "which physics approaches exist" \
+    "https://docs.rs/avian2d/0.7.0/avian2d/index.html" \
+    '{"shape":"matrix","options":[{"name":"avian"},{"name":"rapier"}],"verdict":{"option":"avian","text":"pick avian"}}'
+UNRENDERED="$SEARCH_NOTES/sb/topic/task/research/sources/2026-10-05-unrendered-question"
+mkdir -p "$UNRENDERED"
+printf 'an unrendered quokka question\n' > "$UNRENDERED/question.txt"
+printf '{"shape":"card"}\n' > "$UNRENDERED/card.json"
+
+SEARCH_WT="$TMP/fun_worktrees/sw/topic/task"
+mkdir -p "$SEARCH_WT/game"
+write_lock() {
+    cat > "$SEARCH_WT/game/Cargo.lock" <<EOF
+version = 4
+
+[[package]]
+name = "bevy"
+version = "$1"
+
+[[package]]
+name = "avian2d"
+version = "0.7.0"
+
+[[package]]
+name = "frob"
+version = "1.0.0"
+EOF
+}
+write_lock 0.19.1
+
+search() { (cd "$1" && shift && "$HRESEARCH" search "$@"); }
+
+# search-across-projects: one term per project, both found from outside any task
+if search "$TMP" tilemap | grep -q "how to draw a tilemap grid" \
+    && search "$TMP" gravity | grep -q "how to turn off gravity"; then
+    pass search-across-projects
+else
+    fail search-across-projects "a project's card was not found from $TMP"
+fi
+
+# search-docsrs-pinned: a docs.rs /<crate>/<ver>/ URL pins the card's crate
+if search "$TMP" tilemap | grep -q " bevy@0.19.1 "; then
+    pass search-docsrs-pinned
+else
+    fail search-docsrs-pinned "$(search "$TMP" tilemap)"
+fi
+
+# search-github-tag: blob/v<ver>/crates/<name>/ names the crate and strips the v
+if search "$TMP" gravity | grep -q " avian2d@0.7.0 "; then
+    pass search-github-tag
+else
+    fail search-github-tag "$(search "$TMP" gravity)"
+fi
+
+# search-unpinned: latest and main pin nothing, and a worktree tags them unpinned
+if search "$SEARCH_WT" frobnicate | grep -q " frob@unpinned unpinned "; then
+    pass search-unpinned
+else
+    fail search-unpinned "$(search "$SEARCH_WT" frobnicate)"
+fi
+
+# search-tag-current: a Cargo.lock one level below the worktree root tags a matching version current
+if search "$SEARCH_WT" tilemap | grep -q " bevy@0.19.1 current "; then
+    pass search-tag-current
+else
+    fail search-tag-current "$(search "$SEARCH_WT" tilemap)"
+fi
+
+# search-tag-other-version: the same crate locked at another version is other-version
+write_lock 0.18.0
+if search "$SEARCH_WT" tilemap | grep -q " bevy@0.19.1 other-version "; then
+    pass search-tag-other-version
+else
+    fail search-tag-other-version "$(search "$SEARCH_WT" tilemap)"
+fi
+write_lock 0.19.1
+
+# search-prefix: a term matches as a prefix, so tile finds tilemap
+if search "$TMP" tile | grep -q "how to draw a tilemap grid"; then
+    pass search-prefix
+else
+    fail search-prefix "tile did not find the tilemap card"
+fi
+
+# search-ident: a name that is only in a docs.rs item URL finds its card
+if search "$TMP" GravityScale | grep -q "how to turn off gravity"; then
+    pass search-ident
+else
+    fail search-ident "GravityScale did not find the gravity card"
+fi
+
+# search-refresh: an edited question is what the next search prints, with no rebuild
+printf 'how to switch gravity off entirely\n' > "$SEARCH_NOTES/sb/topic/task/research/sources/2026-10-02-avian-gravity/question.txt"
+touch -d '+1 minute' "$SEARCH_NOTES/sb/topic/task/research/sources/2026-10-02-avian-gravity/question.txt"
+if search "$TMP" gravity | grep -q "switch gravity off entirely"; then
+    pass search-refresh
+else
+    fail search-refresh "$(search "$TMP" gravity)"
+fi
+
+# search-removed: a deleted card leaves the results on the next search
+rm -r "$SEARCH_NOTES/sb/topic/task/research/sources/2026-10-03-unpinned-thing" \
+    "$SEARCH_NOTES/sb/topic/task/research/2026-10-03-unpinned-thing.hresearch"
+if ! search "$TMP" frobnicate >/dev/null; then
+    pass search-removed
+else
+    fail search-removed "removed card still listed"
+fi
+
+# search-unrendered-skipped: a question with no rendered file is not a card
+if ! search "$TMP" quokka >/dev/null; then
+    pass search-unrendered-skipped
+else
+    fail search-unrendered-skipped "unrendered question listed"
+fi
+
+# search-filters: --shape, --project and --crate each narrow the listing
+ALL_COUNT=$(search "$TMP" --project sb | grep -c .)
+SHAPE_OUT=$(search "$TMP" --shape matrix --project sb)
+PROJECT_OUT=$(search "$TMP" --project sa)
+CRATE_OUT=$(search "$TMP" --crate avian2d@0.7.0)
+if [ "$(printf '%s\n' "$SHAPE_OUT" | grep -c .)" = 1 ] && printf '%s' "$SHAPE_OUT" | grep -q "which physics" \
+    && [ "$(printf '%s\n' "$PROJECT_OUT" | grep -c .)" = 1 ] && printf '%s' "$PROJECT_OUT" | grep -q tilemap \
+    && [ "$(printf '%s\n' "$CRATE_OUT" | grep -c .)" = 2 ] && ! printf '%s' "$CRATE_OUT" | grep -q tilemap \
+    && [ "$ALL_COUNT" = 2 ]; then
+    pass search-filters
+else
+    fail search-filters "shape=[$SHAPE_OUT] project=[$PROJECT_OUT] crate=[$CRATE_OUT]"
+fi
+
+# search-no-hit: no hit exits 1 with nothing on stdout, so a shell can test it
+NO_HIT=$(search "$TMP" zzznothing); NO_HIT_RC=$?
+if [ "$NO_HIT_RC" = 1 ] && [ -z "$NO_HIT" ]; then
+    pass search-no-hit
+else
+    fail search-no-hit "rc=$NO_HIT_RC out=[$NO_HIT]"
+fi
+
 if [ "$FAILED" -eq 0 ]; then
     echo "SELFTEST OK"
     exit 0

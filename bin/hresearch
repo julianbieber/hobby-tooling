@@ -2,16 +2,20 @@
 """Turn a fetched-source question into a fixed-shape research file, and check
 one against the sources it cites — the tool `/research` calls so a file's
 slots, snippets and quotes are verified by code rather than trusted from the
-session that wrote them.
+session that wrote them — and search every project's research files through a
+derived index, with no model in the query path.
 """
 
 import argparse
 import datetime
 import html.parser
 import json
+import os
 import re
+import sqlite3
 import sys
 import textwrap
+import tomllib
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -485,7 +489,6 @@ def render_card(card: dict, model: dict, sources_by_id: dict, question: str, dat
         [len("│ " + f"{lbl:<{LABEL_WIDTH}}" + text) for lbl, text in fixed_lines]
         + [len(top_left) + 1 + len(top_right)]
     )
-    import os
     width = int(os.environ.get("HRESEARCH_WIDTH", DEFAULT_WIDTH))
     width = max(width, longest_fixed + 4)
 
@@ -1094,6 +1097,289 @@ def cmd_list() -> int:
         print(f"{stem}\t{shape}\t{file_field}\t{question}")
     return 0
 
+INDEX_SCHEMA_VERSION = 1
+UNPINNED = "unpinned"
+UNPINNED_REFS = {"latest", "*"}
+VERSION_RE = re.compile(r"^v?(\d+(?:\.\d+)*(?:[-+][\w.]+)?)$")
+DOCS_RS_RE = re.compile(r"^https?://docs\.rs/([^/#?]+)(?:/([^/#?]+))?")
+DOCS_ITEM_RE = re.compile(
+    r"\b(?:struct|enum|trait|fn|type|macro|derive|constant|attr|union)\.(\w+)\.html"
+)
+CAMEL_RE = re.compile(r"\b[A-Z][a-z0-9]+[A-Z]\w*\b|\b[A-Z][a-z]+\w*(?=::)")
+CARD_FILES = ("question.txt", "card.json", "sources.json")
+
+
+def index_path() -> Path:
+    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    path = Path(base) / "hresearch" / "index.sqlite"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def open_index() -> sqlite3.Connection:
+    conn = sqlite3.connect(index_path(), timeout=30)
+    if conn.execute("PRAGMA user_version").fetchone()[0] != INDEX_SCHEMA_VERSION:
+        with conn:
+            conn.execute("DROP TABLE IF EXISTS cards")
+            conn.execute("DROP TABLE IF EXISTS crates")
+            conn.execute("DROP TABLE IF EXISTS docs")
+            conn.execute(
+                "CREATE TABLE cards (dir TEXT PRIMARY KEY, mtime REAL, project TEXT,"
+                " topic TEXT, task TEXT, stem TEXT, date TEXT, shape TEXT,"
+                " question TEXT, path TEXT, primary_crate TEXT, primary_version TEXT)"
+            )
+            conn.execute("CREATE TABLE crates (dir TEXT, crate TEXT, version TEXT)")
+            conn.execute("CREATE INDEX crates_dir ON crates(dir)")
+            conn.execute(
+                "CREATE VIRTUAL TABLE docs USING fts5(dir UNINDEXED, question, body,"
+                " idents, urls, tokenize=\"unicode61 tokenchars '_'\")"
+            )
+            conn.execute(f"PRAGMA user_version = {INDEX_SCHEMA_VERSION}")
+    return conn
+
+
+def norm_crate(name: str) -> str:
+    return name.replace("-", "_").lower()
+
+
+def norm_version(ref: str) -> str:
+    m = VERSION_RE.match(ref)
+    return m.group(1) if m else UNPINNED
+
+
+def crate_of(url: str):
+    m = DOCS_RS_RE.match(url)
+    if m:
+        name, ver = m.groups()
+        if name == "crate":
+            parts = url.split("docs.rs/crate/", 1)[1].split("/")
+            name, ver = parts[0], (parts[1] if len(parts) > 1 else None)
+        if not name:
+            return None
+        if ver is None or ver in UNPINNED_REFS:
+            return norm_crate(name), UNPINNED
+        return norm_crate(name), norm_version(ver)
+    m = GITHUB_BLOB_RE.match(url)
+    if m:
+        _owner, repo, ref, path = m.groups()
+        segments = path.split("/")
+        name = segments[1] if len(segments) > 2 and segments[0] == "crates" else repo
+        return norm_crate(name), norm_version(ref)
+    return None
+
+
+def primary_crate(pairs: list):
+    if not pairs:
+        return None, None
+    counts = {}
+    for name, _ver in pairs:
+        counts[name] = counts.get(name, 0) + 1
+    best = max(counts.values())
+    name = next(n for n, _ in pairs if counts[n] == best)
+    pinned = [v for n, v in pairs if n == name and v != UNPINNED]
+    if not pinned:
+        return name, UNPINNED
+    tally = {}
+    for v in pinned:
+        tally[v] = tally.get(v, 0) + 1
+    top = max(tally.values())
+    return name, next(v for v in pinned if tally[v] == top)
+
+
+def card_strings(value, out: list) -> None:
+    if isinstance(value, str):
+        out.append(value)
+    elif isinstance(value, list):
+        for v in value:
+            card_strings(v, out)
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            if k != "shape":
+                card_strings(v, out)
+
+
+def card_idents(urls: list, text: str) -> str:
+    seen = {}
+    for url in urls:
+        for name in DOCS_ITEM_RE.findall(url):
+            seen.setdefault(name, None)
+    for name in CAMEL_RE.findall(text):
+        seen.setdefault(name, None)
+    return " ".join(seen)
+
+
+def card_dirs():
+    for d in NOTES_BASE.glob("*/*/*/research/sources/*"):
+        if not d.is_dir():
+            continue
+        rendered = d.parent.parent / f"{d.name}{CARD_EXT}"
+        if rendered.is_file() and (d / "card.json").is_file():
+            yield d, rendered
+
+
+def card_mtime(d: Path, rendered: Path) -> float:
+    paths = [d / f for f in CARD_FILES] + [rendered]
+    return max(p.stat().st_mtime for p in paths if p.exists())
+
+
+def read_json(path: Path, default):
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return default
+
+
+def index_card(conn, d: Path, rendered: Path, mtime: float) -> None:
+    key = str(d)
+    project, topic, task = d.relative_to(NOTES_BASE).parts[:3]
+    card = read_json(d / "card.json", {})
+    if not isinstance(card, dict):
+        card = {}
+    sources = read_json(d / "sources.json", [])
+    urls = [s["url"] for s in sources if isinstance(s, dict) and isinstance(s.get("url"), str)]
+    qpath = d / "question.txt"
+    question = qpath.read_text().strip() if qpath.exists() else ""
+    strings = []
+    card_strings(card, strings)
+    body = "\n".join(strings)
+    pairs = [c for c in (crate_of(u) for u in urls) if c is not None]
+    crate, version = primary_crate(pairs)
+    conn.execute("DELETE FROM cards WHERE dir = ?", (key,))
+    conn.execute("DELETE FROM crates WHERE dir = ?", (key,))
+    conn.execute("DELETE FROM docs WHERE dir = ?", (key,))
+    conn.execute(
+        "INSERT INTO cards VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (key, mtime, project, topic, task, d.name, d.name[:10],
+         card.get("shape", "card"), question, str(rendered), crate, version),
+    )
+    conn.executemany(
+        "INSERT INTO crates VALUES (?,?,?)", [(key, n, v) for n, v in sorted(set(pairs))]
+    )
+    conn.execute(
+        "INSERT INTO docs VALUES (?,?,?,?,?)",
+        (key, question, body, card_idents(urls, body), " ".join(urls)),
+    )
+
+
+def refresh_index(conn) -> None:
+    with conn:
+        stored = dict(conn.execute("SELECT dir, mtime FROM cards"))
+        seen = set()
+        for d, rendered in card_dirs():
+            key = str(d)
+            seen.add(key)
+            mtime = card_mtime(d, rendered)
+            if stored.get(key) != mtime:
+                index_card(conn, d, rendered, mtime)
+        for key in set(stored) - seen:
+            for table in ("cards", "crates", "docs"):
+                conn.execute(f"DELETE FROM {table} WHERE dir = ?", (key,))
+
+
+def worktree_root(cwd: Path):
+    try:
+        rel = cwd.relative_to(WORKTREE_BASE)
+    except ValueError:
+        return None
+    if len(rel.parts) < 3:
+        return None
+    return WORKTREE_BASE.joinpath(*rel.parts[:3])
+
+
+def find_lock(cwd: Path):
+    root = worktree_root(cwd)
+    if root is None:
+        return None
+    d = cwd
+    while True:
+        if (d / "Cargo.lock").is_file():
+            return d / "Cargo.lock"
+        if d == root:
+            break
+        d = d.parent
+    below = list(root.glob("*/Cargo.lock"))
+    return below[0] if len(below) == 1 else None
+
+
+def worktree_lock_versions(cwd: Path):
+    lock = find_lock(cwd)
+    if lock is None:
+        return None
+    try:
+        data = tomllib.loads(lock.read_text())
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    versions = {}
+    for pkg in data.get("package", []):
+        name, ver = pkg.get("name"), pkg.get("version")
+        if name and ver:
+            versions.setdefault(norm_crate(name), set()).add(ver)
+    return versions
+
+
+def version_tag(crate, version, lock) -> str:
+    if lock is None or crate is None:
+        return "-"
+    if version == UNPINNED:
+        return UNPINNED
+    if crate not in lock:
+        return "-"
+    return "current" if version in lock[crate] else "other-version"
+
+
+def fts_query(terms: list) -> str:
+    quoted = []
+    for term in terms:
+        for word in term.split():
+            word = word.replace('"', "")
+            if word:
+                quoted.append(f'"{word}"*')
+    return " AND ".join(quoted)
+
+
+def cmd_search(terms: list, crate_filter, shape, project) -> int:
+    conn = open_index()
+    refresh_index(conn)
+    where, params = [], []
+    query = fts_query(terms)
+    if query:
+        sql = ("SELECT c.date, c.shape, c.primary_crate, c.primary_version, c.question,"
+               " c.path FROM docs JOIN cards c ON c.dir = docs.dir")
+        where.append("docs MATCH ?")
+        params.append(query)
+        order = "bm25(docs), c.date DESC"
+    else:
+        sql = ("SELECT c.date, c.shape, c.primary_crate, c.primary_version, c.question,"
+               " c.path FROM cards c")
+        order = "c.date DESC, c.stem DESC"
+    if shape:
+        where.append("c.shape = ?")
+        params.append(shape)
+    if project:
+        where.append("c.project = ?")
+        params.append(project)
+    if crate_filter:
+        name, _, ver = crate_filter.partition("@")
+        if ver:
+            where.append("EXISTS (SELECT 1 FROM crates k WHERE k.dir = c.dir"
+                         " AND k.crate = ? AND k.version = ?)")
+            params += [norm_crate(name), ver]
+        else:
+            where.append("EXISTS (SELECT 1 FROM crates k WHERE k.dir = c.dir AND k.crate = ?)")
+            params.append(norm_crate(name))
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    rows = conn.execute(f"{sql} ORDER BY {order}", params).fetchall()
+    conn.close()
+    if not rows:
+        return 1
+    lock = worktree_lock_versions(Path.cwd())
+    for date, shp, crate, version, question, path in rows:
+        crate_col = f"{crate}@{version}" if crate else "-"
+        tag = version_tag(crate, version, lock)
+        print(f"{date} {shp} {crate_col} {tag} {question}  {path}")
+    return 0
+
 
 def main(argv) -> int:
     parser = argparse.ArgumentParser(prog="hresearch")
@@ -1118,6 +1404,12 @@ def main(argv) -> int:
     p_check.add_argument("--live", action="store_true")
     p_check.add_argument("--require", action="append", default=[])
 
+    p_search = sub.add_parser("search")
+    p_search.add_argument("terms", nargs="*")
+    p_search.add_argument("--crate", default=None)
+    p_search.add_argument("--shape", choices=SHAPES, default=None)
+    p_search.add_argument("--project", default=None)
+
     args = parser.parse_args(argv)
 
     if args.command == "new":
@@ -1130,6 +1422,8 @@ def main(argv) -> int:
         return cmd_render(args.dir, args.source)
     if args.command == "check":
         return cmd_check(args.card, args.live, args.require)
+    if args.command == "search":
+        return cmd_search(args.terms, args.crate, args.shape, args.project)
     return 1
 
 
