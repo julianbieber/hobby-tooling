@@ -3,7 +3,8 @@
 one against the sources it cites — the tool `/research` calls so a file's
 slots, snippets and quotes are verified by code rather than trusted from the
 session that wrote them — and search every project's research files through a
-derived index, with no model in the query path.
+derived index, with no model in the query path — report cards that fell behind
+a lock, and retract a wrong one.
 """
 
 import argparse
@@ -1097,7 +1098,7 @@ def cmd_list() -> int:
         print(f"{stem}\t{shape}\t{file_field}\t{question}")
     return 0
 
-INDEX_SCHEMA_VERSION = 1
+INDEX_SCHEMA_VERSION = 2
 UNPINNED = "unpinned"
 UNPINNED_REFS = {"latest", "*"}
 VERSION_RE = re.compile(r"^v?(\d+(?:\.\d+)*(?:[-+][\w.]+)?)$")
@@ -1114,7 +1115,7 @@ SYMBOL_KINDS = {
     "derive": "function", "attr": "function", "constant": "constant",
 }
 CAMEL_RE = re.compile(r"\b[A-Z][a-z0-9]+[A-Z]\w*\b|\b[A-Z][a-z]+\w*(?=::)")
-CARD_FILES = ("question.txt", "card.json", "sources.json")
+CARD_FILES = ("question.txt", "card.json", "sources.json", "retracted.json")
 
 
 def index_path() -> Path:
@@ -1134,7 +1135,7 @@ def open_index() -> sqlite3.Connection:
             conn.execute(
                 "CREATE TABLE cards (dir TEXT PRIMARY KEY, mtime REAL, project TEXT,"
                 " topic TEXT, task TEXT, stem TEXT, date TEXT, shape TEXT,"
-                " question TEXT, path TEXT, primary_crate TEXT, primary_version TEXT)"
+                " question TEXT, path TEXT, primary_crate TEXT, primary_version TEXT, retracted TEXT)"
             )
             conn.execute("CREATE TABLE crates (dir TEXT, crate TEXT, version TEXT)")
             conn.execute("CREATE INDEX crates_dir ON crates(dir)")
@@ -1245,6 +1246,10 @@ def index_card(conn, d: Path, rendered: Path, mtime: float) -> None:
         card = {}
     sources = read_json(d / "sources.json", [])
     urls = [s["url"] for s in sources if isinstance(s, dict) and isinstance(s.get("url"), str)]
+    retraction = read_json(d / "retracted.json", None)
+    reason = None
+    if isinstance(retraction, dict) and isinstance(retraction.get("reason"), str):
+        reason = retraction["reason"]
     qpath = d / "question.txt"
     question = qpath.read_text().strip() if qpath.exists() else ""
     strings = []
@@ -1256,9 +1261,9 @@ def index_card(conn, d: Path, rendered: Path, mtime: float) -> None:
     conn.execute("DELETE FROM crates WHERE dir = ?", (key,))
     conn.execute("DELETE FROM docs WHERE dir = ?", (key,))
     conn.execute(
-        "INSERT INTO cards VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO cards VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (key, mtime, project, topic, task, d.name, d.name[:10],
-         card.get("shape", "card"), question, str(rendered), crate, version),
+         card.get("shape", "card"), question, str(rendered), crate, version, reason),
     )
     conn.executemany(
         "INSERT INTO crates VALUES (?,?,?)", [(key, n, v) for n, v in sorted(set(pairs))]
@@ -1313,6 +1318,10 @@ def worktree_lock_versions(cwd: Path):
     lock = find_lock(cwd)
     if lock is None:
         return None
+    return lock_versions(lock)
+
+
+def lock_versions(lock: Path):
     try:
         data = tomllib.loads(lock.read_text())
     except (OSError, tomllib.TOMLDecodeError):
@@ -1346,7 +1355,7 @@ def fts_query(terms: list) -> str:
 
 
 def query_cards(conn, terms: list, crate_filter, shape, project) -> list:
-    where, params = [], []
+    where, params = ["c.retracted IS NULL"], []
     query = fts_query(terms)
     cols = ("c.dir, c.project, c.topic, c.task, c.date, c.shape, c.primary_crate,"
             " c.primary_version, c.question, c.path, docs.idents, docs.urls")
@@ -1374,8 +1383,7 @@ def query_cards(conn, terms: list, crate_filter, shape, project) -> list:
         else:
             where.append("EXISTS (SELECT 1 FROM crates k WHERE k.dir = c.dir AND k.crate = ?)")
             params.append(norm_crate(name))
-    if where:
-        sql += " WHERE " + " AND ".join(where)
+    sql += " WHERE " + " AND ".join(where)
     keys = ("dir", "project", "topic", "task", "date", "shape", "crate", "version",
             "question", "path", "idents", "urls", "score")
     return [dict(zip(keys, row)) for row in conn.execute(f"{sql} ORDER BY {order}", params)]
@@ -1394,6 +1402,68 @@ def cmd_search(terms: list, crate_filter, shape, project) -> int:
         crate_col = f"{crate}@{version}" if crate else "-"
         tag = version_tag(crate, version, lock)
         print(f"{r['date']} {r['shape']} {crate_col} {tag} {r['question']}  {r['path']}")
+    return 0
+
+
+VERSION_PREFIX_RE = re.compile(r"^v?(\d+(?:\.\d+)*)")
+
+
+def version_key(version: str):
+    m = VERSION_PREFIX_RE.match(version)
+    return tuple(int(x) for x in m.group(1).split(".")) if m else None
+
+
+def cmd_stale(lock_arg) -> int:
+    if lock_arg:
+        lock = lock_versions(Path(lock_arg))
+    else:
+        lock = worktree_lock_versions(Path.cwd())
+    if not lock:
+        print("stale: no Cargo.lock (run inside a worktree or pass --lock)", file=sys.stderr)
+        return 2
+    conn = open_index()
+    refresh_index(conn)
+    rows = conn.execute(
+        "SELECT c.date, c.shape, k.crate, k.version, c.question, c.path"
+        " FROM crates k JOIN cards c ON c.dir = k.dir"
+        " WHERE c.retracted IS NULL AND k.version != ?"
+        " ORDER BY c.date DESC, c.stem DESC, k.crate",
+        (UNPINNED,),
+    ).fetchall()
+    conn.close()
+    listed = 0
+    for date, shape, crate, version, question, path in rows:
+        if crate not in lock:
+            continue
+        pinned = version_key(version)
+        locked = [(version_key(v), v) for v in lock[crate]]
+        locked = [t for t in locked if t[0] is not None]
+        if pinned is None or not locked:
+            continue
+        newest_key, newest = max(locked)
+        if pinned < newest_key:
+            print(f"{date} {shape} {crate}@{version} -> {newest} {question}  {path}")
+            listed += 1
+    return 0 if listed else 1
+
+
+def cmd_retract(card_arg: str, reason: str) -> int:
+    arg = Path(card_arg)
+    if arg.is_dir():
+        d, card_md = arg, arg.parent.parent / f"{arg.name}{CARD_EXT}"
+    else:
+        card_md = arg
+        d = arg.parent / "sources" / arg.stem
+    if not (d / "card.json").exists():
+        print(f"retract: no card at {card_arg}", file=sys.stderr)
+        return 1
+    if not reason.strip():
+        print("retract: a reason is required", file=sys.stderr)
+        return 2
+    (d / "retracted.json").write_text(
+        json.dumps({"reason": reason, "retracted": now_rfc3339()}, indent=2) + "\n"
+    )
+    print(f"retracted {card_md}: {reason}")
     return 0
 
 
@@ -1495,6 +1565,13 @@ def main(argv) -> int:
     p_symbols = sub.add_parser("symbols")
     p_symbols.add_argument("query", nargs="?", default="")
 
+    p_stale = sub.add_parser("stale")
+    p_stale.add_argument("--lock", default=None)
+
+    p_retract = sub.add_parser("retract")
+    p_retract.add_argument("card")
+    p_retract.add_argument("reason")
+
     args = parser.parse_args(argv)
 
     if args.command == "new":
@@ -1511,6 +1588,10 @@ def main(argv) -> int:
         return cmd_search(args.terms, args.crate, args.shape, args.project)
     if args.command == "symbols":
         return cmd_symbols(args.query)
+    if args.command == "stale":
+        return cmd_stale(args.lock)
+    if args.command == "retract":
+        return cmd_retract(args.card, args.reason)
     return 1
 
 

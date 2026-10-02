@@ -877,6 +877,93 @@ else
     fail symbols-no-hit "rc=$NO_SYM_RC out=[$NO_SYM]"
 fi
 
+STALE_CARD="$SEARCH_NOTES/sa/topic/task/research/2026-10-01-tilemap-grid.hresearch"
+STALE_DIR="$SEARCH_NOTES/sa/topic/task/research/sources/2026-10-01-tilemap-grid"
+stale() { (cd "$SEARCH_WT" && "$HRESEARCH" stale "$@"); }
+
+# stale-behind: a card pinned below the lock is listed with the locked version, and one equal to it is not
+write_lock 0.19.2
+STALE_OUT=$(stale)
+if printf '%s\n' "$STALE_OUT" | grep -q "bevy@0.19.1 -> 0.19.2 how to draw a tilemap grid" \
+    && ! printf '%s\n' "$STALE_OUT" | grep -q "avian2d@0.7.0"; then
+    pass stale-behind
+else
+    fail stale-behind "$STALE_OUT"
+fi
+
+# stale-current-quiet: a lock equal to every pin lists nothing and exits 1
+write_lock 0.19.1
+STALE_QUIET=$(stale); STALE_QUIET_RC=$?
+if [ "$STALE_QUIET_RC" = 1 ] && [ -z "$STALE_QUIET" ]; then
+    pass stale-current-quiet
+else
+    fail stale-current-quiet "rc=$STALE_QUIET_RC out=[$STALE_QUIET]"
+fi
+
+# stale-lock-flag: --lock reads the named file from outside any worktree and agrees with the worktree lock
+write_lock 0.19.2
+FLAG_OUT=$(cd "$TMP" && "$HRESEARCH" stale --lock "$SEARCH_WT/game/Cargo.lock")
+if [ -n "$FLAG_OUT" ] && [ "$FLAG_OUT" = "$(stale)" ]; then
+    pass stale-lock-flag
+else
+    fail stale-lock-flag "$FLAG_OUT"
+fi
+
+# stale-no-lock: outside a worktree without --lock there is nothing to compare against, which is exit 2
+(cd "$TMP" && "$HRESEARCH" stale) >/dev/null 2>&1; NO_LOCK_RC=$?
+if [ "$NO_LOCK_RC" = 2 ]; then
+    pass stale-no-lock
+else
+    fail stale-no-lock "rc=$NO_LOCK_RC"
+fi
+
+# retract-unknown: retracting a card that does not exist exits 1 and writes nothing
+"$HRESEARCH" retract "$SEARCH_NOTES/sa/topic/task/research/no-such-card.hresearch" "x" >/dev/null 2>&1; RETRACT_UNKNOWN_RC=$?
+if [ "$RETRACT_UNKNOWN_RC" = 1 ]; then
+    pass retract-unknown
+else
+    fail retract-unknown "rc=$RETRACT_UNKNOWN_RC"
+fi
+
+"$HRESEARCH" retract "$STALE_CARD" "wrong: fixture" >/dev/null
+
+# retract-hides-search: a retracted card no longer comes back from search
+if ! search "$TMP" tilemap | grep -q "how to draw a tilemap grid"; then
+    pass retract-hides-search
+else
+    fail retract-hides-search "still listed"
+fi
+
+# retract-hides-symbols: a retracted card yields no workspace symbol, so space S does not list it
+if ! symbols "$SEARCH_WT" TilemapChunk | grep -q "2026-10-01-tilemap-grid"; then
+    pass retract-hides-symbols
+else
+    fail retract-hides-symbols "still listed"
+fi
+
+# retract-reason-kept: the reason is stored beside the card, not in the derived index
+if [ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["reason"])' "$STALE_DIR/retracted.json")" = "wrong: fixture" ]; then
+    pass retract-reason-kept
+else
+    fail retract-reason-kept "$(cat "$STALE_DIR/retracted.json" 2>&1)"
+fi
+
+# retract-hides-stale: a retracted card is not reported as stale
+if ! stale | grep -q "how to draw a tilemap grid"; then
+    pass retract-hides-stale
+else
+    fail retract-hides-stale "still listed"
+fi
+
+# unretract: deleting retracted.json is the whole undo, and search lists the card again
+rm "$STALE_DIR/retracted.json"
+if search "$TMP" tilemap | grep -q "how to draw a tilemap grid"; then
+    pass unretract
+else
+    fail unretract "not listed after rm"
+fi
+write_lock 0.19.1
+
 if [ "$FAILED" -eq 0 ]; then
     echo "SELFTEST OK"
     exit 0

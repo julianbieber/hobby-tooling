@@ -31,7 +31,7 @@ the card cites (`Struct`, `Enum`, `Interface`, `Function` or `Constant`, by the
 docs.rs item URL that names it) and the `crate@version` (`Package`). The
 container reads `<project>/<task> <crate>@<version> <tag>`, so the tag shows
 beside a match. Helix does not filter the name column, so the filtering is
-`hresearch`'s: a case-insensitive substring per query word. `hresearch` must be
+`hresearch`'s: a case-insensitive substring per query word. A card retracted with `hresearch retract` is not listed. `hresearch` must be
 on `PATH`; when it is not, the answer is empty. `just wire-helix` attaches the
 server to `rust` and `markdown` with `only-features = ["workspace-symbols"]`.
 
