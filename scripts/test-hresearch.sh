@@ -828,6 +828,55 @@ else
     fail search-no-hit "rc=$NO_HIT_RC out=[$NO_HIT]"
 fi
 
+symbols() { (cd "$1" && shift && "$HRESEARCH" symbols "$@"); }
+sym_field() { python3 -c '
+import json, sys
+rows = json.load(sys.stdin)
+for r in rows:
+    if r["name"] == sys.argv[1]:
+        print(r[sys.argv[2]])
+        break
+' "$1" "$2"; }
+
+fixture_card sa 2026-10-06-line-card card "how to place a line marker" \
+    "https://docs.rs/bevy/0.19.1/bevy/enum.LineMarker.html" \
+    '{"shape":"card","verdict":[{"text":"use it","src":1}],"how":{"empty":"n/a"},"snippet":{"empty":"n/a"},"breaks":{"empty":"n/a"}}'
+printf 'one\ntwo\nuse LineMarker here\n' > "$SEARCH_NOTES/sa/topic/task/research/2026-10-06-line-card.hresearch"
+write_lock 0.19.1
+
+# symbols-name-filter: only names containing every query word are returned, as the picker does not re-filter
+SYM_OUT=$(symbols "$SEARCH_WT" TilemapChunk)
+if [ "$(printf '%s' "$SYM_OUT" | sym_field TilemapChunk kind)" = struct ] \
+    && [ -z "$(printf '%s' "$SYM_OUT" | sym_field "how to draw a tilemap grid" kind)" ]; then
+    pass symbols-name-filter
+else
+    fail symbols-name-filter "$SYM_OUT"
+fi
+
+# symbols-container-tag: the container carries crate@version and the lock tag
+if [ "$(printf '%s' "$SYM_OUT" | sym_field TilemapChunk container)" = "sa/task bevy@0.19.1 current" ]; then
+    pass symbols-container-tag
+else
+    fail symbols-container-tag "$SYM_OUT"
+fi
+
+# symbols-line: the symbol points at the first line of the card that names the identifier
+LINE_OUT=$(symbols "$SEARCH_WT" LineMarker)
+if [ "$(printf '%s' "$LINE_OUT" | sym_field LineMarker line)" = 2 ] \
+    && [ "$(printf '%s' "$LINE_OUT" | sym_field LineMarker kind)" = enum ]; then
+    pass symbols-line
+else
+    fail symbols-line "$LINE_OUT"
+fi
+
+# symbols-no-hit: no hit prints an empty array and exits 0, so the language server never sees an error
+NO_SYM=$(symbols "$SEARCH_WT" zzznothing); NO_SYM_RC=$?
+if [ "$NO_SYM_RC" = 0 ] && [ "$NO_SYM" = "[]" ]; then
+    pass symbols-no-hit
+else
+    fail symbols-no-hit "rc=$NO_SYM_RC out=[$NO_SYM]"
+fi
+
 if [ "$FAILED" -eq 0 ]; then
     echo "SELFTEST OK"
     exit 0

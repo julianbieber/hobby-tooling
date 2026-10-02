@@ -259,6 +259,33 @@ if ! awk '/^name = "hresearch"$/ { on = 1 } on && /^\[/ { exit } on && /^languag
     changed=1
 fi
 
+for lang in rust markdown; do
+    state=$(awk -v lang="$lang" '
+        /^\[\[language\]\]$/ { inlang = 1; target = 0; next }
+        /^\[/ { inlang = 0; target = 0 }
+        inlang && $0 == "name = \"" lang "\"" { target = 1 }
+        target && /^language-servers = \[.*\]$/ { print ($0 ~ /hobby-research-lsp/ ? "present" : "missing"); found = 1; exit }
+        END { if (!found) print "absent" }
+    ' "$LANGS")
+    case "$state" in
+        present) echo "  languages.toml: hobby-research-lsp already lists symbols in $lang buffers" ;;
+        absent) echo "  NOTE: no single-line language-servers for $lang in $LANGS; add hobby-research-lsp by hand" ;;
+        missing)
+            awk -v lang="$lang" '
+                /^\[\[language\]\]$/ { inlang = 1; target = 0 }
+                inlang && $0 == "name = \"" lang "\"" { target = 1 }
+                target && /^language-servers = \[.*\]$/ && !done {
+                    sub(/[ ]*\]$/, ", { name = \"hobby-research-lsp\", only-features = [\"workspace-symbols\"] } ]")
+                    done = 1
+                }
+                { print }
+            ' "$LANGS" > "$LANGS.tmp" && mv "$LANGS.tmp" "$LANGS"
+            echo "  languages.toml: hobby-research-lsp now lists symbols in $lang buffers"
+            changed=1
+            ;;
+    esac
+done
+
 # --- 4. the machine-local overlay --------------------------------------------
 # Rewritten from scratch every run, between markers, so the block tracks a moved
 # or deleted grammar checkout instead of going stale. Anything you add outside

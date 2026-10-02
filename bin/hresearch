@@ -1105,6 +1105,14 @@ DOCS_RS_RE = re.compile(r"^https?://docs\.rs/([^/#?]+)(?:/([^/#?]+))?")
 DOCS_ITEM_RE = re.compile(
     r"\b(?:struct|enum|trait|fn|type|macro|derive|constant|attr|union)\.(\w+)\.html"
 )
+DOCS_KIND_RE = re.compile(
+    r"\b(struct|enum|trait|fn|type|macro|derive|constant|attr|union)\.(\w+)\.html"
+)
+SYMBOL_KINDS = {
+    "struct": "struct", "union": "struct", "type": "struct", "enum": "enum",
+    "trait": "interface", "fn": "function", "macro": "function",
+    "derive": "function", "attr": "function", "constant": "constant",
+}
 CAMEL_RE = re.compile(r"\b[A-Z][a-z0-9]+[A-Z]\w*\b|\b[A-Z][a-z]+\w*(?=::)")
 CARD_FILES = ("question.txt", "card.json", "sources.json")
 
@@ -1337,21 +1345,20 @@ def fts_query(terms: list) -> str:
     return " AND ".join(quoted)
 
 
-def cmd_search(terms: list, crate_filter, shape, project) -> int:
-    conn = open_index()
-    refresh_index(conn)
+def query_cards(conn, terms: list, crate_filter, shape, project) -> list:
     where, params = [], []
     query = fts_query(terms)
+    cols = ("c.dir, c.project, c.topic, c.task, c.date, c.shape, c.primary_crate,"
+            " c.primary_version, c.question, c.path, docs.idents, docs.urls")
     if query:
-        sql = ("SELECT c.date, c.shape, c.primary_crate, c.primary_version, c.question,"
-               " c.path FROM docs JOIN cards c ON c.dir = docs.dir")
+        score = "bm25(docs)"
         where.append("docs MATCH ?")
         params.append(query)
         order = "bm25(docs), c.date DESC"
     else:
-        sql = ("SELECT c.date, c.shape, c.primary_crate, c.primary_version, c.question,"
-               " c.path FROM cards c")
+        score = "0"
         order = "c.date DESC, c.stem DESC"
+    sql = f"SELECT {cols}, {score} FROM docs JOIN cards c ON c.dir = docs.dir"
     if shape:
         where.append("c.shape = ?")
         params.append(shape)
@@ -1369,15 +1376,90 @@ def cmd_search(terms: list, crate_filter, shape, project) -> int:
             params.append(norm_crate(name))
     if where:
         sql += " WHERE " + " AND ".join(where)
-    rows = conn.execute(f"{sql} ORDER BY {order}", params).fetchall()
+    keys = ("dir", "project", "topic", "task", "date", "shape", "crate", "version",
+            "question", "path", "idents", "urls", "score")
+    return [dict(zip(keys, row)) for row in conn.execute(f"{sql} ORDER BY {order}", params)]
+
+
+def cmd_search(terms: list, crate_filter, shape, project) -> int:
+    conn = open_index()
+    refresh_index(conn)
+    rows = query_cards(conn, terms, crate_filter, shape, project)
     conn.close()
     if not rows:
         return 1
     lock = worktree_lock_versions(Path.cwd())
-    for date, shp, crate, version, question, path in rows:
+    for r in rows:
+        crate, version = r["crate"], r["version"]
         crate_col = f"{crate}@{version}" if crate else "-"
         tag = version_tag(crate, version, lock)
-        print(f"{date} {shp} {crate_col} {tag} {question}  {path}")
+        print(f"{r['date']} {r['shape']} {crate_col} {tag} {r['question']}  {r['path']}")
+    return 0
+
+
+def symbol_kind(urls: str) -> dict:
+    kinds = {}
+    for item, name in DOCS_KIND_RE.findall(urls):
+        kinds.setdefault(name, SYMBOL_KINDS[item])
+    return kinds
+
+
+def ident_line(lines: list, ident: str) -> int:
+    pattern = re.compile(rf"\b{re.escape(ident)}\b")
+    for i, line in enumerate(lines):
+        if pattern.search(line):
+            return i
+    return 0
+
+
+def cmd_symbols(query: str) -> int:
+    conn = open_index()
+    refresh_index(conn)
+    words = query.split()
+    rows = query_cards(conn, words, None, None, None)
+    conn.close()
+    cwd = Path.cwd()
+    lock = worktree_lock_versions(cwd)
+    root = worktree_root(cwd)
+    this_project = root.relative_to(WORKTREE_BASE).parts[0] if root else None
+    lowered = [w.lower() for w in words]
+    ranked = []
+    for r in rows:
+        crate, version = r["crate"], r["version"]
+        tag = version_tag(crate, version, lock)
+        container = f"{r['project']}/{r['task']}"
+        if crate:
+            container += f" {crate}@{version}"
+        if tag != "-":
+            container += f" {tag}"
+        candidates = []
+        if not words:
+            candidates.append((r["question"], "file", None))
+        else:
+            kinds = symbol_kind(r["urls"])
+            candidates.append((r["question"], "file", None))
+            for ident in r["idents"].split():
+                candidates.append((ident, kinds.get(ident, "constant"), ident))
+            if crate:
+                package = f"{crate}@{version}" + (f" {tag}" if tag != "-" else "")
+                candidates.append((package, "package", None))
+        lines = None
+        for name, kind, ident in candidates:
+            if not all(w in name.lower() for w in lowered):
+                continue
+            line = 0
+            if ident:
+                if lines is None:
+                    try:
+                        lines = Path(r["path"]).read_text().splitlines()
+                    except OSError:
+                        lines = []
+                line = ident_line(lines, ident)
+            ranked.append(((r["score"], tag != "current", r["project"] != this_project),
+                           {"name": name, "kind": kind, "path": r["path"], "line": line,
+                            "container": container}))
+    ranked.sort(key=lambda item: item[0])
+    print(json.dumps([entry for _key, entry in ranked[:200]]))
     return 0
 
 
@@ -1410,6 +1492,9 @@ def main(argv) -> int:
     p_search.add_argument("--shape", choices=SHAPES, default=None)
     p_search.add_argument("--project", default=None)
 
+    p_symbols = sub.add_parser("symbols")
+    p_symbols.add_argument("query", nargs="?", default="")
+
     args = parser.parse_args(argv)
 
     if args.command == "new":
@@ -1424,6 +1509,8 @@ def main(argv) -> int:
         return cmd_check(args.card, args.live, args.require)
     if args.command == "search":
         return cmd_search(args.terms, args.crate, args.shape, args.project)
+    if args.command == "symbols":
+        return cmd_symbols(args.query)
     return 1
 
 
