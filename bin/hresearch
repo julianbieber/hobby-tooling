@@ -4,11 +4,14 @@ one against the sources it cites — the tool `/research` calls so a file's
 slots, snippets and quotes are verified by code rather than trusted from the
 session that wrote them — and search every project's research files through a
 derived index, with no model in the query path — report cards that fell behind
-a lock, and retract a wrong one.
+a lock, and retract a wrong one — and keep a global store of pinned sources, so
+a version-pinned URL fetched once is never fetched again and a new card can be
+seeded from a near miss's sources.
 """
 
 import argparse
 import datetime
+import hashlib
 import html.parser
 import json
 import os
@@ -87,6 +90,10 @@ DRAWING_UNICODE_RANGES = (
     (0x25A0, 0x25FF),
 )
 GITHUB_BLOB_RE = re.compile(r"^https://github\.com/([^/]+)/([^/]+)/blob/([^/]+)/([^#]+)")
+DOCS_RS_PINNED_RE = re.compile(
+    r"^https://docs\.rs/(?:crate/)?[^/]+/\d+\.\d+\.\d+(?:[-+][\w.]+)?(?:/|$)"
+)
+TAG_REF_RE = re.compile(r"^v?\d+\.\d+\.\d+(?:[-+][\w.]+)?$")
 BLOCK_TAGS = {
     "p", "div", "li", "br", "tr", "h1", "h2", "h3", "h4", "h5", "h6",
     "pre", "section", "article", "dt", "dd", "table",
@@ -132,7 +139,53 @@ def unique_stem(research: Path, sources_root: Path, stem: str) -> str:
     return candidate
 
 
-def cmd_new(question: str, shape_override) -> int:
+def is_pinned(url: str) -> bool:
+    if DOCS_RS_PINNED_RE.match(url):
+        return True
+    m = GITHUB_BLOB_RE.match(url)
+    return bool(m and TAG_REF_RE.match(m.group(3)))
+
+
+def cache_dir() -> Path:
+    return Path(os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")) / "hresearch"
+
+
+def store_path(url: str) -> Path:
+    key = hashlib.sha256(url.split("#", 1)[0].encode()).hexdigest()
+    return cache_dir() / "sources" / f"{key}.txt"
+
+
+def store_get(url: str):
+    if not is_pinned(url):
+        return None
+    p = store_path(url)
+    return p.read_text() if p.exists() else None
+
+
+def store_put(url: str, text: str) -> None:
+    if not is_pinned(url):
+        return
+    p = store_path(url)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(p.name + f".{os.getpid()}.tmp")
+    tmp.write_text(text)
+    os.replace(tmp, p)
+
+
+def card_source_dir(arg: str) -> tuple:
+    p = Path(arg)
+    if p.is_dir():
+        return p, p.parent.parent / f"{p.name}{CARD_EXT}"
+    return p.parent / "sources" / p.stem, p
+
+
+def cmd_new(question: str, shape_override, seed=None) -> int:
+    seed_dir = None
+    if seed is not None:
+        seed_dir, _ = card_source_dir(seed)
+        if not (seed_dir / "card.json").exists():
+            print(f"new: no card at {seed}", file=sys.stderr)
+            return 1
     notes_dir = require_notes_dir()
     research = notes_dir / "research"
     sources_root = research / "sources"
@@ -147,6 +200,17 @@ def cmd_new(question: str, shape_override) -> int:
         shape, origin = classify_shape(question), "from question"
     (dir_ / "shape.txt").write_text(shape + "\n")
     print(f"shape: {shape} ({origin})", file=sys.stderr)
+    if seed_dir is not None:
+        for s in load_sources(seed_dir / "sources.json"):
+            url, txt = s["url"], seed_dir / f"{s['id']}.txt"
+            if not is_pinned(url):
+                print(f"seed: fetch again {url}", file=sys.stderr)
+            elif txt.exists():
+                store_put(url, txt.read_text())
+                print(f"seed: cached {url}", file=sys.stderr)
+            else:
+                print(f"seed: no stored text {url}", file=sys.stderr)
+        (dir_ / "seed.txt").write_text(f"{seed}\n")
     print(dir_)
     return 0
 
@@ -255,18 +319,26 @@ def cmd_fetch(dir_arg: str, url: str) -> int:
             print(f"[{s['id']}] {txt_path} ({count_lines(txt_path)} lines)")
             return 0
 
-    try:
-        text = fetch_text(url)
-    except (urllib.error.URLError, OSError) as exc:
-        print(f"hresearch: fetch failed for {url}: {exc}", file=sys.stderr)
-        return 1
+    text = store_get(url)
+    cached = text is not None
+    if not cached:
+        try:
+            text = fetch_text(url)
+        except (urllib.error.URLError, OSError) as exc:
+            print(f"hresearch: fetch failed for {url}: {exc}", file=sys.stderr)
+            return 1
+        store_put(url, text)
 
     next_id = 1 + max((s["id"] for s in sources), default=0)
     txt_path = dir_ / f"{next_id}.txt"
     txt_path.write_text(text)
-    sources.append({"id": next_id, "url": url, "fetched": now_rfc3339()})
+    entry = {"id": next_id, "url": url, "fetched": now_rfc3339()}
+    if cached:
+        entry["cached"] = True
+    sources.append(entry)
     save_sources(sources_json, sources)
-    print(f"[{next_id}] {txt_path} ({count_lines(txt_path)} lines)")
+    suffix = " (cached)" if cached else ""
+    print(f"[{next_id}] {txt_path} ({count_lines(txt_path)} lines){suffix}")
     return 0
 
 
@@ -1119,8 +1191,7 @@ CARD_FILES = ("question.txt", "card.json", "sources.json", "retracted.json")
 
 
 def index_path() -> Path:
-    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
-    path = Path(base) / "hresearch" / "index.sqlite"
+    path = cache_dir() / "index.sqlite"
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -1448,12 +1519,7 @@ def cmd_stale(lock_arg) -> int:
 
 
 def cmd_retract(card_arg: str, reason: str) -> int:
-    arg = Path(card_arg)
-    if arg.is_dir():
-        d, card_md = arg, arg.parent.parent / f"{arg.name}{CARD_EXT}"
-    else:
-        card_md = arg
-        d = arg.parent / "sources" / arg.stem
+    d, card_md = card_source_dir(card_arg)
     if not (d / "card.json").exists():
         print(f"retract: no card at {card_arg}", file=sys.stderr)
         return 1
@@ -1540,6 +1606,7 @@ def main(argv) -> int:
     p_new = sub.add_parser("new")
     p_new.add_argument("question")
     p_new.add_argument("--shape", choices=SHAPES, default=None)
+    p_new.add_argument("--seed", default=None)
 
     sub.add_parser("list")
 
@@ -1575,7 +1642,7 @@ def main(argv) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "new":
-        return cmd_new(args.question, args.shape)
+        return cmd_new(args.question, args.shape, args.seed)
     if args.command == "list":
         return cmd_list()
     if args.command == "fetch":
