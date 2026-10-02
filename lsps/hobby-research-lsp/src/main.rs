@@ -1,10 +1,13 @@
-//! `hobby-research-lsp`: a language server for `.hresearch` files whose one
-//! capability is goto-definition on a link or a `[k]` ref, which opens the
-//! link, or source `[k]`'s, in the browser.
+//! `hobby-research-lsp`: a language server with two capabilities —
+//! goto-definition on a link or a `[k]` ref in a `.hresearch` file, which
+//! opens the link, or source `[k]`'s, in the browser; and workspace symbols
+//! over every project's research cards, in any buffer it is attached to.
 
 mod link;
+mod symbols;
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use tower_lsp::jsonrpc::Result;
@@ -14,6 +17,7 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 struct Backend {
     client: Client,
     documents: Mutex<HashMap<Url, String>>,
+    root: Mutex<Option<PathBuf>>,
 }
 
 impl Backend {
@@ -45,13 +49,21 @@ impl Backend {
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
-    async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
+    #[allow(deprecated)]
+    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        let root = params
+            .workspace_folders
+            .and_then(|folders| folders.into_iter().next().map(|f| f.uri))
+            .or(params.root_uri)
+            .and_then(|uri| uri.to_file_path().ok());
+        *self.root.lock().unwrap() = root;
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::FULL,
                 )),
                 definition_provider: Some(OneOf::Left(true)),
+                workspace_symbol_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -86,6 +98,17 @@ impl LanguageServer for Backend {
             .remove(&params.text_document.uri);
     }
 
+    async fn symbol(
+        &self,
+        params: WorkspaceSymbolParams,
+    ) -> Result<Option<Vec<SymbolInformation>>> {
+        let root = self.root.lock().unwrap().clone();
+        let found =
+            tokio::task::spawn_blocking(move || symbols::query(root.as_deref(), &params.query))
+                .await;
+        Ok(Some(found.unwrap_or_default()))
+    }
+
     async fn goto_definition(
         &self,
         params: GotoDefinitionParams,
@@ -107,6 +130,7 @@ async fn main() {
     let (service, socket) = LspService::new(|client| Backend {
         client,
         documents: Mutex::new(HashMap::new()),
+        root: Mutex::new(None),
     });
     Server::new(tokio::io::stdin(), tokio::io::stdout(), socket)
         .serve(service)

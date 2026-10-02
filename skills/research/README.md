@@ -128,6 +128,14 @@ root, or else the only `*/Cargo.lock` one level below the root:
 | `unpinned` | the card's version is `unpinned` |
 | `-` | outside a worktree, no lock found, or the crate is not in it |
 
+**`space S`** in Helix, from any `.rs` or `.md` buffer, lists the same cards:
+`hobby-research-lsp` answers `workspace/symbol` by running `hresearch symbols
+<query>` from the workspace root, which uses the index, filters and tag above and
+prints a JSON array. Each card yields its question, the identifiers it cites and
+its `crate@version`; the picker's container column reads
+`<project>/<task> <crate>@<version> <tag>`, and Enter opens the card at the line
+naming the identifier. `just install-research && just wire-helix` attaches it.
+
 ## Card JSON
 
 ```json
