@@ -21,6 +21,7 @@ fail() { echo "FAIL $1 $2"; FAILED=1; }
 
 TMP="$(mktemp -d)"
 export HOME="$TMP"
+export XDG_CACHE_HOME="$TMP/.cache"
 WORKTREE="$TMP/fun_worktrees/p/t/k"
 NOTES="$TMP/fun_repos/hobby-mimisbrunnr/notes/p/t/k"
 mkdir -p "$WORKTREE" "$NOTES" "$TMP/fixtures"
@@ -963,6 +964,107 @@ else
     fail unretract "not listed after rm"
 fi
 write_lock 0.19.1
+
+blocked() {
+    env http_proxy=http://127.0.0.1:9 https_proxy=http://127.0.0.1:9 \
+        HTTP_PROXY=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 \
+        no_proxy= NO_PROXY= "$@"
+}
+
+PINNED_URL="https://docs.rs/bevy/0.19.1/src/bevy/example.rs.html"
+LATEST_URL="https://docs.rs/frob/latest/frob/index.html"
+RANGE_URL="https://docs.rs/bevy/0.19/bevy/index.html"
+SEED_DIR=$("$HRESEARCH" new "how do I seed a collider card" 2>/dev/null)
+{ cat "$TMP/fixtures/example.rs"; echo "A collider without a rigid body is treated as static."; } > "$SEED_DIR/1.txt"
+echo "frob latest page" > "$SEED_DIR/2.txt"
+echo "bevy range page" > "$SEED_DIR/3.txt"
+python3 - "$SEED_DIR/sources.json" "$PINNED_URL" "$LATEST_URL" "$RANGE_URL" <<'PY_END'
+import json, sys
+urls = sys.argv[2:]
+json.dump([{"id": i + 1, "url": u, "fetched": "2026-10-02T00:00:00Z"} for i, u in enumerate(urls)],
+          open(sys.argv[1], "w"))
+PY_END
+SEED_CARD='{
+  "verdict": [{"text": "Add Collider + RigidBody", "src": 1}],
+  "how": [{"text": "spawn with RigidBody and Collider", "src": 1}],
+  "snippet": {"code": "commands.spawn((\n    RigidBody::Dynamic,\n    Collider::cuboid(1.0, 1.0, 1.0),\n));", "src": 1},
+  "breaks": [{"quote": "A collider without a rigid body is treated as static.", "src": 1}]
+}'
+"$HRESEARCH" render "$SEED_DIR" - <<< "$SEED_CARD" >/dev/null 2>&1
+SEED_MD="$NOTES/research/$(basename "$SEED_DIR").hresearch"
+
+# seed-stdout-dir: `new --seed` prints only the new dir on stdout, and stderr says which of
+# the seed's sources were stored and which must be fetched again (a docs.rs semver range is not pinned)
+SEED_OUT=$("$HRESEARCH" new --seed "$SEED_MD" "how do I reuse a collider seed" 2>/tmp/hresearch-test-seed-err)
+if [ "$(printf '%s\n' "$SEED_OUT" | wc -l)" = 1 ] && [ -d "$SEED_OUT" ] \
+    && grep -qF "seed: cached $PINNED_URL" /tmp/hresearch-test-seed-err \
+    && grep -qF "seed: fetch again $LATEST_URL" /tmp/hresearch-test-seed-err \
+    && grep -qF "seed: fetch again $RANGE_URL" /tmp/hresearch-test-seed-err; then
+    pass seed-stdout-dir
+else
+    fail seed-stdout-dir "out=$SEED_OUT err=$(cat /tmp/hresearch-test-seed-err)"
+fi
+
+# seed-fetch-cached: a pinned URL stored by --seed is served with the network blocked, byte-identical
+SEED_FETCH_OUT=$(blocked "$HRESEARCH" fetch "$SEED_OUT" "$PINNED_URL" 2>&1); SEED_FETCH_RC=$?
+if [ "$SEED_FETCH_RC" = 0 ] && [[ "$SEED_FETCH_OUT" == *"(cached)" ]] \
+    && cmp -s "$SEED_OUT/1.txt" "$SEED_DIR/1.txt"; then
+    pass seed-fetch-cached
+else
+    fail seed-fetch-cached "rc=$SEED_FETCH_RC out=$SEED_FETCH_OUT"
+fi
+
+# seed-blocked-control: the block really stops the network, and an unpinned `latest` URL is never served from the store
+CONTROL_OUT=$(blocked "$HRESEARCH" fetch "$SEED_OUT" "$LATEST_URL" 2>&1); CONTROL_RC=$?
+if [ "$CONTROL_RC" = 1 ] && [[ "$CONTROL_OUT" != *"(cached)"* ]]; then
+    pass seed-blocked-control
+else
+    fail seed-blocked-control "rc=$CONTROL_RC out=$CONTROL_OUT"
+fi
+
+# seed-semver-range-not-cached: docs.rs resolves /0.19/ to the newest 0.19.x, so it is never stored or served
+RANGE_OUT=$(blocked "$HRESEARCH" fetch "$SEED_OUT" "$RANGE_URL" 2>&1); RANGE_RC=$?
+if [ "$RANGE_RC" = 1 ] && [[ "$RANGE_OUT" != *"(cached)"* ]]; then
+    pass seed-semver-range-not-cached
+else
+    fail seed-semver-range-not-cached "rc=$RANGE_RC out=$RANGE_OUT"
+fi
+
+# seed-render-identical: the seed's card renders against the cached copy, since render's verbatim check sees identical text
+if "$HRESEARCH" render "$SEED_OUT" - <<< "$SEED_CARD" >/dev/null 2>/tmp/hresearch-test-seed-render-err \
+    && [ -f "$NOTES/research/$(basename "$SEED_OUT").hresearch" ]; then
+    pass seed-render-identical
+else
+    fail seed-render-identical "$(cat /tmp/hresearch-test-seed-render-err)"
+fi
+
+# seed-unknown-card: seeding from a card that does not exist exits 1 and leaves no new sources dir behind
+SEED_DIRS_BEFORE=$(ls "$NOTES/research/sources" | wc -l)
+"$HRESEARCH" new --seed /nonexistent/x.hresearch "q" >/dev/null 2>&1; SEED_UNKNOWN_RC=$?
+SEED_DIRS_AFTER=$(ls "$NOTES/research/sources" | wc -l)
+if [ "$SEED_UNKNOWN_RC" = 1 ] && [ "$SEED_DIRS_BEFORE" = "$SEED_DIRS_AFTER" ]; then
+    pass seed-unknown-card
+else
+    fail seed-unknown-card "rc=$SEED_UNKNOWN_RC before=$SEED_DIRS_BEFORE after=$SEED_DIRS_AFTER"
+fi
+
+# fetch-stores-pinned-only: a file:// fetch is unpinned, so nothing is written to the source store for it
+STORE_BEFORE=$(ls "$XDG_CACHE_HOME/hresearch/sources" | wc -l)
+"$HRESEARCH" fetch "$SEED_OUT" "$PAGE_URL" >/dev/null 2>&1
+STORE_AFTER=$(ls "$XDG_CACHE_HOME/hresearch/sources" | wc -l)
+if [ "$STORE_BEFORE" = "$STORE_AFTER" ] && [ "$STORE_AFTER" = 1 ]; then
+    pass fetch-stores-pinned-only
+else
+    fail fetch-stores-pinned-only "before=$STORE_BEFORE after=$STORE_AFTER"
+fi
+
+# retract-dir-arg: retract accepts a sources dir as well as the .hresearch path
+if "$HRESEARCH" retract "$SEED_DIR" "wrong: dir arg" >/dev/null 2>&1 && [ -f "$SEED_DIR/retracted.json" ]; then
+    pass retract-dir-arg
+else
+    fail retract-dir-arg "no retracted.json"
+fi
+rm -f "$SEED_DIR/retracted.json"
 
 if [ "$FAILED" -eq 0 ]; then
     echo "SELFTEST OK"

@@ -149,6 +149,22 @@ It exits 0 when it listed something and 1 when it did not.
 the notes repo. Deleting that file un-retracts the card. A missing card exits 1
 and an empty reason exits 2.
 
+## The source store
+
+Pinned sources are kept in `$XDG_CACHE_HOME/hresearch/sources/` (default
+`~/.cache/hresearch/sources/`), one file per URL, shared by every task. A URL
+is pinned when it names a fixed version: a full `x.y.z` on docs.rs, or a
+version-shaped tag (`v1.2.3`) on a GitHub `blob`. `latest`, `main`, a branch
+and a docs.rs `0.19` (a semver range) are never stored and never served, so
+they are fetched every time. `hresearch fetch` serves a stored URL without a
+request and prints `(cached)`; the text is the same one `render` checks quotes
+against.
+
+`hresearch new --seed <card>` copies the pinned sources of a near-miss card
+into the store and lists the rest on stderr as `fetch again`. The new dir's
+`sources.json` starts empty: the run fetches what it cites. Deleting the store
+is always safe.
+
 ## Card JSON
 
 ```json
@@ -280,9 +296,9 @@ Rules `render` enforces:
 ## Commands
 
 ```
-hresearch new "<question>" [--shape card|matrix|figure]
+hresearch new "<question>" [--shape card|matrix|figure] [--seed <card>]
                                      create the sources dir, print its path
-hresearch fetch <dir> <url>         fetch and store a source, print its id
+hresearch fetch <dir> <url>         fetch and store a source, print its id (`(cached)` when served from the store)
 hresearch render <dir> - <<JSON     validate card.json/matrix and write the file
 hresearch check <card.hresearch> [--live] [--require <slot>]...
 hresearch list                      one line per question in this task's research/

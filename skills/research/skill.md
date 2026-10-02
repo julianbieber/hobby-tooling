@@ -1,6 +1,6 @@
 ---
 description: Answer a question about a library, engine or dependency API as an answer-card file in the current task's research/ dir — slots, copied snippets and verbatim quotes with links, no prose — or which techniques/approaches exist to do something, as an option-matrix, or how a technique or mechanism works, as an ASCII mechanism-figure. Use whenever I ask how to do something with an API or crate, which techniques/approaches exist for a problem, or how a technique or mechanism works, with or without /research.
-argument-hint: '<question in one sentence>'
+argument-hint: '<question in one sentence> [--seed <card>]'
 allowed-tools: Bash(hresearch:*), WebSearch, Read, Grep
 ---
 
@@ -34,6 +34,12 @@ what `render` will hold the answer to.
    render a later question into an earlier question's dir, and never pass a
    dir this command did not just print in this task. Its stdout is the
    sources dir — every other `hresearch` call in this run takes that path.
+   When the invocation carries `--seed <card>`, run
+   `hresearch new --seed <card> "<question verbatim>"` instead. Its stderr
+   names the near miss's sources: fetch the ones relevant to this question
+   with `hresearch fetch` as usual — `(cached)` means the stored copy was
+   used and no request was made, and a `fetch again` source is fetched like
+   any other.
 2. Search with `WebSearch`. Every page you intend to cite is fetched with
    `hresearch fetch <dir> <url>` — never `WebFetch` for a page you'll cite,
    because a cited quote or precedent has to be checkable against the stored
