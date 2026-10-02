@@ -86,6 +86,48 @@ research/sources/<stem>/
 
 `<stem>` is `<date>-<slug>`, deduplicated with a `-2`, `-3`, … suffix.
 
+## The index
+
+`hresearch search` reads `~/.cache/hresearch/index.sqlite` (under
+`$XDG_CACHE_HOME` when set), a SQLite FTS5 index over every project's
+`notes/*/*/*/research/sources/*/`. It is derived and never committed: every
+search first re-indexes any card whose `question.txt`, `card.json`,
+`sources.json` or `.hresearch` changed, and drops cards that are gone, so there
+is no rebuild command. Deleting the file is always safe. No model is in the
+query path.
+
+A sources dir counts as a card only once it has both `card.json` and its
+rendered `.hresearch`; an unanswered question is not indexed.
+
+Indexed per card: the question, every string in `card.json` (verdict, steps,
+snippet, quotes, matrix cells, figure lines, caption), Rust identifiers from
+docs.rs item URLs (`struct.TilemapChunk.html`) and CamelCase names in that text,
+every URL in `sources.json`, and project/topic/task. Terms match as prefixes
+and are ANDed: `tile` finds `tilemap`.
+
+**crate@version** comes from the cited URLs:
+
+- `docs.rs/<crate>/<ver>/…` → `<crate>@<ver>`; `latest` or `*` → `unpinned`
+- `github.com/<owner>/<repo>/blob/<ref>/<path>` → the crate is `<name>` when the
+  path starts `crates/<name>/`, else `<repo>`; the version is `<ref>` without a
+  leading `v` when it is a version number, else (`main`, a branch) `unpinned`
+- any other host names no crate
+
+Names compare with `-` folded to `_`. The card's crate is the one most of its
+URLs name (ties to the earliest), at its most-cited pinned version, or
+`unpinned` when none is pinned. A card naming no crate prints `-`.
+
+**The tag** compares that against the `Cargo.lock` of the worktree search was
+run in — the nearest one walking up from the current directory to the worktree
+root, or else the only `*/Cargo.lock` one level below the root:
+
+| tag | when |
+|---|---|
+| `current` | the lock holds the crate at the card's version |
+| `other-version` | the lock holds the crate at a different version |
+| `unpinned` | the card's version is `unpinned` |
+| `-` | outside a worktree, no lock found, or the crate is not in it |
+
 ## Card JSON
 
 ```json
@@ -223,6 +265,8 @@ hresearch fetch <dir> <url>         fetch and store a source, print its id
 hresearch render <dir> - <<JSON     validate card.json/matrix and write the file
 hresearch check <card.hresearch> [--live] [--require <slot>]...
 hresearch list                      one line per question in this task's research/
+hresearch search [<term>...] [--crate <name>[@<ver>]] [--shape card|matrix|figure] [--project <p>]
+                                     search every project's cards, from any directory
 ```
 
 `check` prints `shape: card`, `shape: matrix` or `shape: figure` first, then
@@ -237,6 +281,11 @@ fails it, for any shape.
 `list` prints `<stem>\t<shape>\t<file>\t<question>` for every question under
 the current task's `research/sources/`, `<file>` being the rendered `.hresearch`'s
 path relative to the notes dir, or `-` before it's rendered.
+
+`search` prints `<date> <shape> <crate@ver> <tag> <question>  <path>` per hit,
+best match first (newest first with no terms), `<path>` being the absolute
+`.hresearch` path after two spaces. It exits 1 with nothing on stdout when
+nothing matches. See [The index](#the-index).
 
 `fetch` and `render` both refuse a `dir` that isn't one of the current task's
 own sources dirs — a dir belonging to another task, or one `new` never
