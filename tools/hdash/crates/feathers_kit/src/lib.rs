@@ -18,21 +18,19 @@ use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui::ScrollPosition;
 
-use bevy_feathers::constants::fonts;
-// The 0.18 `button` builder was renamed to `button_bundle` and deprecated in 0.19 in favor of
-// feathers' experimental BSN `button()` scene API; the kit stays on the bundle builder until that
-// API stabilizes.
-#[allow(deprecated)]
-use bevy_feathers::controls::button_bundle;
-use bevy_feathers::controls::{ButtonBundleProps, ButtonVariant};
+use bevy::picking::cursor::EntityCursor;
+use bevy::window::SystemCursorIcon;
+use bevy_feathers::constants::{fonts, size};
+use bevy_feathers::controls::ButtonVariant;
+use bevy_feathers::focus::FocusIndicator;
+use bevy_feathers::font_styles::InheritableFont;
 use bevy_feathers::rounded_corners::RoundedCorners;
 use bevy_feathers::theme::{
-    ThemeBackgroundColor, ThemeBorderColor, ThemeTextColor, ThemeToken, ThemedText, UiTheme,
+    InheritableThemeTextColor, SemanticToken, ThemeBackgroundColor, ThemeBorderColor,
+    ThemeTextColor, ThemeToken, ThemedText, UiTheme,
 };
 
-pub use bevy_feathers::controls::{
-    ButtonBundleProps as FeathersButtonProps, ButtonVariant as Variant,
-};
+pub use bevy_feathers::controls::ButtonVariant as Variant;
 pub use bevy_feathers::dark_theme::create_dark_theme;
 pub use bevy_feathers::rounded_corners::RoundedCorners as Corners;
 pub use bevy_feathers::theme::{ThemeToken as Token, UiTheme as Theme};
@@ -100,13 +98,29 @@ pub fn tok(s: &'static str) -> ThemeToken {
     ThemeToken::new_static(s)
 }
 
+/// Assigning a color to a design token, which feathers 0.20 no longer offers on [`UiTheme`].
+pub trait ThemeExt {
+    /// Point `key` at a semantic token of the same name holding `color`, replacing whatever the
+    /// token resolved to before.
+    fn set_color(&mut self, key: &'static str, color: Color);
+}
+
+impl ThemeExt for UiTheme {
+    fn set_color(&mut self, key: &'static str, color: Color) {
+        let semantic = SemanticToken::new_static(key);
+        self.0
+            .token_assignments
+            .insert(ThemeToken::new_static(key), semantic.clone());
+        self.0.semantic_base.insert(semantic, color);
+    }
+}
+
 /// Register all custom kit colors into the given theme. Call this after seeding the theme with
 /// [`create_dark_theme`] and **before** any UI is spawned, otherwise color lookups fall back to
 /// the feathers "missing token" error color.
 pub fn install_kit_tokens(theme: &mut UiTheme) {
     use kit_tokens as k;
     let c = Color::srgb_u8;
-    // The feathers dark theme leaves the generic text tokens unset, so seed them here.
     theme.set_color("feathers.text.main", c(0xd8, 0xdd, 0xe6));
     theme.set_color("feathers.text.dim", c(0x8b, 0x93, 0xa1));
     theme.set_color(k::SIDEBAR_BG, c(0x1b, 0x1d, 0x22));
@@ -407,7 +421,7 @@ pub fn sidebar_item(overrides: impl Bundle, children: impl Bundle) -> impl Bundl
 
 /// A single-line editable text field: a themed, focus-ringed container around a
 /// `bevy_text::EditableText`. Click to focus, then type; editing is driven by
-/// [`bevy_ui_widgets::EditableTextInputPlugin`], which [`KitPlugin`] registers.
+/// [`bevy_ui_widgets::TextInputPlugin`], which [`KitPlugin`] registers.
 ///
 /// `overrides` lands on the **inner editable entity**, so callers can attach a marker there and
 /// later read the value via `Query<(&Marker, &EditableText)>` (`editable.value().to_string()`),
@@ -447,21 +461,45 @@ pub fn text_input(fonts: &KitFonts, initial: &str, overrides: impl Bundle) -> im
     )
 }
 
+#[derive(Component)]
+struct KitButtonFont;
+
+fn set_button_font(add: On<Add<KitButtonFont>>, fonts: Res<KitFonts>, mut commands: Commands) {
+    commands.entity(add.entity).insert(InheritableFont {
+        font: fonts.regular.clone(),
+        font_size: size::MEDIUM_FONT,
+        weight: FontWeight::NORMAL,
+    });
+}
+
 /// A labeled feathers button. `overrides` is where a marker component (carrying the click action)
-/// goes; the label inherits the button's themed font and color.
-#[allow(deprecated)]
+/// goes; the label inherits the button's themed font and color, and feathers restyles it on hover,
+/// press and disable like its own buttons.
 pub fn icon_button(
     variant: ButtonVariant,
     overrides: impl Bundle,
     label: impl Into<String>,
 ) -> impl Bundle {
-    button_bundle(
-        ButtonBundleProps {
-            variant,
-            corners: RoundedCorners::All,
+    (
+        Node {
+            height: size::ROW_HEIGHT,
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            padding: UiRect::horizontal(Val::Px(8.0)),
+            border_radius: RoundedCorners::All.to_border_radius(4.0),
+            ..default()
         },
+        Button,
+        variant,
+        Hovered::default(),
+        EntityCursor::System(SystemCursorIcon::Pointer),
+        bevy::input_focus::tab_navigation::TabIndex(0),
+        FocusIndicator,
+        ThemeBackgroundColor(bevy_feathers::tokens::BUTTON_BG),
+        InheritableThemeTextColor(bevy_feathers::tokens::BUTTON_TEXT),
+        KitButtonFont,
         overrides,
-        Spawn((Text::new(label.into()), ThemedText)),
+        Children::spawn(Spawn((Text::new(label.into()), ThemedText))),
     )
 }
 
@@ -476,10 +514,11 @@ impl Plugin for KitPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(PreStartup, (install_kit_tokens_sys, load_kit_fonts));
         app.add_systems(Update, (hover_restyle, scroll_system));
+        app.add_observer(set_button_font);
         // Drives [`text_input`] editing (click-to-focus, keyboard, selection, IME). Not part of
         // `FeathersPlugins`, so register it here.
-        if !app.is_plugin_added::<bevy_ui_widgets::EditableTextInputPlugin>() {
-            app.add_plugins(bevy_ui_widgets::EditableTextInputPlugin);
+        if !app.is_plugin_added::<bevy_ui_widgets::TextInputPlugin>() {
+            app.add_plugins(bevy_ui_widgets::TextInputPlugin);
         }
     }
 }

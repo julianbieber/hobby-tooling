@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use bevy_feathers::theme::ThemeBackgroundColor;
 
 use feathers_kit::{
-    Button, DotState, KitFonts, KitHoverable, Theme, Variant, badge, card, icon_button,
+    Button, DotState, KitFonts, KitHoverable, Theme, ThemeExt, Variant, badge, card, icon_button,
     kit_tokens as kt, row, spacer_grow, status_dot, text, text_bold, text_mono, tok,
 };
 use hwt_core::rel_time;
