@@ -169,3 +169,19 @@ A merge conflict is always `blocked`, never resolved by rebasing here.
 something landed on the default branch outside this run, which is exactly the
 one-task-at-a-time assumption the whole coordinator loop depends on — the
 session escalates it rather than guessing at a resolution unattended.
+
+## A PR is handed over green, whoever merges it
+
+"Ensure green CI" was the whole request, and it is enforced at both ends of the
+push. **Before**: the `pr` phase runs the repo's own `.github/workflows` steps
+locally and repairs what fails, so the first push is already the one CI is
+expected to pass. **After**: the PR's checks are watched and repaired through
+`fix-ci` in both merge modes — with `mine` too, which used to skip straight to
+`journal` and hand over a PR whose checks nobody had looked at.
+
+The local run is a filter, not a substitute. `uses:` steps, secrets, service
+containers and other operating systems cannot be reproduced on this machine, so
+the PR's checks remain the authority and the local run only catches what can be
+caught before a round trip to the runner. Both share `ci_result.rounds` and its
+bound of three: they are two places the same CI can fail, not two loops.
+

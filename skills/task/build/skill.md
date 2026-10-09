@@ -1,7 +1,7 @@
 ---
 description: Run a task end to end as one human-gated pipeline with a recorded stage — assess once whether it splits into standalone subtasks, brief, HMML baseline, the business context only I hold, annotated delta, spec review loop, implement and test, comment pass, code quality standards, my review, PR, journal
 argument-hint: '[<description> | #<issue> | --notes] [<phase>] [--no-hmml] [--no-context] [--no-split] [--resume-deep]'
-allowed-tools: Skill, Read, Write, Edit, AskUserQuestion, Bash(hobby-struct-parser:*), Bash(pwd:*), Bash(date:*), Bash(ls:*), Bash(rg:*), Bash(git branch:*), Bash(git -C * status:*), Bash(git -C * diff:*), Bash(git -C * log:*), Bash(git -C * rev-parse:*), Bash(git -C * ls-files:*), Bash(git status:*), Bash(git diff:*), Bash(git log:*), Bash(gh pr list:*), Bash(gh pr view:*), Bash(gh issue view:*), Bash(gh issue list:*), Bash(gh repo view:*)
+allowed-tools: Skill, Read, Write, Edit, AskUserQuestion, Bash(hobby-struct-parser:*), Bash(pwd:*), Bash(date:*), Bash(ls:*), Bash(rg:*), Bash(git branch:*), Bash(git -C * status:*), Bash(git -C * diff:*), Bash(git -C * log:*), Bash(git -C * rev-parse:*), Bash(git -C * ls-files:*), Bash(git status:*), Bash(git diff:*), Bash(git log:*), Bash(gh pr list:*), Bash(gh pr view:*), Bash(gh issue view:*), Bash(gh issue list:*), Bash(gh repo view:*), Bash(hcoord ci:*), Bash(gh run list:*), Bash(gh run rerun:*)
 ---
 
 Run a task **end to end** as one predictable, human-gated pipeline. The individual
@@ -86,13 +86,14 @@ except where a sub-skill already does (`journal:resume`).
      ],
      "size_budget": "", "prior_art": "",
      "context_questions": [], "context_recorded": null, "context_gaps": [],
-     "rounds": 0, "written": "<RFC 3339>", "phase_since": "<RFC 3339>" }
+     "rounds": 0, "ci_rounds": 0,
+     "written": "<RFC 3339>", "phase_since": "<RFC 3339>" }
    ```
 
    `phase` is one of `assess-split`, `plan`, `context`, `await-hmml-review`,
    `revise`, `implement`, `comments`, `standards`, `review`, `await-review`,
-   `pr`, `journal`, `handed-off` (this task became a coordinator and its work
-   lives in its subtasks), `done`. `context` and `await-hmml-review` are the two
+   `pr`, `ci`, `journal`, `handed-off` (this task became a coordinator and its
+   work lives in its subtasks), `done`. `context` and `await-hmml-review` are the two
    waiting states: the pipeline has asked me something and stops until I answer.
    Every write sets `written` to that write's time; `phase_since` moves with it
    only when the write also changes `phase`, and otherwise keeps its old value.
@@ -507,6 +508,14 @@ make the change directly.
 
 **Test.** Drive it end to end: run the app or the affected flow, plus the repo's
 own test command (`cargo test`, `cargo clippy`, `just test`, whatever it uses).
+Then **run the repo's CI locally**: for every job in `.github/workflows/*.yml`
+and `*.yaml` triggered by `pull_request` or `push`, its `run:` steps in order
+from the worktree root, with the job's `env:` and each step's
+`working-directory:`. A matrix runs once, on this machine's toolchain. Skip
+`uses:` steps and any step that reads `secrets.` or needs a `services:`
+container or another OS, and carry the skipped ones into GATE 2. A failing step
+is fixed here like a failing test, so the diff I review is one CI is expected to
+pass. No workflows → nothing to run.
 Then, unless `--no-hmml`, `hmml-validate` once more — the code should report
 **`CONFORMS`** to the annotated spec: every `# +` claim present in the code, every
 `# -` behaviour gone from it. Report residual `SPEC-AHEAD` as unfinished work.
@@ -629,14 +638,36 @@ there was run by hand, say so in one bullet and name what does cover it.
 
 The `track-pr` hook records the PR to `prs.json`. If it did not fire, append the
 PR there yourself (create with `[]` first; never store the PR's live state).
+Set `phase: ci` and continue.
 
 Hobby repos are mine, so a PR is optional — for a small solo change, pushing to
 the default branch may be right. Ask if it is not obvious, and skip to `journal`
 when I say no PR.
 
-## Phase `journal`
+## Phase `ci` — the PR is green before the pipeline ends
 
-Run `journal:write` — goal, what changed, evidence, open items, with the context
+The local run in `implement` cannot reproduce `uses:` steps, secrets, service
+containers or another OS, so the PR's own checks are the authority. Watch them
+and repair them; never hand me a red PR as finished.
+
+1. `hcoord ci <pr url> --spent <ci_rounds>`, Bash `timeout: 600000`. At most
+   four calls on `timeout`; a fourth is step 5 with
+   `checks still pending after ~38 minutes`.
+2. `outcome: green` → done here, on to `journal`. `checks: none` while the repo
+   has workflows is not green yet: `gh run list --commit <head sha> --json
+   status` — a run listed means call 1 again; none listed means no workflow
+   triggers on this PR.
+3. `outcome: fix` → the failure is the diff's own. Repair it reading the files
+   `log` names, run the failing step locally, `/comment-pass` over what changed,
+   commit to the message rule, push. Increment `ci_rounds`, back to 1. The
+   repair is shown in the wrap-up, because it landed after GATE 2.
+4. `outcome: rerun` → `gh run rerun --failed <run>` only. Increment
+   `ci_rounds`, back to 1.
+5. `outcome: blocked` (`not-mine`, `decision`, or the bound of three spent) →
+   print the PR, the case, the failing check and at most three log lines, and
+   **stop**: the next step is mine.
+
+ — goal, what changed, evidence, open items, with the context
 gaps under the open items so they survive into the next session's resume. Set
 `phase: done`.
 Print a one-line wrap-up: task, PR link if any, anything still open. End.
