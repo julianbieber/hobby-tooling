@@ -124,7 +124,7 @@ from disk, netcode, save files) — a local game loop usually does not:**
     apply until the next sync point — does any behavior step assume the entity
     exists in the same system run?
   - **Event lifetime.** Does every `emits:` have a `consumes:` in a schedule that
-    runs before the event is dropped (events live two frames)? An event emitted
+    runs before the message is dropped (messages live two frames)? An event emitted
     and never consumed, or consumed in an earlier schedule, is dead.
   - **Archetype churn.** Do the `spawns:` / `despawns:` lists imply
     add/remove-component churn in a hot loop where a marker toggle or a

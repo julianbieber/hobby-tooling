@@ -235,8 +235,8 @@ end of this file are the reference.
      files.
    - **`## components` / `## resources` / `## events`** (Bevy) → the derived
      type. Added type → a new `#[derive(Component)]` / `#[derive(Resource)]` /
-     `#[derive(Event)]` struct, registered in the plugin's `build` where
-     registration is required (events need `add_event`; components and resources
+     `#[derive(Message)]` struct, registered in the plugin's `build` where
+     registration is required (events need `add_message`; components and resources
      usually need `init_resource` / `insert_resource` only for resources).
      A `marker Name` is a **unit struct** (`#[derive(Component)] struct Name;`),
      not an empty braced one. Moving a type between world sections is a **role
@@ -265,8 +265,8 @@ end of this file are the reference.
        `reads:` to `writes:` is a real signature change** — it changes the
        system's parallelism, so make it even though the body may not need edits.
      - `spawns:` / `despawns:` → `commands.spawn((..))` / `.despawn()`.
-     - `emits:` / `consumes:` → `EventWriter<E>` / `EventReader<E>`, plus the
-       `add_event::<E>()` registration if the event is new.
+     - `emits:` / `consumes:` → `MessageWriter<E>` / `MessageReader<E>`, plus the
+       `add_message::<E>()` registration if the event is new.
      - A system entry added → a new fn **and** its `add_systems` registration.
        Removed → remove both, subject to the same "absence ≠ dead code" caution
        as a removed behavior step.

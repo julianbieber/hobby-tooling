@@ -234,7 +234,8 @@ four sections, and **the derive decides which**.
   - `Query<&T, With<A>>` → `query: T + A`; `Without<B>` → `- B`.
   - `&mut T` inside a query → also list `T` under `writes:`.
   - `Res<T>` → `reads: T`; `ResMut<T>` → `writes: T`.
-  - `EventWriter<E>` → `emits: E`; `EventReader<E>` → `consumes: E`.
+  - `MessageWriter<E>` → `emits: E`; `MessageReader<E>` → `consumes: E`
+    (`EventWriter` / `EventReader` on pre-0.17 Bevy).
   - `commands.spawn((A, B))` → `spawns: A, B`; `.despawn()` → `despawns:`.
   - Omit a key entirely when the system does not use it — an empty list is
     noise. `schedule:` is the one key that is always required.
