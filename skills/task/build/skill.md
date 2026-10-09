@@ -1,7 +1,7 @@
 ---
 description: Run a task end to end as one human-gated pipeline with a recorded stage — assess once whether it splits into standalone subtasks, brief, HMML baseline, the business context only I hold, annotated delta, spec review loop, implement and test, comment pass, code quality standards, my review, PR, journal
 argument-hint: '[<description> | #<issue> | --notes] [<phase>] [--no-hmml] [--no-context] [--no-split] [--resume-deep]'
-allowed-tools: Skill, Read, Write, Edit, AskUserQuestion, Bash(hobby-struct-parser:*), Bash(pwd:*), Bash(date:*), Bash(ls:*), Bash(rg:*), Bash(git branch:*), Bash(git -C * status:*), Bash(git -C * diff:*), Bash(git -C * log:*), Bash(git -C * rev-parse:*), Bash(git -C * ls-files:*), Bash(git status:*), Bash(git diff:*), Bash(git log:*), Bash(gh pr list:*), Bash(gh pr view:*), Bash(gh issue view:*), Bash(gh issue list:*)
+allowed-tools: Skill, Read, Write, Edit, AskUserQuestion, Bash(hobby-struct-parser:*), Bash(pwd:*), Bash(date:*), Bash(ls:*), Bash(rg:*), Bash(git branch:*), Bash(git -C * status:*), Bash(git -C * diff:*), Bash(git -C * log:*), Bash(git -C * rev-parse:*), Bash(git -C * ls-files:*), Bash(git status:*), Bash(git diff:*), Bash(git log:*), Bash(gh pr list:*), Bash(gh pr view:*), Bash(gh issue view:*), Bash(gh issue list:*), Bash(gh repo view:*)
 ---
 
 Run a task **end to end** as one predictable, human-gated pipeline. The individual
@@ -9,8 +9,6 @@ skills already exist (`journal:resume`, the HMML suite, `comment-pass`,
 `structure`, `journal:write`); this is
 the **thin orchestrator** that runs them in a fixed order, stops hard where I take over, and resumes in a
 later session exactly where it left off.
-
-Supersedes `/dev-flow`.
 
 **You are glue, not a reimplementation.** Never re-do what a sub-skill owns (HMML
 grammar, delta-vs-full-generation). Invoke it and trust its contract. Keep the sequential spine in *this* main-loop context so each
@@ -47,9 +45,9 @@ except where a sub-skill already does (`journal:resume`).
    is wrong forever and nothing later contradicts it.
 4. **No machine attribution** in anything you write — no `Co-Authored-By:
    Claude`, no `Claude-Session:` trailer, no `Generated with Claude Code` footer,
-   no 🤖. It is advertising and these repos do not carry it. Comments and commit
-   messages have rules in `~/.claude-hobby/CLAUDE.md` and you follow them; PR
-   bodies and issue text do not yet, so write those normally.
+   no 🤖. It is advertising and these repos do not carry it. Comments, commit
+   messages, PR descriptions and issue text have rules in
+   `~/.claude-hobby/CLAUDE.md`, and you follow them.
 
 ## Step 0 — Resolve context, brief and phase
 
@@ -129,7 +127,7 @@ except where a sub-skill already does (`journal:resume`).
    **`phase: handed-off` is terminal.** This task's work lives in its subtasks
    now. Print the `subtasks` list with the `hcdev wt <task>` command for each,
    remind me that each one runs its own `/task:build`, and end the turn. Do not
-   plan, implement, or open a PR here — the coordinator owns no code.
+   plan, implement, or open a PR here — this task owns no code.
 
 5. **Flags:** `--no-hmml` skips the spec phases entirely (plan the change inline in
    a sentence or two, then ask the context questions off that inline plan instead
@@ -171,7 +169,7 @@ no unmerged work of its own for the subtask to miss. Both must hold:
 
 ```bash
 git status --short                              # must be empty
-git log --oneline origin/main..HEAD             # must be empty
+git log --oneline "origin/$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)..HEAD"   # must be empty
 ```
 
 If either fails the split is **refused** — not deferred, not worked around.
@@ -277,7 +275,7 @@ Then, once per task:
 
 **Nothing is launched here.** `/subtask` sets up directories, as it says it
 does; opening a session is a click in `hdash` or an `hcdev wt` I run myself.
-**The coordinator implements nothing** — it owns no code, opens no PR, and does
+**This task implements nothing** — it owns no code, opens no PR, and does
 not poll the subtasks. End your turn.
 
 ______________________________________________________________________

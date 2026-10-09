@@ -25,7 +25,7 @@ Analyze the summaries for:
   the same conclusion. These need known-issues entries.
 - **Rediscovered procedures**: Investigation steps or queries rebuilt from
   scratch across tasks. These need persistent reusable tools in
-  `~/tmp_repos/mcp_scripts/tools/`.
+  `~/fun_repos/hobby-tooling` (`scripts/` or a crate under `tools/`).
 - **Lost action items**: Recommendations made in journals ("adjust threshold",
   "notify customer", "fix hook") that were never tracked. These need entries in
   `~/.claude-hobby/context/known-issues.md` Action Items.
@@ -52,17 +52,17 @@ For each approved item:
 
 - **Known issues**: Edit `~/.claude-hobby/context/known-issues.md` — add/update
   entries with pattern, cause, action, and any open recommendations.
-- **Reusable tools**: Create Rust CLI tools in
-  `~/tmp_repos/mcp_scripts/tools/{name}/` following workspace conventions
-  (Cargo.toml with workspace deps, `src/main.rs` using `db_mcp::*`, clap for
-  args, JSON stdout). Build with `cargo +nightly build -p {name}`.
+- **Reusable tools**: Add a script to `~/fun_repos/hobby-tooling/scripts/` or
+  a crate under `~/fun_repos/hobby-tooling/tools/{name}/`, following that
+  repo's `CLAUDE.md` conventions (every tool a folder with a `README.md`).
 - **Action items**: Add to the Action Items checklist in
   `~/.claude-hobby/context/known-issues.md`.
 - **Stubs**: Delete with `rm`.
 - **Journal condensing**: If journals are verbose, use subagents to rewrite
   files shorter (remove session play-by-play, keep findings/decisions/status).
-- **Skill/command adjustments**: Edit files in `~/.claude/commands/` or
-  `~/.claude/plugins/`.
+- **Skill/command adjustments**: Edit
+  `~/fun_repos/hobby-tooling/skills/{name}/skill.md` (symlinked into
+  `~/.claude-hobby/commands/`).
 
 ### Phase 5: Condense (optional)
 
@@ -79,6 +79,5 @@ If the user approves, condense verbose journal files:
 
 - Journals: `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/`
 - Known issues: `~/.claude-hobby/context/known-issues.md`
-- Reusable tools: `~/tmp_repos/mcp_scripts/tools/`
-- Skills: `~/.claude/commands/`
-- Agents: `~/.claude/plugins/local/mcp-scripter/agents/`
+- Reusable tools: `~/fun_repos/hobby-tooling/scripts/`, `~/fun_repos/hobby-tooling/tools/`
+- Skills: `~/fun_repos/hobby-tooling/skills/`

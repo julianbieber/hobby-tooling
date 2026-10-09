@@ -1,6 +1,6 @@
 ---
 description: Validate the implementation against its current .hmml spec — report where code has drifted from the mental model, without editing anything
-allowed-tools: Read, Grep, Glob, Bash(git -C * diff:*), Bash(git -C * show:*), Bash(git -C * cat-file:*), Bash(git -C * ls-files:*), Bash(git -C * rev-parse:*), Bash(git -C * status:*), Bash(git -C * worktree list:*), Bash(git -C * log:*), Bash(git diff:*), Bash(ls:*), Bash(pwd:*), Bash(sbt *), Bash(cargo *), Bash(npm *), Bash(just *), Bash(uv *), Bash(mise exec *), Bash(hobby-mml-parser:*), mcp__tree-extract__build_graph, mcp__tree-extract__list_modules, mcp__tree-extract__get_neighbors, mcp__tree-extract__call_path, mcp__tree-extract__get_symbol, mcp__tree-extract__search_symbols, mcp__lsp-mcp__document_symbol, mcp__lsp-mcp__find_references, mcp__lsp-mcp__goto_definition, mcp__lsp-mcp__hover
+allowed-tools: Read, Grep, Glob, Bash(git -C * diff:*), Bash(git -C * show:*), Bash(git -C * cat-file:*), Bash(git -C * ls-files:*), Bash(git -C * rev-parse:*), Bash(git -C * status:*), Bash(git -C * worktree list:*), Bash(git -C * log:*), Bash(git diff:*), Bash(ls:*), Bash(pwd:*), Bash(cargo *), Bash(just *), Bash(mise exec *), Bash(hobby-mml-parser:*), mcp__tree-extract__build_graph, mcp__tree-extract__list_modules, mcp__tree-extract__get_neighbors, mcp__tree-extract__call_path, mcp__tree-extract__get_symbol, mcp__tree-extract__search_symbols, mcp__lsp-mcp__document_symbol, mcp__lsp-mcp__find_references, mcp__lsp-mcp__goto_definition, mcp__lsp-mcp__hover
 ---
 
 Validate that the **implementation still matches its `.hmml` spec** — a read-only
@@ -83,10 +83,10 @@ representing the change.
 ## Instructions
 
 1. **Identify the spec and fix the reference version.** Specs live **per task**
-   in the team notes repo, directly in the task's notes directory (no `<system>`
-   subdirectory). Detect `{topic}`/`{task}` the same way `journal:resume`
-   does: from the worktree path `~/fun_worktrees/{project}/{topic}/{task}`, `{topic}`
-   is the first dir and `{task}` the second (verbatim, including any blurb
+   in the notes repo, directly in the task's notes directory (no `<system>`
+   subdirectory). Detect `{project}`/`{topic}`/`{task}` the same way `journal:resume`
+   does: from the worktree path `~/fun_worktrees/{project}/{topic}/{task}`, they
+   are the first, second and third dirs (`{task}` verbatim, including any blurb
    suffix); fall back to the git branch name if the path is not under
    `~/fun_worktrees`. Resolve the human's pointer (a path, or a bare `unit`) to
    `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/<unit>.hmml`
@@ -120,8 +120,7 @@ representing the change.
    checkout is **fine here** — validate never writes — but if the human is
    working in a worktree of that repo, prefer it so HEAD matches what they see.
    Verify each `source.paths` entry resolves to a real file; a broken link is
-   itself a **SPEC-AHEAD** conformance failure (record it under modules/linkage
-   — see `linkage.md`).
+   itself a **SPEC-AHEAD** conformance failure (record it under modules/linkage).
 
 3. **Check each section, routing to code exactly as translate does.** Route each
    `## modules` line via its **`@ path`** anchor, then pin symbols with
@@ -160,7 +159,8 @@ representing the change.
    - **`## components` / `## resources` / `## events`** (Bevy) — each declared
      type maps to a real type carrying the **matching derive**: a component to
      `#[derive(Component)]`, a resource to `#[derive(Resource)]`, an event to
-     `#[derive(Event)]`. A **role mismatch is drift even when the type exists** —
+     `#[derive(Message)]` (or `Event` / `BufferedEvent` / `EntityEvent` in code
+     on an older Bevy — grammar §4.7 treats them as one role). A **role mismatch is drift even when the type exists** —
      a spec resource whose code type derives `Component` is **SPEC-AHEAD**, and
      it is the highest-value finding in this section, because the spec's whole
      access model is built on roles. A `marker Name` must be a unit struct; a
@@ -169,7 +169,7 @@ representing the change.
      local declaration — it is not supposed to have one.
    - **`## data`** (Bevy) — the same field/variant comparison, plus one role
      claim of its own: a `## data` type asserts the code type carries **none** of
-     `Component` / `Resource` / `Event`. A code type that has grown one is
+     `Component` / `Resource` / `Message` (or `Event`). A code type that has grown one is
      **CODE-AHEAD** (it became part of the world; the spec should move it to that
      section). The converse — a world-section type whose code derive is gone —
      is the SPEC-AHEAD case above. Do not flag a `## data` type for being absent
@@ -189,20 +189,21 @@ representing the change.
        understates the system's access, which is exactly the claim a reader would
        rely on when reasoning about conflicts.
      - `spawns:` / `despawns:` vs `commands.spawn`/`despawn`; `emits:` /
-       `consumes:` vs `EventWriter<E>` / `EventReader<E>`.
+       `consumes:` vs `MessageWriter<E>` / `MessageReader<E>` (`EventWriter` /
+       `EventReader` on pre-0.17 Bevy).
      - A **fn registered in the plugin that the spec's `## systems` omits** is
        CODE-AHEAD — and unlike an omitted helper, it is worth reporting: an
        unlisted system is a whole unit of frame behavior missing from the model.
    - **`## access`** (`kind: system`) — the same comparison for the one fn.
      Its `schedule:`/ordering live in the **plugin's** registration, so check
      them there and report a mismatch against this spec.
-   - **`## invariants`** — for each, find the enforcing mechanism (a semaphore,
-     prefetch count, unique index, max-requeue constant, auth guard, validation
-     allowlist). An invariant with no discoverable enforcement is **SPEC-AHEAD /
+   - **`## invariants`** — for each, find the enforcing mechanism (a constant
+     or bound, a run condition, a guard clause, a `Without<..>` filter, an
+     assertion). An invariant with no discoverable enforcement is **SPEC-AHEAD /
      at-risk** — the guarantee may silently not hold. You *may* exercise it
      dynamically with a read-only test run (best-effort, per the repo's
-     `CLAUDE.md`, launched via `mise exec --cd <checkout>`); if the infra (e.g.
-     docker databases) is unavailable, mark it **CANNOT-VERIFY**, do not fail
+     `CLAUDE.md`, launched via `mise exec --cd <checkout>`); if it cannot run
+     here, mark it **CANNOT-VERIFY**, do not fail
      it.
    - **header `method:` / field `@source`** (endpoints) — the `method` must
      match the route's HTTP verb, and each field's
@@ -355,8 +356,8 @@ representing the change.
   grammar, but no `in:`/`out:` and no `marker`, and a `## data` name may not
   appear in an access list (`access-role-mismatch`). One type namespace across
   data + world sections, so a name declared in two of them is `duplicate-type`.
-  A `## data` type claims the *absence* of a `Component`/`Resource`/`Event`
-  derive; a code type that has one is drifted out of `## data`.
+  A `## data` type claims the *absence* of a `Component`/`Resource`/`Message`
+  (or `Event`) derive; a code type that has one is drifted out of `## data`.
 - Bevy's own types (`Transform`, `Time`, `AssetServer`, `AppExit`, …) are built
   in and are never declared locally.
 - `## systems`: `snake_name — responsibility [@ path] [@ spec unit]` at column 0,
@@ -385,23 +386,23 @@ guarantee, from the read side.)
 
 ### SPEC-AHEAD — an invariant the code no longer upholds
 
-`mesh-terrain-chunks.hmml` invariant *"at most X CIDs are in-flight … each an
-AMQP consumer with prefetch 1"*, but `child.py` now sets
-`set_qos(prefetch_count=10)`. Route via the `Child @ src/chunk/mesher.rs`
-anchor, find the `set_qos` site, see `10 ≠ 1`. Report **SPEC-AHEAD** on that
-invariant (and note it also contradicts the `## behavior` "prefetch 1" step — a
-self-consistent spec that the *code* broke). Overall **DRIFTED**. Recommend: if
-prefetch 1 is still the intent, `/hmml-translate` to restore it; if the
-code intentionally moved to 10, re-extract to refresh the spec. Do not touch
+`mesh-terrain-chunks.hmml` invariant *"at most 4 chunks are meshed per
+frame"*, but the `MAX_MESHES_PER_FRAME` constant in `src/chunk/mesher.rs` is now
+`16`. Route via the `ChunkMesher @ src/chunk/mesher.rs` anchor, find where the
+mesh queue is drained, see `16 ≠ 4`. Report **SPEC-AHEAD** on that invariant
+(and note it also contradicts the `## behavior` "take at most 4 from the queue"
+step — a self-consistent spec that the *code* broke). Overall **DRIFTED**.
+Recommend: if 4 is still the intent, `/hmml-translate` to restore it; if the
+code intentionally moved to 16, re-extract to refresh the spec. Do not touch
 either.
 
 ### CODE-AHEAD — a value set the spec is missing
 
-`get-product-identifier-mapping.hmml` has `enum InputType { gtin, asin }`, but
-the controller's `validIdentifiers` allowlist is now
-`Seq("gtin", "asin", "ean")` and `IdentifierTypes` gained `ean`. The code
-accepts a value the spec's closed set does not list — a behaviorally significant
-**CODE-AHEAD**. Report **DRIFTED** on `## data`; recommend re-extracting to add
-`ean` to the spec (the code is the truth here). A merely-renamed private helper
+`reload-shader-batch.hmml` has `enum ReloadOutcome { swapped, unchanged,
+rejected }`, but the Rust enum in `src/watch/reload.rs` gained `deferred`, and
+the `match` in the reload system now queues deferred shaders for the next frame.
+The code produces a value the spec's closed set does not list — a behaviorally
+significant **CODE-AHEAD**. Report **DRIFTED** on `## data`; recommend
+re-extracting to add `deferred` to the spec (the code is the truth here). A merely-renamed private helper
 or an added log line in the same file is **not** reported — that is expected
 lossiness.

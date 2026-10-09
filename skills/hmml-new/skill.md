@@ -67,7 +67,7 @@ that is where the shapes with **no** ECS role go (grammar §4.6).
    from what I said or ask **one** clarifying question:
 
    - `unit` — a unique identifier (kebab-case): verb-first for endpoints
-     (`get-product-identifier-mapping`); the message/job name for workflows/jobs
+     (`get-map-tile`); the message/job name for workflows/jobs
      (`reload-shader-batch`, `prune-stale-chunk-cache`). This is the
      filename (`<unit>.hmml`), so it must be unique within the task dir.
    - `kind` — exactly one of `endpoint` | `workflow` | `job` | `plugin` |
@@ -82,7 +82,8 @@ that is where the shapes with **no** ECS role go (grammar §4.6).
 
    The file lives at
    `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/<unit>.hmml`,
-   where `{topic}` and `{task}` are the first and second directories under
+   where `{project}`, `{topic}` and `{task}` are the first, second and third
+   directories under
    `~/fun_worktrees` on the current worktree path
    (`~/fun_worktrees/{project}/{topic}/{task}`) — the same task/topic detection
    `journal:resume` uses. Use `{task}` verbatim (including any blurb
@@ -148,7 +149,8 @@ that is where the shapes with **no** ECS role go (grammar §4.6).
      shapes. When the idea leans on a component the codebase already has, do
      **not** redeclare it: reference it with `struct Name @ <path>` and no body
      (grammar §4.7), and give the body only the fields the feature wants
-     *changed* (`+ field: Type` to add one). For a type from a dependency, use
+     *changed*, written with §10's markers (a `# +` line above a field to add
+     it, `# - field: Type` to remove one) — never the legacy inline `+` / `-`. For a type from a dependency, use
      `use extern <crate::path>: Name`. Since there is no code for the new parts
      yet, most of the draft is ordinary declarations — the references are for
      what the feature is built *on top of*. Grep the worktree before assuming a
@@ -193,8 +195,8 @@ that is where the shapes with **no** ECS role go (grammar §4.6).
 
 7. **Sanity-check the structure.** Confirm: header has `unit`/`kind` (kind in
    the closed set, `system` optional) and the filename equals `<unit>.hmml`; the
-   four `##` sections are present **in order** (`modules`, `data`, `behavior`,
-   `invariants` — or `api` in place of `behavior` for a `kind: module`);
+   sections the `kind` requires (see the cheat-sheet) are present, and every
+   section is in canonical order;
    indentation is uniform 2-space; behavior control flow uses only the closed
    keyword set; every `## data` type resolves.
 
@@ -250,9 +252,10 @@ that is where the shapes with **no** ECS role go (grammar §4.6).
 - Referencing existing code (grammar §4.7): a type declaration may end with
   `@ <repo-relative-path>` — `struct Wave @ src/waves/mod.rs` — meaning the type
   already exists there. The body then becomes **optional**, and when present it
-  is a **delta**: `+ field: Type` adds a field, `- field` removes one, an
-  unmarked field asserts one already exists, and anything not listed **stays as
-  it is**. Reference a type this unit does not own instead of restating it. The
+  is **partial**: a listed member asserts it already exists, anything not listed
+  **stays as it is**, and a member change is written with §10's `# +` / `# -`.
+  The v2.2 inline `+ field: Type` / `- field` is legacy — still read, never
+  written. Reference a type this unit does not own instead of restating it. The
   filesystem-aware tools check the type is there, that its `#[derive(…)]` fits
   the section's role, and that unmarked members exist — all warnings.
 - Dependency types (grammar §4.8): `use extern avian3d::prelude: Collider` for a
@@ -314,50 +317,51 @@ that is where the shapes with **no** ECS role go (grammar §4.6).
 
 ### Draft from a rough idea — a scheduled `job`
 
-I say: *"a nightly job that purges price-history older than the retention
-window, per contract, in batches."* You draft (note the `# DRAFT` marker, no
-`source` yet, and behavior kept deliberately sparse for me to sharpen):
+I say: *"a nightly job that prunes cached chunk meshes nobody has touched
+within the retention window, per world, in batches."* You draft (note the
+`# DRAFT` marker, no `source` yet, and behavior kept deliberately sparse for me
+to sharpen):
 
 ```hmml
 # DRAFT — best-guess scaffold from a rough idea; edit me down before translating.
-system: bevy-survivor
+system: terrain-erosion
 unit: prune-stale-chunk-cache
 kind: job
 # source: (add repo + intended paths once the target is decided)
 
 ## modules
-PurgeScheduler    — scheduled entry point: enumerates contracts and drives the purge
-PriceHistoryStore — deletes price-history rows older than the cutoff, in batches
-PurgeReporter     — records how many rows were deleted per contract
+PruneScheduler  — scheduled entry point: enumerates worlds and drives the prune
+ChunkCacheStore — evicts cached meshes not touched since the cutoff, in batches
+PruneReporter   — records how many entries were evicted per world
 
 ## data
-struct Contract {
-  contract_id: Uuid,
+struct World {
+  world_id: Uuid,
   retention_days: u32,
 }
-struct PurgeResult {
-  contract_id: Uuid,
-  deleted_rows: u64,
+struct PruneResult {
+  world_id: Uuid,
+  evicted_entries: u64,
 }
 
-in:  Stream<Contract>
-out: Stream<PurgeResult>
+in:  Stream<World>
+out: Stream<PruneResult>
 
 ## behavior
-- for each Contract:
-  - compute the cutoff as now minus the contract's retention window
-  - while price-history rows older than the cutoff remain:
-    - delete the next batch of at most X rows via PriceHistoryStore
-  - record a PurgeResult for the contract via PurgeReporter
-- emit each PurgeResult downstream
+- for each World:
+  - compute the cutoff as now minus the world's retention window
+  - while cached meshes untouched since the cutoff remain:
+    - evict the next batch of at most X entries via ChunkCacheStore
+  - record a PruneResult for the world via PruneReporter
+- emit each PruneResult downstream
 
 ## invariants
-- rows newer than the retention window are never deleted
-- each batch deletes at most X rows, so the job never holds a long-running transaction
-- a contract with no stale rows produces a PurgeResult with deleted_rows = 0
+- meshes touched within the retention window are never evicted
+- each batch evicts at most X entries, so the cache is never locked for long
+- a world with no stale entries produces a PruneResult with evicted_entries = 0
 ```
 
-Then stop and tell me to edit it — maybe retention is global, not per-contract;
+Then stop and tell me to edit it — maybe retention is global, not per-world;
 maybe the reporter isn't its own module. That reaction is the point of the
 draft.
 

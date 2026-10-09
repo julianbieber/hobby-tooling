@@ -1,15 +1,11 @@
 ---
-description: Decide whether the task's GitHub issue warrants a progress comment, gather the evidence for one, and open the authoring buffer so I write it
+description: Decide whether the task's GitHub issue warrants a progress comment, gather the evidence for one, and write the comment for me to edit before it is posted
 allowed-tools: Bash(git branch:*), Bash(git -C:*), Bash(ls:*), Bash(pwd:*), Bash(mkdir:*), Bash(git log:*), Bash(gh:*), Read, Write
 ---
 
 Work out whether there is anything worth saying on the GitHub issue behind the
-current task, gather the evidence, and open the authoring gate so **I** write the
-comment.
-
-**You do not write the comment.** A comment on an issue is public writing; Bevy AI
-policy norm 6 asks for text synthesized from scratch rather than generated and
-revised. The judgement about *whether* to comment is yours; the words are mine.
+current task, gather the evidence, and write the comment from it. Show me the
+comment before posting it; I edit what I disagree with.
 
 The goal is **low noise**: link to where the detail already lives (PRs, commits)
 instead of restating it, and surface only outcomes backed by evidence.
@@ -70,8 +66,8 @@ instead of restating it, and surface only outcomes backed by evidence.
    clears the bar, tell the user there is nothing worth posting and stop — no
    filler comments.
 
-5. **Write the facts** to `${XDG_RUNTIME_DIR:-/tmp}/hobby-authoring-gate/facts.md`
-   (`mkdir -p` first) — the evidence, not the comment:
+5. **Collect the facts** — the evidence the comment is written from, kept
+   apart from the comment itself:
 
    ```markdown
    ## New since the last comment
@@ -90,8 +86,8 @@ instead of restating it, and surface only outcomes backed by evidence.
    **Link, don't duplicate.** Reference the PR (`#123`) or commit SHA; never paste
    diffs, file lists or code that already lives in the PR.
 
-6. **Post it.** Write the comment from the evidence gathered above, show it to
-   me, then:
+6. **Post it.** Write the comment from the evidence gathered above to a temp
+   file (`mktemp`), show it to me, and once I confirm:
 
    ```bash
    gh issue comment <n> --body-file <file>
@@ -124,8 +120,7 @@ instead of restating it, and surface only outcomes backed by evidence.
 
 ## Comment shape
 
-The buffer the gate opens is empty. This is the shape I tend to write, kept here
-so the facts file lines up with it — **not** a template for you to fill in.
+The default shape, and the one the facts above line up with:
 
 ```markdown
 ## Update

@@ -1,6 +1,6 @@
 ---
 description: Translate an edited .hmml spec into a minimal code change that makes the real system match it
-allowed-tools: Read, Grep, Glob, Edit, Write, MultiEdit, Bash(hobby-mml-parser:*), Bash(git -C * diff:*), Bash(git -C * show:*), Bash(git -C * cat-file:*), Bash(git -C * ls-files:*), Bash(git -C * rev-parse:*), Bash(git -C * status:*), Bash(git -C * worktree list:*), Bash(git -C * log:*), Bash(git diff:*), Bash(ls:*), Bash(pwd:*), Bash(sbt *), Bash(cargo *), Bash(npm *), Bash(just *), Bash(uv *), Bash(mise exec *), mcp__tree-extract__build_graph, mcp__tree-extract__list_modules, mcp__tree-extract__get_neighbors, mcp__tree-extract__call_path, mcp__tree-extract__get_symbol, mcp__tree-extract__search_symbols, mcp__lsp-mcp__document_symbol, mcp__lsp-mcp__find_references, mcp__lsp-mcp__goto_definition, mcp__lsp-mcp__hover
+allowed-tools: Read, Grep, Glob, Edit, Write, MultiEdit, Bash(hobby-mml-parser:*), Bash(git -C * diff:*), Bash(git -C * show:*), Bash(git -C * cat-file:*), Bash(git -C * ls-files:*), Bash(git -C * rev-parse:*), Bash(git -C * status:*), Bash(git -C * worktree list:*), Bash(git -C * log:*), Bash(git diff:*), Bash(ls:*), Bash(pwd:*), Bash(cargo *), Bash(just *), Bash(mise exec *), mcp__tree-extract__build_graph, mcp__tree-extract__list_modules, mcp__tree-extract__get_neighbors, mcp__tree-extract__call_path, mcp__tree-extract__get_symbol, mcp__tree-extract__search_symbols, mcp__lsp-mcp__document_symbol, mcp__lsp-mcp__find_references, mcp__lsp-mcp__goto_definition, mcp__lsp-mcp__hover
 ---
 
 Translate an **edited** `.hmml` spec into the **code change** that makes the real
@@ -34,9 +34,9 @@ end of this file are the reference.
 
 1. **Identify the spec.** Specs live per-task in the notes repo at
    `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/<unit>.hmml`,
-   where `{topic}` is the first dir under `~/fun_worktrees` and `{task}` is the
-   second (from `~/fun_worktrees/{project}/{topic}/{task}`; `{task}` verbatim including
-   any blurb, falling back to the git branch) — the same detection
+   where `{project}`, `{topic}` and `{task}` are the first, second and third
+   dirs under `~/fun_worktrees` (from `~/fun_worktrees/{project}/{topic}/{task}`;
+   `{task}` verbatim including any blurb, falling back to the git branch) — the same detection
    `journal:resume` uses. The filename is the `unit:` header plus `.hmml`,
    **directly in the task dir** — there is no `<system>` subdirectory (the
    `system:` header is now an optional label). The human points at one `.hmml` (a
@@ -125,23 +125,23 @@ end of this file are the reference.
    says "prefetch 1" — or an enum/field edit a sibling step depends on, is an
    **internally inconsistent spec**: at most one side can match the code. **Stop
    and flag it; ask the human which they meant** rather than translating one
-   half and silently breaking the other. (This is the guard the round-trip eval
-   — task 08 — found missing.)
+   half and silently breaking the other.
 
 3. **Resolve the source and choose the write target.** `source.repo` resolves to
    `~/fun_repos/<repo>` — but that is the **shared checkout; never edit it.** The
    edit target is the task's **worktree**:
 
    - Locate a worktree checkout of `source.repo` — prefer the current working
-     directory if it is one, else look under `~/fun_worktrees/<topic>/<task>/<repo>`
+     directory if it is one, else look at `~/fun_worktrees/<project>/<topic>/<task>`
+     (the task dir is the worktree; there is no repo level below it)
      (`git -C <path> worktree list` / `ls`). Read the code to change **from that
      worktree** so what you read is exactly what you edit (no HEAD drift).
    - If the only checkout available is `~/fun_repos/<repo>`, **do not edit it.**
-     Ask the human to point at or create a worktree (`hwt new <repo>` from the
+     Ask the human to point at or create a worktree (`hwt new <task> -p <project> -t <topic>` from the
      task dir); if they decline, switch to the **patch-emit fallback** (step
      8b).
    - Verify each `source.paths` entry resolves to a real file in the target
-     checkout (broken linkage is easy to miss — see `linkage.md`).
+     checkout.
 
 4. **Locate the code behind each changed section.** Route each changed
    `## modules` line via its **`@ path`** — that is the reliable anchor; the
@@ -171,12 +171,14 @@ end of this file are the reference.
      that as a spec error to flag.
    - **A type carrying `@ <path>`** (grammar §4.7) → **the type already exists;
      never generate it.** The declaration is a *reference*, and its body — if it
-     has one at all — is a **delta against the real type**, not a definition of
-     it. This is the one place where reading a spec section literally corrupts
-     working code, so read it exactly:
-     - `+ field: Type` → **add** that field to the real struct at `@ <path>`,
-       and fix the construction sites the new field breaks.
-     - `- field` → **remove** that field, and the code that reads it.
+     has one at all — is **partial**, not a definition of it. This is the one
+     place where reading a spec section literally corrupts working code, so read
+     it exactly:
+     - a `# +` member → **add** that field to the real struct at `@ <path>`,
+       and fix the construction sites the new field breaks. (A legacy inline
+       `+ field: Type` means the same and is still read.)
+     - a `# -` member → **remove** that field, and the code that reads it
+       (legacy inline `- field` likewise).
      - an **unmarked** field → an assertion that it is already there. Change
        nothing. If it is missing, the spec is describing code that does not
        exist — flag it, do not "helpfully" add the field.
@@ -195,8 +197,7 @@ end of this file are the reference.
      never define it. Adding one means the code should `use` that crate's type;
      removing one whose name is still referenced is a spec error to flag.
    - **`## data`** struct/field change → the struct/DTO/type in code. An `enum`
-     variant added/removed → the code's closed value set (Scala sealed
-     trait/`enum`, Python `Enum`/`Literal[...]`, a Rust `enum`) **and** the
+     variant added/removed → the code's closed value set (a Rust `enum`) **and** the
      `match`/`when` sites that must now handle it. A type's value set can be
      used **outside** the unit's `source.paths` (a client signature, a test
      generator, another module's `match`); **grep the whole source repo** for
@@ -233,8 +234,8 @@ end of this file are the reference.
      files.
    - **`## components` / `## resources` / `## events`** (Bevy) → the derived
      type. Added type → a new `#[derive(Component)]` / `#[derive(Resource)]` /
-     `#[derive(Event)]` struct, registered in the plugin's `build` where
-     registration is required (events need `add_event`; components and resources
+     `#[derive(Message)]` struct, registered in the plugin's `build` where
+     registration is required (events need `add_message`; components and resources
      usually need `init_resource` / `insert_resource` only for resources).
      A `marker Name` is a **unit struct** (`#[derive(Component)] struct Name;`),
      not an empty braced one. Moving a type between world sections is a **role
@@ -263,8 +264,8 @@ end of this file are the reference.
        `reads:` to `writes:` is a real signature change** — it changes the
        system's parallelism, so make it even though the body may not need edits.
      - `spawns:` / `despawns:` → `commands.spawn((..))` / `.despawn()`.
-     - `emits:` / `consumes:` → `EventWriter<E>` / `EventReader<E>`, plus the
-       `add_event::<E>()` registration if the event is new.
+     - `emits:` / `consumes:` → `MessageWriter<E>` / `MessageReader<E>`, plus the
+       `add_message::<E>()` registration if the event is new.
      - A system entry added → a new fn **and** its `add_systems` registration.
        Removed → remove both, subject to the same "absence ≠ dead code" caution
        as a removed behavior step.
@@ -313,10 +314,8 @@ end of this file are the reference.
 7. **Verify.** Run the touched repo's build/test per its `CLAUDE.md`, launched
    with `mise exec --cd <worktree>` so project tool versions resolve:
 
-   - Scala/sbt: `sbt --client compile`, `sbt --client test`
-   - Python/uv+just: `just check` / `just test`
    - Rust/cargo: `cargo build`, `cargo test`, `cargo clippy`
-   - TS/Angular: `npm run build`, `npm run test:app:ci`
+   - a repo with a justfile: its `just` recipes, where `CLAUDE.md` names them
 
    Fix compile errors your change introduced. Report failures you cannot resolve
    rather than papering over them.
@@ -384,16 +383,18 @@ end of this file are the reference.
   struct/enum. Undefined type = hard error. A field's optional `@ source` is
   `path`|`query`|`body`|`header` (endpoints).
 - Type imports (grammar §4.5): `## data` may start with
-  `use system/unit: Type, …` lines that bring a data model defined by another
-  unit into scope (bare `use unit: …` within the same system). Reuse a shared
+  `use unit: Type, …` lines that bring a data model defined by another unit into
+  scope. The target is a bare `<unit>` resolving to a sibling `<unit>.hmml` in
+  the same task dir. Reuse a shared
   type this way instead of redeclaring it; resolves like `@ spec`. Unresolved
   target/type = warning.
 - Referencing existing code (grammar §4.7): a type declaration may end with
   `@ <repo-relative-path>` — `struct Wave @ src/waves/mod.rs` — meaning the type
   already exists there. The body then becomes **optional**, and when present it
-  is a **delta**: `+ field: Type` adds a field, `- field` removes one, an
-  unmarked field asserts one already exists, and anything not listed **stays as
-  it is**. Reference a type this unit does not own instead of restating it. The
+  is **partial**: a listed member asserts it already exists, anything not listed
+  **stays as it is**, and a member change is written with §10's `# +` / `# -`.
+  The v2.2 inline `+ field: Type` / `- field` is legacy but still read with the
+  same meaning. Reference a type this unit does not own instead of restating it. The
   filesystem-aware tools check the type is there, that its `#[derive(…)]` fits
   the section's role, and that unmarked members exist — all warnings.
 - Dependency types (grammar §4.8): `use extern avian3d::prelude: Collider` for a
@@ -455,44 +456,46 @@ the task dir under
 
 ### Behavior-step delta → minimal routed diff
 
-The human changes one `## behavior` step in the task dir's
-`mesh-terrain-chunks.hmml` — the cookie-session threshold. The spec delta from
-`git -C ~/fun_repos/hobby-mimisbrunnr diff HEAD`:
+The human annotates one `## behavior` step in the task dir's
+`mesh-terrain-chunks.hmml` — the water-plane test:
 
-```diff
-   - for each product url:
-     - get a proxy from ProxyPool
--    - if cookie sessions for the proxy < Y:
-+    - if cookie sessions for the proxy <= Y:
-       - use an empty cookie set
+```hmml
+  - else:
+    - sample a HeightTile from HeightSampler at the resolution implied by lod
+    # - if the tile is entirely below the water plane:
+    # +
+    - if the tile is entirely at or below the water plane:
+      - emit an empty ChunkMesh (no triangles) so the coord is not re-requested
 ```
 
-Translation: this is a **body delta** touching a single step under the
-`ProxyPool` collaborator. Route via the module's `@ path`
-(`src/chunk/scheduler.rs`), find the threshold comparison with
-`tree-extract`/ `lsp-mcp`, and make the one-line change (`<` → `<=`) in the
-**worktree**. Nothing else in the unit changed, so nothing else is touched.
-Compile/test, show the diff, stop. This is the acceptance case — a minimal,
-correct diff in exactly one module.
+Translation: annotated-delta mode, one modification (`# -` then `# +`) touching
+a single step owned by `HeightSampler` / `ChunkMesher`. Route via the module's
+`@ path` (`src/chunk/mesher.rs`), find the comparison with `tree-extract` /
+`lsp-mcp`, and make the one-line change (`<` → `<=`) in the **worktree**.
+Nothing else in the unit is annotated, so nothing else is touched. Compile/test,
+show the diff, walk the one marker pair, stop. This is the acceptance case — a
+minimal, correct diff in exactly one module.
 
 ### Data enum-variant delta → closed-value-set change
 
 The human adds a variant to a `## data` enum in the task dir's
-`get-product-identifier-mapping.hmml`:
+`reload-shader-batch.hmml`:
 
-```diff
- enum InputType {
-   gtin,
-   asin,
-+  ean,
- }
+```hmml
+enum ReloadOutcome {
+  swapped,
+  unchanged,
+  rejected,
+  skipped,
+# +
+  deferred,
+}
 ```
 
-Translation: a **data delta**. Add the variant to the code's closed value set
-for `InputType` (the Scala sealed trait / enum behind
-`ProductIdentifierMappingController`), and — because the grammar treats an enum
-as a set every site must handle — update the `match`/validation sites that
-switch on it so the new variant is not silently dropped. Do not invent behavior
+Translation: a **data delta**. Add the variant to the Rust `enum ReloadOutcome`
+behind `src/watch/reload.rs`, and — because the grammar treats an enum as a set
+every site must handle — update the `match` sites that switch on it so the new
+variant is not silently dropped. Do not invent behavior
 the spec doesn't describe; if a site genuinely needs a decision the spec is
 silent on, flag it for the human.
 

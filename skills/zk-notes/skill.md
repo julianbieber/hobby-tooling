@@ -46,17 +46,18 @@ zk tag list -W ~/fun_repos/hobby-mimisbrunnr/notes
 
 ## Filter by Path
 
-Restrict search to a subdirectory:
+Restrict search to a subdirectory — notes are laid out as
+`<project>/<topic>/<task>/`:
 
 ```bash
-zk list -W ~/fun_repos/hobby-mimisbrunnr/notes topics
-zk list -W ~/fun_repos/hobby-mimisbrunnr/notes journal/daily
+zk list -W ~/fun_repos/hobby-mimisbrunnr/notes wusel
+zk list -W ~/fun_repos/hobby-mimisbrunnr/notes wusel/world_gen
 ```
 
 Combine path with search:
 
 ```bash
-zk list -W ~/fun_repos/hobby-mimisbrunnr/notes -m "kubernetes" features
+zk list -W ~/fun_repos/hobby-mimisbrunnr/notes -m "chunk" wusel/world_gen
 ```
 
 ## Filter by Date
@@ -96,19 +97,19 @@ zk list -W ~/fun_repos/hobby-mimisbrunnr/notes -m "query" -s title+       # alph
 Find notes linked by a specific note:
 
 ```bash
-zk list -W ~/fun_repos/hobby-mimisbrunnr/notes --linked-by topic/task/YYYY-MM-DD.md
+zk list -W ~/fun_repos/hobby-mimisbrunnr/notes --linked-by project/topic/task/YYYY-MM-DD.md
 ```
 
 Find notes linking to a specific note:
 
 ```bash
-zk list -W ~/fun_repos/hobby-mimisbrunnr/notes --link-to topics/some-topic.md
+zk list -W ~/fun_repos/hobby-mimisbrunnr/notes --link-to project/topic/task/implementation.md
 ```
 
 Find related notes:
 
 ```bash
-zk list -W ~/fun_repos/hobby-mimisbrunnr/notes --related topics/some-topic.md
+zk list -W ~/fun_repos/hobby-mimisbrunnr/notes --related project/topic/task/implementation.md
 ```
 
 Find orphan notes (not linked by anything):
@@ -120,7 +121,7 @@ zk list -W ~/fun_repos/hobby-mimisbrunnr/notes --orphan
 ## Combining Filters
 
 ```bash
-zk list -W ~/fun_repos/hobby-mimisbrunnr/notes -m "pricing" -t work --created-after "last month" -s modified- -n 20
+zk list -W ~/fun_repos/hobby-mimisbrunnr/notes -m "chunk" -t plan --created-after "last month" -s modified- -n 20
 ```
 
 ## Reading a Note

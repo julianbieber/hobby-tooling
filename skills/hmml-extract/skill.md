@@ -12,9 +12,7 @@ A `.hmml` is a **lossy mental-model view, not a regeneration source.** Dropping
 infrastructure the mental model doesn't dwell on — DI wiring, config loading,
 metrics, serializers — is *correct*, not a miss: aim for the collaborators and
 decisions a human would narrate, and accept that the code has more than the spec
-shows. (The round-trip eval, task 08, confirms full-regeneration from a spec is
-lossy by design; the spec's job is to be edited and diffed, not to rebuild the
-unit.)
+shows. The spec's job is to be edited and diffed, not to rebuild the unit.
 
 **What you emit is a baseline.** In the dev loop the extracted spec is the
 *current version* of the unit — the reference the task's change is later stated
@@ -236,7 +234,8 @@ four sections, and **the derive decides which**.
   - `Query<&T, With<A>>` → `query: T + A`; `Without<B>` → `- B`.
   - `&mut T` inside a query → also list `T` under `writes:`.
   - `Res<T>` → `reads: T`; `ResMut<T>` → `writes: T`.
-  - `EventWriter<E>` → `emits: E`; `EventReader<E>` → `consumes: E`.
+  - `MessageWriter<E>` → `emits: E`; `MessageReader<E>` → `consumes: E`
+    (`EventWriter` / `EventReader` on pre-0.17 Bevy).
   - `commands.spawn((A, B))` → `spawns: A, B`; `.despawn()` → `despawns:`.
   - Omit a key entirely when the system does not use it — an empty list is
     noise. `schedule:` is the one key that is always required.
@@ -262,8 +261,8 @@ four sections, and **the derive decides which**.
    cross-links each bullet to its `## systems` entry.
 
    - **Altitude test**: each step is a decision or an action a human cares about
-     ("get a proxy from ProxyPool", "if a cookie banner is present: click accept
-     cookies"). If a step names a local variable, a specific method call, or a
+     ("sample a HeightTile from HeightSampler", "if the tile is entirely below
+     the water plane: emit an empty ChunkMesh"). If a step names a local variable, a specific method call, or a
      language construct, it is too low — lift it. If a step could describe ten
      different implementations, it is too high — sharpen it.
    - Indentation is **2 spaces per level** (spaces only). A step's children are

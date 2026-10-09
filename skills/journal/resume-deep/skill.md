@@ -1,5 +1,5 @@
 ---
-description: Deep context resume — loads journal, schemas, git history, and known issues
+description: Deep context resume — loads journal, git history, and known issues
 allowed-tools: Bash(git log:*), Bash(git branch:*), Bash(git -C:*), Bash(ls:*), Bash(pwd:*), Read
 ---
 
@@ -14,11 +14,10 @@ single structured pass.
    extract task from path:
 
    - Path format: `~/fun_worktrees/PROJECT/TOPIC/TASK`
-   - Run `pwd` and parse: if path matches `~/fun_worktrees/*/*/`, the **second**
-     subdirectory is the task ID — use it **verbatim, including any blurb
+   - Run `pwd` and parse: if path matches `~/fun_worktrees/*/*/*`, the **third**
+     component is the task ID — use it **verbatim, including any blurb
      suffix** (e.g. `gh-17-chunk-loading`, NOT the bare
-     `gh-17`); the first is the topic
-   - Also list sibling directories to see all projects in this task
+     `gh-17`); the first is the project, the second the topic
 
    b. **From git branch**: Run `git branch --show-current`
 
@@ -41,19 +40,12 @@ single structured pass.
    context and gotchas d. Legacy support: If only a single `{task_id}.md` file
    exists (old format), read that instead
 
-4. **Schema snapshots** — Check for pre-cached schemas: a. Read
-   `~/.claude/context/schemas/_last_refreshed.txt` if it exists
+4. **Project docs** — Read the project `README.md` / `AGENTS.md` if present.
 
-   - If the file exists, check the timestamp — warn if older than 7 days
-   - If the file doesn't exist, note: "Schema cache not found. Run
-     `~/tmp_repos/mcp_scripts/target/debug/refresh-schemas` to populate." b.
-     (No pre-cached schema files for hobby projects — skip this step.) c.
-     Read the project `README.md` / `AGENTS.md` if present
-
-5. **Git history** — For each repo in `~/fun_worktrees/{project}/{topic}/{task_id}/*/`:
-
-   - Run `git -C <repo> log --oneline -10` to get recent commits
-   - If not in a worktree, run `git log --oneline -10` on cwd instead
+5. **Git history** — Run
+   `git -C ~/fun_worktrees/{project}/{topic}/{task_id} log --oneline -10`; the
+   task directory is the worktree, a single repo. If not in a worktree, run
+   `git log --oneline -10` on cwd instead.
 
 6. **Known issues** — Read `~/.claude-hobby/context/known-issues.md` if it exists.
    Note any entries relevant to the current task's domain.
@@ -67,8 +59,7 @@ single structured pass.
    - **Key Files**: List important files from implementation.md (listed, NOT
      read)
    - **Insights**: Relevant technical learnings (from insights.md)
-   - **Git Commits**: Recent commit summaries per repo
-   - **Schema Availability**: Which schemas are cached and how fresh they are
+   - **Git Commits**: Recent commit summaries
    - **Known Issues**: Any relevant patterns from known-issues.md
 
 8. **Suggest next steps** — Based on the open items and current state, propose

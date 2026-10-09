@@ -43,7 +43,7 @@ one.
 
    - Update `~/.claude-hobby/context/known-issues.md` Action Items section
      (check/uncheck, add notes)
-   - For **do** items: offer to create a GitHub issue via `/gh-issue-update` or set
+   - For **do** items: offer to create a GitHub issue via `/gh-issue-create` or set
      up a worktree
    - For **drop**/**done** items: move from `- [ ]` to `- [x]` with annotation
    - For **defer** items: append `(deferred until YYYY-MM-DD)` if a date was

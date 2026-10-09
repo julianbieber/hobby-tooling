@@ -1,6 +1,6 @@
 ---
 description: Split current work into a subtask with an optional GitHub issue
-allowed-tools: Bash(git branch:*), Bash(git status:*), Bash(git rev-parse:*), Bash(gh issue:*), Bash(gh repo:*), Bash(ls:*), Bash(pwd:*), Bash(mkdir:*), Bash(nu -c:*), Read, Write, Edit
+allowed-tools: Skill, Bash(git branch:*), Bash(git status:*), Bash(git rev-parse:*), Bash(gh issue:*), Bash(gh repo:*), Bash(ls:*), Bash(pwd:*), Bash(mkdir:*), Bash(nu -c:*), Read, Write, Edit
 ---
 
 Split part of the current task into a separate subtask with its own worktree,
@@ -40,16 +40,13 @@ notes, and optionally a GitHub issue.
       - `prs.json` / notes in the parent's notes dir for a `gh-<n>` reference
       - the parent task name itself, if it carries a `gh-<n>` prefix
       - `gh issue list --search "<parent task name>"` in the project repo
-   b. Create the issue from the project's main checkout so `gh` picks the right
-      repo:
-      ```bash
-      cd ~/fun_repos/{project} && gh issue create --title "…" --body "…"
-      ```
-      Reference the parent task and the parent issue number (`#<n>`) in the body,
-      so GitHub cross-links them.
-   c. The returned issue number gives the subtask ID: `gh-{number}-{slug}`.
-
-   Hobby projects use GitHub issues; there is no Jira here.
+   b. File it with `/gh-issue-create` (Skill tool), passing the subtask
+      description, the project, the parent's topic as the `topic:` label, and
+      the parent task and issue number (`#<n>`) to name in the body so GitHub
+      cross-links them. That skill writes the label and runs the task-shaping
+      check; this one does not file issues itself.
+   c. `/gh-issue-create` reports the issue URL; its trailing number gives the
+      subtask ID: `gh-{number}-{slug}`.
 
 5. **Create the worktree:**
 
