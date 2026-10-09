@@ -18,10 +18,10 @@ it to pre-select / shortcut the "pick" step below. If empty, run the full survey
 ### 1. Extract the task ID (in order of preference)
 
 a. **From worktree path**: If the current directory is under `~/fun_worktrees/`, run
-`pwd` and parse `~/fun_worktrees/PROJECT/TOPIC/TASK`. The **second**
-subdirectory is the task ID — use it **verbatim, including any blurb suffix**
-(e.g. `gh-17-chunk-loading`, NOT the bare `gh-17`); the first is
-the topic. Example: `~/fun_worktrees/bevy_survivor/features/gh-42-enemy-waves` ->
+`pwd` and parse `~/fun_worktrees/PROJECT/TOPIC/TASK`. The **third**
+component is the task ID — use it **verbatim, including any blurb suffix**
+(e.g. `gh-17-chunk-loading`, NOT the bare `gh-17`); the first is the project,
+the second the topic. Example: `~/fun_worktrees/bevy_survivor/features/gh-42-enemy-waves` ->
 task `gh-42-enemy-waves`, topic `features`.
 
 b. **From git branch**: Run `git branch --show-current`. Use the branch name
@@ -34,11 +34,12 @@ list recent `~/fun_repos/hobby-mimisbrunnr/notes/` files.
 
 If no task ID can be determined, ask the user for it.
 
-### 2. Resolve the notes dir and repos
+### 2. Resolve the notes dir and worktree
 
 - Notes dir:
   `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task_id}/`
-- For worktree tasks, list the repos: `ls ~/fun_worktrees/{project}/{topic}/{task_id}/`
+- The worktree is `~/fun_worktrees/{project}/{topic}/{task_id}` — the task
+  directory is itself the repo, so there is no repo list.
 - List the notes dir contents: `ls <notes_dir>` (to check what exists).
 
 ### 3. Graceful-degrade gate (fresh / empty tasks)
@@ -60,7 +61,7 @@ Spawn ONE subagent to do the reading — keep the big files out of this session.
 
 - Tool: `Agent`, `subagent_type: general-purpose`, `run_in_background: false`
   (synchronous — we need its result before asking the user).
-- Give it: the absolute notes-dir path, the repo list, and the bias hint (if
+- Give it: the absolute notes-dir path, the worktree path, and the bias hint (if
   any). Instruct it to:
   - Read `implementation.md` — especially `## Current State` (Status / Focus /
     Blockers / Next / "Carried from …" lines) and `## Goal`.
@@ -96,7 +97,7 @@ and request a **focused context package** for this session:
 - Only the prior work / decisions / `### ` insight entries / `## Done` bullets
   that bear on this step — reference commit hashes and `[[wikilinks]]` rather
   than inlining full content.
-- The specific files and repos involved (from `## Key Files` + relevant
+- The specific files involved (from `## Key Files` + relevant
   dailies).
 - Relevant commands / queries / gotchas for this step.
 - Any outstanding PRs from `prs.json` relevant to this step.

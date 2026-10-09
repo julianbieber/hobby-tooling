@@ -234,8 +234,8 @@ that compiles, `test` once at the end, both truncated. A plan step that turns
 out wrong is fixed in the code, and the deviation is noted for the play gate;
 the plan file is not edited.
 
-**No end-to-end run here.** The play gate is the end-to-end run, and I am the
-one looking at it. Build and test are the evidence.
+**No end-to-end run here.** The end-to-end run is the play gate, or `verify`
+when unattended. Build and test are the evidence.
 
 Set `phase: comments` and fall through.
 

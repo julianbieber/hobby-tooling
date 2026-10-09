@@ -60,7 +60,7 @@ Rules:
 
 ## The shape check (an issue is a task, so the shaping rules apply)
 
-`CLAUDE.md` -> **Task shaping** is the standard. Before the gate opens, check the
+`CLAUDE.md` -> **Task shaping** is the standard. Before writing the issue, check the
 issue against it and **report the result — do not rewrite the issue to pass.** A
 badly shaped issue is usually a signal that the work is two issues, and that is my
 call to make, not a wording problem to fix in the body.
@@ -121,12 +121,8 @@ oversized issue. `/task-split` is the pass for that.
 
 5. **Gather the facts from the conversation** — what was established this session,
    with citations, under the layout below. Facts only: the command that failed and
-   its output, the file and line, the issue numbers mentioned. No problem
-   statement, no goal, no acceptance criteria — those are the issue, and the issue
-   is mine to write.
-
-   Write them to `${XDG_RUNTIME_DIR:-/tmp}/hobby-authoring-gate/facts.md`
-   (`mkdir -p` first).
+   its output, the file and line, the issue numbers mentioned. The title and body
+   are written from these in step 8, and assert nothing the facts do not.
 
 6. **Resolve the topic and make sure its label exists** (see *The topic tag* above):
 
@@ -135,7 +131,7 @@ oversized issue. `/task-split` is the pass for that.
         `~/fun_worktrees/PROJECT/`.
       - Otherwise list what the project already uses and choose the one that fits:
         ```bash
-        ls ~/fun_worktrees/{project}/
+        hwt topics -p {project}
         ```
       - Nothing fits, or the project has no worktrees yet? Propose a new topic name
         and say it is new. If the conversation gives no basis at all, **ask** — do
@@ -159,26 +155,22 @@ oversized issue. `/task-split` is the pass for that.
    fails, and stop for my decision when the answer is that this is more than one
    issue.
 
-8. **Open the gate.** Run exactly:
+8. **Write and file it.** Write the title and body from the facts gathered
+   above, the body to a temp file (`mktemp`). Show me both, and once I confirm:
 
    a. **New issue:**
       ```bash
-      gh issue create --label "topic:{topic}"
+      gh issue create --label "topic:{topic}" --title "<title>" --body-file <file>
       ```
-      No `--title`, no `--body`. Add further labels only if the repo already uses
-      them (`gh label list`).
+      Add further labels only if the repo already uses them (`gh label list`).
 
    b. **Existing issue:**
       ```bash
-      gh issue edit <n>
+      gh issue edit <n> --title "<title>" --body-file <file>
       ```
       Add `--add-label "topic:{topic}"` when the issue carries no topic label —
       an untagged issue cannot be started from the dashboard. Never remove or
-      replace other labels, and leave title, assignees and state alone unless
-      asked.
-
-   Write the title and body from the facts gathered above and pass them as
-   `--title` / `--body-file`. Show me the body before filing it.
+      replace other labels, and leave assignees and state alone unless asked.
 
 9. **Report** the issue URL and the topic label it carries.
 
@@ -193,8 +185,8 @@ oversized issue. `/task-split` is the pass for that.
 
 ## Facts file layout
 
-Facts, with citations. The buffer the gate opens carries the issue's own headings
-— Problem, Goal, Scope, Out of scope, Context — and those are mine to fill.
+Facts, with citations — the material the issue's own headings (Problem, Goal,
+Scope, Out of scope, Context) are written from.
 
 ```markdown
 ## Observed

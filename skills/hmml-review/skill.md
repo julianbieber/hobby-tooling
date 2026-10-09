@@ -31,8 +31,9 @@ in the plan.
 
 1. **Locate the `.hmml`.** From `$ARGUMENTS`: a path resolves directly; a bare
    `<unit>` resolves to `<unit>.hmml` in the current task's spec directory
-   `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/` (topic =
-   first dir under `~/fun_worktrees`, task = second, from the worktree path — the
+   `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/` (project,
+   topic and task = first, second and third dir under `~/fun_worktrees`, from the
+   worktree path — the
    same detection `journal:resume` uses). With no argument, if the task
    dir holds exactly one `.hmml`, use it; if several, list them and ask which.
 2. **Read the spec** in full. Note the `source:` block and the sections the

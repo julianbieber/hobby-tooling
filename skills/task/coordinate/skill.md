@@ -4,7 +4,7 @@ argument-hint: '[<description>] [--blurb <name>] [--go]'
 allowed-tools: Skill, Read, Write, Edit, AskUserQuestion, Bash
 ---
 
-Run a body of work from start to a stack of PRs with one conversation at the
+Run a body of work from start to a series of merged PRs with one conversation at the
 start and, for most tasks, nothing but a merge at the end. This session is the
 **coordinator**:
 it owns no code and opens no PR. It carves the description into tasks, writes
@@ -141,9 +141,8 @@ gh repo view --json defaultBranchRef -q .defaultBranchRef.name
 git pull --ff-only
 ```
 A refusal is reported in the note and does not stop the loop; it means the base
-is stale, not that the task cannot run. There is no stacked base and no
-`depends_on` check here — W1 already refused to pick a task whose dependencies
-are not `done`, and `done` now means merged.
+is stale, not that the task cannot run. No `depends_on` check here — W1 only
+picks a task whose dependencies are `done`, and `done` means merged.
 
 **W3 — Start it.**
 
@@ -166,7 +165,7 @@ are not `done`, and `done` now means merged.
    scenario, or it is already seeded — is `status: blocked` with `note` from its
    stderr line; stop the loop, the same shape as W4's exit 1.
 
-   **When it names no `goal`**, seed by hand as before, at
+   **When it names no `goal`**, seed by hand, at
    `~/fun_repos/hobby-mimisbrunnr/notes/<project>/<topic>/<task>/build-task.json`:
    ```json
    { "phase": "acceptance", "auto": true,
@@ -320,7 +319,7 @@ login shell so the modules are loaded.
 
 ## Finish
 
-Every task `done` — which now means every PR merged — or the loop stopped at a
+Every task `done` — every PR merged — or the loop stopped at a
 `blocked` one: print the list with each PR link, mark the coordinator done when
 nothing is blocked (`task.json` → `done: true`), write the journal, and end. A
 blocked task is left blocked with its reason on the card; unblocking is a

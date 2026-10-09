@@ -83,10 +83,10 @@ representing the change.
 ## Instructions
 
 1. **Identify the spec and fix the reference version.** Specs live **per task**
-   in the team notes repo, directly in the task's notes directory (no `<system>`
-   subdirectory). Detect `{topic}`/`{task}` the same way `journal:resume`
-   does: from the worktree path `~/fun_worktrees/{project}/{topic}/{task}`, `{topic}`
-   is the first dir and `{task}` the second (verbatim, including any blurb
+   in the notes repo, directly in the task's notes directory (no `<system>`
+   subdirectory). Detect `{project}`/`{topic}`/`{task}` the same way `journal:resume`
+   does: from the worktree path `~/fun_worktrees/{project}/{topic}/{task}`, they
+   are the first, second and third dirs (`{task}` verbatim, including any blurb
    suffix); fall back to the git branch name if the path is not under
    `~/fun_worktrees`. Resolve the human's pointer (a path, or a bare `unit`) to
    `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/<unit>.hmml`
@@ -120,8 +120,7 @@ representing the change.
    checkout is **fine here** — validate never writes — but if the human is
    working in a worktree of that repo, prefer it so HEAD matches what they see.
    Verify each `source.paths` entry resolves to a real file; a broken link is
-   itself a **SPEC-AHEAD** conformance failure (record it under modules/linkage
-   — see `linkage.md`).
+   itself a **SPEC-AHEAD** conformance failure (record it under modules/linkage).
 
 3. **Check each section, routing to code exactly as translate does.** Route each
    `## modules` line via its **`@ path`** anchor, then pin symbols with

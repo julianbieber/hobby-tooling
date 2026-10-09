@@ -14,7 +14,7 @@ Document what was accomplished and what remains open for the current task.
     extract the task from the path:
 
     - Path format: `~/fun_worktrees/PROJECT/TOPIC/TASK`
-    - Run `pwd` and parse: if path matches `~/fun_worktrees/*/*/`, the **second**
+    - Run `pwd` and parse: if path matches `~/fun_worktrees/*/*/`, the **third**
       subdirectory is the task name — use it **verbatim, including any blurb
       suffix**. Do NOT shorten it to a bare GitHub issue number.
     - Example: `~/fun_worktrees/bevy_survivor/features/gh-42-enemy-waves` -> task
@@ -275,18 +275,13 @@ Document what was accomplished and what remains open for the current task.
     skill appends and never overwrites. Early-session caveats are exactly what
     compaction eats first.
 
-09. **For multi-repo tasks** (worktrees with multiple projects):
-
-    - Note which projects were modified in the daily file
-    - List changes per project if significant
-
-10. **Migration**: If an old single-file task exists (`{task_id}.md` instead of
+09. **Migration**: If an old single-file task exists (`{task_id}.md` instead of
     a directory), leave it as-is. Create the new directory structure alongside
     it for new entries.
 
-11. If no task ID can be determined, ask the user for the task ID.
+10. If no task ID can be determined, ask the user for the task ID.
 
-12. **Git:** The notes directory (`~/fun_repos/hobby-mimisbrunnr/`)
+11. **Git:** The notes directory (`~/fun_repos/hobby-mimisbrunnr/`)
     is a git-backed repo. After writing/updating journal files, **do not run
     `git add` or `git commit`** — leave those decisions to the user. Just save
     the files.
