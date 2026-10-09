@@ -121,7 +121,7 @@ zk list -W ~/fun_repos/hobby-mimisbrunnr/notes --orphan
 ## Combining Filters
 
 ```bash
-zk list -W ~/fun_repos/hobby-mimisbrunnr/notes -m "pricing" -t work --created-after "last month" -s modified- -n 20
+zk list -W ~/fun_repos/hobby-mimisbrunnr/notes -m "chunk" -t plan --created-after "last month" -s modified- -n 20
 ```
 
 ## Reading a Note

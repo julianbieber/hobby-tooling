@@ -1,6 +1,6 @@
 ---
 description: Translate an edited .hmml spec into a minimal code change that makes the real system match it
-allowed-tools: Read, Grep, Glob, Edit, Write, MultiEdit, Bash(hobby-mml-parser:*), Bash(git -C * diff:*), Bash(git -C * show:*), Bash(git -C * cat-file:*), Bash(git -C * ls-files:*), Bash(git -C * rev-parse:*), Bash(git -C * status:*), Bash(git -C * worktree list:*), Bash(git -C * log:*), Bash(git diff:*), Bash(ls:*), Bash(pwd:*), Bash(sbt *), Bash(cargo *), Bash(npm *), Bash(just *), Bash(uv *), Bash(mise exec *), mcp__tree-extract__build_graph, mcp__tree-extract__list_modules, mcp__tree-extract__get_neighbors, mcp__tree-extract__call_path, mcp__tree-extract__get_symbol, mcp__tree-extract__search_symbols, mcp__lsp-mcp__document_symbol, mcp__lsp-mcp__find_references, mcp__lsp-mcp__goto_definition, mcp__lsp-mcp__hover
+allowed-tools: Read, Grep, Glob, Edit, Write, MultiEdit, Bash(hobby-mml-parser:*), Bash(git -C * diff:*), Bash(git -C * show:*), Bash(git -C * cat-file:*), Bash(git -C * ls-files:*), Bash(git -C * rev-parse:*), Bash(git -C * status:*), Bash(git -C * worktree list:*), Bash(git -C * log:*), Bash(git diff:*), Bash(ls:*), Bash(pwd:*), Bash(cargo *), Bash(just *), Bash(mise exec *), mcp__tree-extract__build_graph, mcp__tree-extract__list_modules, mcp__tree-extract__get_neighbors, mcp__tree-extract__call_path, mcp__tree-extract__get_symbol, mcp__tree-extract__search_symbols, mcp__lsp-mcp__document_symbol, mcp__lsp-mcp__find_references, mcp__lsp-mcp__goto_definition, mcp__lsp-mcp__hover
 ---
 
 Translate an **edited** `.hmml` spec into the **code change** that makes the real
@@ -197,8 +197,7 @@ end of this file are the reference.
      never define it. Adding one means the code should `use` that crate's type;
      removing one whose name is still referenced is a spec error to flag.
    - **`## data`** struct/field change → the struct/DTO/type in code. An `enum`
-     variant added/removed → the code's closed value set (Scala sealed
-     trait/`enum`, Python `Enum`/`Literal[...]`, a Rust `enum`) **and** the
+     variant added/removed → the code's closed value set (a Rust `enum`) **and** the
      `match`/`when` sites that must now handle it. A type's value set can be
      used **outside** the unit's `source.paths` (a client signature, a test
      generator, another module's `match`); **grep the whole source repo** for
@@ -315,10 +314,8 @@ end of this file are the reference.
 7. **Verify.** Run the touched repo's build/test per its `CLAUDE.md`, launched
    with `mise exec --cd <worktree>` so project tool versions resolve:
 
-   - Scala/sbt: `sbt --client compile`, `sbt --client test`
-   - Python/uv+just: `just check` / `just test`
    - Rust/cargo: `cargo build`, `cargo test`, `cargo clippy`
-   - TS/Angular: `npm run build`, `npm run test:app:ci`
+   - a repo with a justfile: its `just` recipes, where `CLAUDE.md` names them
 
    Fix compile errors your change introduced. Report failures you cannot resolve
    rather than papering over them.
