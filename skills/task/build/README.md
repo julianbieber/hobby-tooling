@@ -111,12 +111,13 @@ becoming indistinguishable from a fresh baseline.
 | `context` | records my answers verbatim, then the `# +`/`# -` delta, then `hmml-review` | hard stop |
 | `await-hmml-review` | nothing — I edit the baseline or the delta | `continue` or `revise` |
 | `revise` | `hmml-review` again on the edited spec | back to `await-hmml-review` |
-| `implement` | `hmml-translate`, run + test, `hmml-validate` | falls through |
+| `implement` | `hmml-translate`, run + test, the repo's CI workflows run locally, `hmml-validate` | falls through |
 | `comments` | `/comment-pass` over the branch diff, matched against the recorded context | falls through |
 | `standards` | `/structure` on the target repo — ratchet a budget the change improved, try to fix one it broke | falls through |
 | `review` | prints the diff, evidence and comments for me to read | hard stop |
 | `await-review` | nothing — I read the summary | `continue` |
 | `pr` | gathers the facts, opens the PR | falls through |
+| `ci` | `hcoord ci` on the PR, repairing a red check on the diff's own for at most three rounds | falls through, or stops when blocked |
 | `journal` | `journal:write` | `done` |
 
 State lives in `build-task.json` in the task's notes dir, beside the `.hmml`.

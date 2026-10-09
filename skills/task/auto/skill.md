@@ -26,7 +26,7 @@ The stops are named so `hcoord wait` sees them, and which ones exist depends on
 |---|---|---|
 | start | `await-acceptance`, only when the brief does not say what done looks like | the same |
 | end | none. The plan writes the acceptance observation as commands and the `verify` phase runs them; the PR opens when every scripted check passes; a `hand` scenario is captured, not run | `await-play`, always |
-| failure | `await-fix` — the checks would not pass, the PR could not be merged, or `fix-ci` spent its bound on a red check that would not go green | — |
+| failure | `await-fix` — the checks would not pass, the PR could not be merged, or the repo's CI — run locally before the push, or on the PR after it — spent its bound and would not go green | `await-fix` — the repo's CI would not go green, locally or on the PR |
 
 An unattended run has no reader, so a report it prints is not read: the window
 is off-screen and the pane is about seventeen columns wide. The checks replace
@@ -40,8 +40,8 @@ the report because a failing command stops the pipeline and a report does not.
    play gate, never filled in.
 2. **The state file is a contract.** Write `build-task.json` at every
    transition. The waiting phases are `await-acceptance`, `await-play`
-   (interactive only) and `await-fix` (unattended only), and there are no
-   others; `planned` and `done` are what `hauto` and the coordinator key on.
+   (interactive only) and `await-fix` (unattended, or CI that would not go
+   green), and there are no others; `planned` and `done` are what `hauto` and the coordinator key on.
    Every write — including one that leaves the phase unchanged — sets
    `written` to the time of that write; `phase_since` is set to the same
    value only when the write changes the phase, and otherwise carried forward
@@ -348,12 +348,29 @@ ______________________________________________________________________
 ## Phase `pr` — on `continue`
 
 1. Stop the app (`pkill -f`; ignore failure).
-2. `git status --short`; stage the task's files and nothing else — no
+2. **Run the repo's CI locally, before anything is pushed.** Read
+   `.github/workflows/*.yml` and `*.yaml` — the one read rule 3 allows that
+   the plan did not name, because the workflows are what the PR will be
+   judged by. For every job triggered by `pull_request` or `push`, run its
+   `run:` steps in order from the worktree root, with the job's `env:` and
+   each step's `working-directory:`, output truncated per rule 4. A matrix
+   runs once, on this machine's toolchain. Skip `uses:` steps, and any step
+   that reads `secrets.` or needs a `services:` container or another OS;
+   the skipped steps are listed in the journal, because the PR's checks are
+   the only run they get. No workflows → nothing to run.
+   A failing step is this session's own, like a failing test: repair it
+   reading only the files its output names, re-run the workflow steps from
+   the top, increment `ci_result.rounds`. At the bound (three,
+   `business-context.md` `## fix-loop-bound`) write `ci_result` with
+   `outcome: blocked`, `case: own-diff`, `check` (the step's name) and `log`
+   (at most three lines), set `phase: await-fix`, print one line, and **end
+   the turn** — nothing is committed or pushed.
+3. `git status --short`; stage the task's files and nothing else — no
    artefacts, no `play.log`. One commit unless two decisions would share a
    message. Subject and body to the rule; a justification comes from the
    brief, the acceptance answer, `business-context.md`, or a verified fact.
-3. `git push -u origin <branch>`.
-4. `gh pr create`: title in commit-subject shape, the three sections and
+4. `git push -u origin <branch>`.
+5. `gh pr create`: title in commit-subject shape, the three sections and
    nothing else per `~/.claude-hobby/CLAUDE.md`. The manual-test bullets are
    the acceptance observation plus the `run` command. A task that has an issue
    — a `gh-<number>` in the task or branch name, or the issue the brief was
@@ -361,19 +378,22 @@ ______________________________________________________________________
    on merge. No issue, no line; never a guessed number. Unattended, the
    manual-test bullets are the acceptance check commands, which are known to
    pass because the PR would not be open otherwise.
-5. Record the PR in `prs.json` if the `track-pr` hook did not, and as `pr` in
+6. Record the PR in `prs.json` if the `track-pr` hook did not, and as `pr` in
    the state file — so `merge` is resumable after an interrupt without
    re-reading `prs.json`.
 
 Never push to the default branch; merge only your own PR, only through
 `gh pr merge --merge`, and only when `merge` says `coordinator` — `merge:
 mine` or absent reports the PR and stops at `done`, which is what holds it
-for a person. Set `phase: merge` and continue in the same turn.
+for a person. **Either way the PR's checks are green before `done`**: a PR
+handed to me red is a PR I have to fix. Set `phase: merge` and continue in
+the same turn.
 
 ## Phase `merge` — the session merges its own PR
 
-1. `merge` is `mine` or absent → skip to `journal` unchanged. The PR is
-   reported and held; merging it is not this session's.
+1. `merge` is `mine` or absent → set `phase: fix-ci` and continue in the
+   same turn. The checks are watched and repaired as for `coordinator`;
+   only the merge itself is not this session's.
 2. `coordinator` → write the state file with `phase: merge`, then
    `hcoord merged <pr url> --ready` with the Bash tool's full budget
    (`timeout: 600000`). At most **four** calls; a `timeout` on the fourth is a
@@ -416,9 +436,14 @@ session that loses count still stops (`business-context.md`
 `## fix-loop-bound`).
 
 1. `hcoord ci <pr url> --spent <ci_result.rounds>`, Bash `timeout: 600000`.
-2. `outcome: green` → back to `merge` step 2, in the same turn: the checks
+2. `outcome: green` → write `ci_result` with `outcome: green`. With
+   `merge: coordinator`, back to `merge` step 2, in the same turn: the checks
    have to be watched again from the top, since `hcoord ci` only classifies a
-   failure it already saw.
+   failure it already saw. With `mine` or absent, set `phase: journal` and
+   continue. **`checks: none` is not green while the repo has workflows** —
+   the run may not have registered yet. `gh run list --commit <head sha>
+   --json status`: a run listed means call 1 again; none listed means no
+   workflow triggers on this PR, and `none` stands.
 3. `outcome: fix` (`case: own-diff`) → the failure is this session's own,
    like a failing test. Repair it reading only the files `log` names, build
    and test truncated per rule 4, `/comment-pass` over what changed, commit
@@ -433,7 +458,8 @@ session that loses count still stops (`business-context.md`
    `rounds`: neither resolves by trying again, so the bound never applies to
    them.
 6. `outcome: timeout` → call 1 again. At most **four** calls per round, the
-   same cap the `merge` phase uses.
+   same cap the `merge` phase uses; a `timeout` on the fourth is step 5 with
+   reason `checks still pending after ~38 minutes`.
 
 `ci_result.rounds` counts CI-fix attempts and `acceptance_result.rounds`
 counts the pre-PR repair rounds from the `verify` phase — two counters that
