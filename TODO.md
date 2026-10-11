@@ -7,9 +7,9 @@ Split by machine, because the two have different things installed.
 - **desktop** (`julian-System-Product-Name`) — hobby-only. Everything in this repo
   is installed and working there except what needs the work checkout.
 
-Both now keep Helix at `~/fun_repos/helix`, but no path is written down in the
-tooling regardless — `just local-paths` reports what this machine resolved, and
-`just doctor` names the recipe for each gap.
+Both keep Helix at `~/fun_repos/helix`. Building and configuring it is now that
+repo's own `just install`; nothing here touches it, so the Helix entries below
+are history. `just doctor` names the recipe for each gap.
 
 ## Resolved by tooling (kept for the reasoning)
 
@@ -97,13 +97,9 @@ Done, other than the two optional items at the end.
       run once per machine like `install-mcps`. `just doctor` reports it as an optional
       `-` until then. Nothing else depends on it. If this machine still has the retired
       `hwt-overview`/`hgh-issues` on `PATH`, `cargo uninstall hwt_app issues_app`.
-- [ ] *Optional:* **rebuild `hx`** with `just helix-build`. Not required — the
-      binary is from 2026-07-02 and everything since arrives through the merged
-      user config, with `hx --health hmml` reporting a parser and a server. The
-      recipe wraps the `HELIX_DISABLE_AUTO_GRAMMAR_BUILD=1` dance, because a plain
-      build runs `--grammar fetch` first and that dies on `gotmpl` (its remote
-      `ngalaiko/tree-sitter-go-template` looks gone, and git then prompts for
-      GitHub credentials).
+- [ ] **Run `just install` in `~/fun_repos/helix`** once the Helix fork's
+      standalone build has merged. It replaces this repo's `wire-helix` and
+      `helix-build`, and adds the `mml` / `orac` grammars from this machine.
 - [ ] *Optional:* **port the `CLAUDE_CONFIG_DIR` fix to the work copy** of
       `claude-skills-lsp` — see the drift item above. Until then, a rebuild from
       the work checkout silently regresses hobby sessions to the work skills.
@@ -173,5 +169,4 @@ one-per-machine build.
 
 Not worth tracking: the ~226 *upstream* Helix language servers (`gopls`,
 `typescript-language-server`, `lua-language-server`, …) that stock Helix declares
-uninstalled. Install per language, on demand. `just helix-servers --all` lists them
-if you ever want the full picture.
+uninstalled. Install per language, on demand.

@@ -1289,21 +1289,15 @@ idempotent.
 
 Anything more involved than a symlink lives in `scripts/` rather than inline in the
 justfile: `preflight.sh` (dependency check), `wire-nushell.sh` (append the `use`
-lines once), `helix-paths.sh` (find this machine's Helix bits), `wire-helix.sh`
-(generate the Helix language config), `helix-servers.sh` (declared-vs-installed
-language servers), `local-paths.sh` (the machine-local overrides file), `doctor.sh`.
+lines once), `link-dotfile.sh` (install a dotfile without clobbering a real file),
+`doctor.sh`.
 
 ## No machine-specific paths in this repo
 
 This repo is checked out on more than one machine and they do not agree on where
-anything outside `~/fun_repos` lives — the Helix checkout is `~/fun_repos/helix` on
-one and `~/outside_repos/helix` on another. A hardcoded default is therefore a
-guaranteed breakage somewhere, so **paths are discovered, never assumed**, and
-`scripts/helix-paths.sh` is the single resolver every script and recipe uses.
-
-The escape hatch is `~/.config/hobby-tooling/paths.env` (`just local-paths`),
-outside the repo and never committed. It is also the *only* correct home for a path
-under the work tree: `TREE_SITTER_MML` belongs there, not in any file here.
+anything outside `~/fun_repos` lives. A hardcoded default is therefore a guaranteed
+breakage somewhere, so **paths are derived, never assumed** — from `$HOME`, from
+the repo root, or from an environment variable.
 
 The rule bites hardest in formats with no variable expansion. `dotfiles/zellij/config.kdl`
 binds `Alt a` to the tool-audit log, and KDL cannot expand anything — so the binding
@@ -1370,44 +1364,29 @@ to share for the same reason: `hcdev` names sessions
 the two accounts already have disjoint keys inside
 `/tmp/claude-conversation-*.md`.
 
-## Helix: one dev flow, three files
+## Helix is built and configured from its own repo
 
-Helix merges `~/.config/helix/languages.toml` over the `languages.toml` compiled
-into its binary, so:
+Nothing here builds `hx`, writes its config, or holds a grammar. The fork
+(`julianbieber/helix`, branch `custom`) owns all of it: its `languages.toml` is the
+config and is copied to `~/.config/helix/`, the `.hmml` / `.hstruct` / `.hresearch`
+tree-sitter grammars live under its `grammars/`, their queries under its
+`runtime/queries/`, and its own `justfile` builds and installs the lot. Its
+`CLAUDE.md` records how.
 
-```
-<checkout>/languages.toml               machine-NEUTRAL, committed, builds the binary
-~/.config/helix/languages.local.toml    machine-SPECIFIC, generated, never committed
-~/.config/helix/languages.toml          = the two concatenated, an OUTPUT
-```
+This repo used to do that work from the outside: `wire-helix` rewrote the Helix
+checkout's `languages.toml` in place, copied queries into it and generated a
+per-machine overlay, `helix-paths.sh` went looking for the checkout, and the grammars
+sat in `lsps/`. The result was a Helix whose grammars could only be built with
+this repo checked out, and a Helix checkout whose working tree held edits no commit
+there had made. The config is managed in the Helix repo, so that is where all of it now
+lives.
 
-Edit the first for anything shared; let `just wire-helix` regenerate the third.
-Editing the installed file directly is the one thing that does not work.
-
-What forced the split is `[[grammar]] name = "mml"`. Its `source.path` must be
-absolute, differs per machine, and does not exist at all on a hobby-only one — and
-`helix-term/build.rs` builds grammars with `STRICT = true`, so a single unresolvable
-path fails the whole `hx` build on every other machine. Committing that line was
-what previously required commenting it out per machine. Now it is generated.
-
-That reasoning applied to `.hmml` too, until HMML got its own grammar —
-`lsps/tree-sitter-hmml`, forked from the work `tree-sitter-mml`. Because it ships
-in this repo, `wire-helix` derives its path from the repo root and declares it
-unconditionally, so **every machine highlights `.hmml`**. `TREE_SITTER_MML` now
-only affects the work `.mml` dialect.
-
-Two invariants for that fork: the grammar name, the exported symbol in
-`src/parser.c`, and `name:` in `grammar.js` must all say `hmml` (Helix `dlsym`s
-`tree_sitter_<name>`, and a mismatch silently yields no parser); and
-`src/parser.c` stays committed, so a machine needs only a C compiler — requiring
-the tree-sitter CLI everywhere would reintroduce the portability problem. The
-queries are a real copy, not `; inherits: mml`, which was a second hidden
-dependency on the work grammar.
-
-`just helix-build` rebuilds `hx` with `HELIX_DISABLE_AUTO_GRAMMAR_BUILD=1` (the
-automatic path runs `--grammar fetch` first, which dies on any grammar whose remote
-has gone away and takes the binary build with it), then builds grammars separately
-where a failure is survivable.
+What stays here is the language servers that config names — `hobby-mml-lsp`,
+`hobby-struct-lsp`, `hobby-research-lsp` and the vendored four — and the things that
+merely *use* an installed `hx`: `bin/hx-claude`, the zellij layouts, and the MCPs
+that read `~/.config/helix/languages.toml` or the runtime. A server the config names
+but this machine has not installed is fine, so nothing checks the two lists against
+each other.
 
 ## Paths
 
@@ -1417,11 +1396,7 @@ where a failure is survivable.
 ~/fun_repos/hobby-mimisbrunnr/notes/
     <project>/<topic>/<task>                   task notes
 ~/.claude-hobby                                CLAUDE_CONFIG_DIR
-~/.config/hobby-tooling/paths.env              machine-local overrides, uncommitted
 ```
-
-The Helix checkout is deliberately absent from that list — it is discovered, and it
-is on branch **`custom`** wherever it is.
 
 ## Account Isolation
 

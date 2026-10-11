@@ -6,14 +6,9 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=./helix-paths.sh
-source "$HERE/helix-paths.sh"
-
 CFG="$HOME/.claude-hobby"
 NU="${XDG_CONFIG_HOME:-$HOME/.config}/nushell"
-HX="$HELIX_CFG"
 NOTES="$HOME/fun_repos/hobby-mimisbrunnr"
-HELIX_BRANCH="${HELIX_BRANCH:-custom}"
 
 gaps=0
 
@@ -169,109 +164,10 @@ done
 if command -v hobby-research-lsp >/dev/null 2>&1; then ok "hobby-research-lsp built"; else warn "hobby-research-lsp not built" "just install-research"; fi
 echo ""
 echo "Helix"
-if resolve_repo; then
-    REPO="$HELIX_REPO_RESOLVED"
-    ok "checkout $REPO (via $HELIX_REPO_WHY)"
-
-    if grep -q '^name = "hstruct"$' "$REPO/languages.toml"; then
-        ok "hstruct language in the checkout"
-    else
-        warn "hstruct not registered" "just wire-helix"
-    fi
-
-    if grep -q '^name = "hmml"$' "$REPO/languages.toml"; then
-        ok "hmml language in the checkout"
-    else
-        warn "hmml not registered" "just wire-helix"
-    fi
-
-    # The shared file must stay machine-neutral: an absolute grammar source.path
-    # committed there breaks `cargo install --path helix-term` on every machine that
-    # does not have that exact directory, because build.rs is STRICT.
-    if grep -A1 '^\[\[grammar\]\]$' "$REPO/languages.toml" | grep -q '^name = "mml"$'; then
-        bad "machine-specific mml grammar in the shared file" "just wire-helix"
-    else
-        ok "shared languages.toml is machine-neutral"
-    fi
-
-    # The pre-.hmml entry claimed `.mml` by path glob; left in place it fights
-    # the work `mml` language for every work spec.
-    if grep -q '^name = "mml-hobby"$' "$REPO/languages.toml"; then
-        bad "legacy mml-hobby language still present" "just wire-helix"
-    fi
-
-    # ~/.config/helix/languages.toml is generated: checkout + local overlay. Compare
-    # against a fresh concatenation rather than against the checkout alone.
-    LOCAL_OVERLAY="$HX/languages.local.toml"
-    if [ -L "$HX/languages.toml" ]; then
-        warn "installed languages.toml is a symlink" "rm it, then just wire-helix"
-    elif [ ! -f "$HX/languages.toml" ]; then
-        bad "no installed languages.toml" "just wire-helix"
-    else
-        want=$(mktemp)
-        { cat "$REPO/languages.toml"; printf '\n'; cat "$LOCAL_OVERLAY" 2>/dev/null; } > "$want"
-        if cmp -s "$want" "$HX/languages.toml"; then
-            ok "installed languages.toml matches checkout + local overlay"
-        else
-            bad "installed languages.toml is stale" "just wire-helix"
-        fi
-        rm -f "$want"
-    fi
-
-    if [ -L "$HX/runtime" ]; then
-        if [ "$(readlink -f "$HX/runtime")" = "$(readlink -f "$REPO/runtime")" ]; then
-            ok "runtime symlink points at the checkout"
-        else
-            bad "runtime symlink points elsewhere" "just wire-helix"
-        fi
-    else
-        warn "runtime is not a symlink into the checkout" "just wire-helix"
-    fi
-
-    # wire-helix writes into the checkout, so the wrong branch means the hmml entry
-    # is committed somewhere it will not survive a rebuild.
-    br=$(git -C "$REPO" branch --show-current 2>/dev/null || true)
-    if [ -n "$br" ] && [ "$br" != "$HELIX_BRANCH" ]; then
-        warn "on branch $br, not $HELIX_BRANCH" "git -C $REPO switch $HELIX_BRANCH"
-    fi
+if command -v hx >/dev/null 2>&1; then
+    ok "hx on PATH"
 else
-    warn "no Helix checkout found" "just local-paths, set HELIX_REPO"
-fi
-
-# hmml owns its grammar, so this one is about the WORK `.mml` dialect only.
-if resolve_grammar_mml; then
-    ok "tree-sitter-mml at $MML_GRAMMAR_RESOLVED"
-else
-    warn "no tree-sitter-mml — work .mml loses highlighting" "just local-paths"
-fi
-HSTRUCT_GRAMMAR_DIR="$MAIN_CHECKOUT/lsps/tree-sitter-hstruct"
-if [ -d "$HSTRUCT_GRAMMAR_DIR" ]; then
-    ok "lsps/tree-sitter-hstruct present"
-else
-    bad "lsps/tree-sitter-hstruct missing" "git pull"
-fi
-
-HMML_GRAMMAR_DIR="$MAIN_CHECKOUT/lsps/tree-sitter-hmml"
-if [ -f "$HMML_GRAMMAR_DIR/src/parser.c" ]; then
-    # Built by `hx --grammar build` into the checkout's runtime; without the .so
-    # the language still works, it just renders unhighlighted.
-    if resolve_repo && [ -f "$HELIX_REPO_RESOLVED/runtime/grammars/hmml.so" ]; then
-        ok "hmml grammar built"
-    else
-        warn "hmml grammar not built — .hmml renders plain" "hx --grammar build"
-    fi
-else
-    bad "lsps/tree-sitter-hmml missing" "git pull"
-fi
-
-# Derived, so it cannot go stale the way a hand-written table does.
-if [ -f "$HX/languages.toml" ]; then
-    read -r _t _m mp < <("$HERE/helix-servers.sh" --count 2>/dev/null || echo "0 0 0")
-    if [ "${mp:-0}" -eq 0 ]; then
-        ok "every personal language server is on PATH"
-    else
-        warn "$mp personal language server(s) missing" "just helix-servers"
-    fi
+    warn "hx not on PATH" "just install, in the Helix checkout"
 fi
 echo ""
 echo "MCP servers"
