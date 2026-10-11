@@ -126,8 +126,8 @@ one-character fix, so gating on it costs nothing.
 
 Two binaries on `PATH` would fight, since Helix maps a language to one server.
 The file extension keeps them apart: `.hmml` is its own language, `.mml` stays
-the work one. No path globs, no block ordering. `just wire-helix` writes this
-into the Helix checkout:
+the work one. No path globs, no block ordering. The Helix fork's own
+`languages.toml` carries it:
 
 ```toml
 [language-server]
@@ -140,14 +140,14 @@ file-types = ["hmml"]
 language-servers = ["hobby-mml-lsp"]
 ```
 
-There is no `grammar =` line: HMML has its own grammar, `lsps/tree-sitter-hmml`,
-declared in the generated `~/.config/helix/languages.local.toml`. It used to
+There is no `grammar =` line: HMML has its own grammar, `tree-sitter-hmml`,
+which lives in the Helix fork under `grammars/`. It used to
 borrow `grammar = "mml"`, which quietly made highlighting depend on the work
 checkout being present.
 
 Helix resolves highlight queries by **language name**, not grammar, so
-`runtime/queries/hmml/highlights.scm` must exist; `wire-helix` installs it from
-the grammar fork. (It used to contain only `; inherits: mml` — a second hidden
+`runtime/queries/hmml/highlights.scm` must exist; it is committed in the Helix
+fork. (It used to contain only `; inherits: mml` — a second hidden
 dependency on the work grammar.)
 
 Verify with `hx --health hmml` and `hx --health mml` — each should bind its own
@@ -161,7 +161,7 @@ just install-mml     # installs hobby-mml-lsp, hobby-mml-parser
 
 ## Known Limitations
 
-- **The grammar knows v2's shapes, not v2's rules.** `lsps/tree-sitter-hmml` now
+- **The grammar knows v2's shapes, not v2's rules.** `tree-sitter-hmml` now
   parses the Bevy sections, `marker Name` and the access block, so they highlight
   distinctly rather than as generic lines. It still validates nothing: which
   sections a `kind:` may use, whether a name in `reads:` is a component or a

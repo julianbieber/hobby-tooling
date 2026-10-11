@@ -53,7 +53,7 @@ names.
 ## The card screen
 
 A `.hresearch` file, `research/<date>-<slug>.hresearch`, one per question —
-Helix highlights it through `lsps/tree-sitter-hresearch`, the snippet as Rust,
+Helix highlights it through `tree-sitter-hresearch` (in the Helix fork), the snippet as Rust,
 and `gd` on a link, or on a `[k]` ref, opens it in the browser
 (`lsps/hobby-research-lsp`):
 
@@ -134,7 +134,7 @@ root, or else the only `*/Cargo.lock` one level below the root:
 prints a JSON array. Each card yields its question, the identifiers it cites and
 its `crate@version`; the picker's container column reads
 `<project>/<task> <crate>@<version> <tag>`, and Enter opens the card at the line
-naming the identifier. `just install-research && just wire-helix` attaches it.
+naming the identifier. `just install-research` installs it; the Helix fork's config attaches it.
 
 **stale** lists every card that pins a crate below the newest version of that
 crate in a `Cargo.lock`, one line per card and crate:

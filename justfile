@@ -31,9 +31,6 @@ ZJ_LAYOUTS := ZJ_DIR / 'layouts'
 BIN_DIR    := env('HOME') / '.local/bin'
 FUN_REPOS  := env('HOME') / 'fun_repos'
 NOTES_DIR  := env('HOME') / 'fun_repos/hobby-mimisbrunnr'
-# No HELIX_REPO default: the checkout is at a different path on each machine, so
-# scripts/helix-paths.sh discovers it (env, then the ~/.config/helix/runtime
-# symlink, then well-known locations). Set HELIX_REPO to override.
 LSP_REMOTE := env('BEVY_ASSET_LSP_REMOTE', 'ssh://git@codeberg.org/julianbieber/bevy_asset_lsp.git')
 # Overridable so a fork, a rename, or a local clone can be used instead.
 NOTES_REMOTE := env('HOBBY_NOTES_REMOTE', 'git@github.com:julianbieber/hobby-mimisbrunnr.git')
@@ -49,7 +46,7 @@ default:
 # ---------------------------------------------------------------------------
 
 # Everything a new machine needs, in dependency order. Safe to re-run.
-bootstrap: preflight clone-notes git-identity bootstrap-config install-chobby install-conversation install-shell wire-nushell install-hooks install-skills install-claude-md local-paths wire-helix
+bootstrap: preflight clone-notes git-identity bootstrap-config install-chobby install-conversation install-shell wire-nushell install-hooks install-skills install-claude-md
     @echo ""
     @echo "════════════════════════════════════════════════════════════════"
     @echo "Core install done. One manual step remains — the login is"
@@ -65,7 +62,9 @@ bootstrap: preflight clone-notes git-identity bootstrap-config install-chobby in
     @echo "    just install-struct    HSTRUCT structure checker + server (Rust build)"
     @echo "    just install-research  .hresearch link-opening language server (Rust build)"
     @echo "    just install-lsps      the hobby language servers Helix references"
-    @echo "    just helix-build       rebuild hx itself from the discovered checkout"
+    @echo ""
+    @echo "hx itself, its grammars and its config are installed from the Helix"
+    @echo "checkout:  just install   (run there, not here)"
     @echo ""
     @echo "Check the result any time with:  just doctor"
     @echo "════════════════════════════════════════════════════════════════"
@@ -253,47 +252,6 @@ install-shell: _root-notice
 wire-nushell:
     @"{{REPO_ROOT}}"/scripts/wire-nushell.sh
 
-# ONE way to change Helix config, the same on every machine:
-#
-#   machine-neutral -> <checkout>/languages.toml     committed, shared, builds the binary
-#   machine-specific -> ~/.config/helix/languages.local.toml   generated, never committed
-#   then `just wire-helix` regenerates ~/.config/helix/languages.toml from both.
-#
-# Editing the installed file directly is the one thing that does not work — it is an
-# output. Skips cleanly when no checkout is found.
-
-# Regenerate the Helix language config from the checkout + this machine's overlay
-wire-helix:
-    @"{{REPO_ROOT}}"/scripts/wire-helix.sh
-
-# Show (and create) ~/.config/hobby-tooling/paths.env, plus what resolved from it
-local-paths *ARGS:
-    @"{{REPO_ROOT}}"/scripts/local-paths.sh {{ARGS}}
-
-# Which language servers Helix declares, and which are missing here (--all for upstream too)
-helix-servers *ARGS:
-    @"{{REPO_ROOT}}"/scripts/helix-servers.sh {{ARGS}}
-
-# Rebuilding the hx binary needs two things that are easy to get wrong from memory, so
-# they live here rather than in a note: skip the automatic grammar step (it runs
-# `--grammar fetch` first, which dies on any grammar whose remote has gone away and
-# takes the whole build with it), then build grammars separately where a failure is
-# survivable.
-
-# Rebuild and install hx from the discovered checkout, then build its grammars
-helix-build:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    repo=$("{{REPO_ROOT}}"/scripts/helix-paths.sh repo) || {
-        echo "No Helix checkout found — \`just local-paths\` to point at one." >&2
-        exit 1
-    }
-    echo "Building hx from $repo"
-    HELIX_DISABLE_AUTO_GRAMMAR_BUILD=1 cargo install --path "$repo/helix-term" --locked
-    echo ""
-    echo "Building grammars (individual failures are expected and non-fatal):"
-    hx --grammar build || echo "  some grammars failed — hx itself is installed and usable"
-
 # ---------------------------------------------------------------------------
 # Optional extras
 # ---------------------------------------------------------------------------
@@ -387,8 +345,6 @@ install-lsps:
         git clone "{{LSP_REMOTE}}" "$src"
     fi
     cargo install --path "$src"
-    echo ""
-    "{{REPO_ROOT}}"/scripts/helix-servers.sh
 
 # The parser CLI matters: the hmml-* skills shell out to `hobby-mml-parser --lint`.
 
@@ -473,6 +429,3 @@ uninstall:
     echo "Unlinked. Still present on purpose:"
     echo "  {{CONFIG_DIR}}          (holds your login — delete by hand to log out)"
     echo "  the `use` lines in config.nu   (remove by hand)"
-    echo "  the hmml entry in the Helix checkout's languages.toml"
-    echo "  ~/.config/helix/languages.local.toml and ~/.config/hobby-tooling/paths.env"
-    echo "  (both machine-local; harmless to keep, and a reinstall reuses them)"

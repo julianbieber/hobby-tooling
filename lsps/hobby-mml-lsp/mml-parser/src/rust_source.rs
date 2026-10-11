@@ -18,8 +18,7 @@
 //! `runtime/grammars/rust.so` at *run* time, so `hobby-mml-parser --lint` — the
 //! binary every `hmml-*` skill shells out to — would silently lose the check on
 //! a machine whose Helix grammars are not built. A compiled-in grammar has no
-//! such failure mode, and this repo already requires a C compiler for
-//! `tree-sitter-hmml`.
+//! such failure mode.
 
 use std::path::Path;
 

@@ -32,8 +32,9 @@ docs.rs item URL that names it) and the `crate@version` (`Package`). The
 container reads `<project>/<task> <crate>@<version> <tag>`, so the tag shows
 beside a match. Helix does not filter the name column, so the filtering is
 `hresearch`'s: a case-insensitive substring per query word. A card retracted with `hresearch retract` is not listed. `hresearch` must be
-on `PATH`; when it is not, the answer is empty. `just wire-helix` attaches the
-server to `rust` and `markdown` with `only-features = ["workspace-symbols"]`.
+on `PATH`; when it is not, the answer is empty. The Helix fork's `languages.toml`
+attaches the server to `rust` and `markdown` with
+`only-features = ["workspace-symbols"]`.
 
 No diagnostics: `hresearch check` is what validates a research file.
 
@@ -41,5 +42,4 @@ No diagnostics: `hresearch check` is what validates a research file.
 
 ```
 just install-research   # cargo install hobby-research-lsp
-just wire-helix         # registers it and routes .hresearch to it
 ```

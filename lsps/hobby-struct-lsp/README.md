@@ -109,4 +109,4 @@ struct-lsp/         tower-lsp glue; diagnostics, hover, completion
 
 The LSP publishes the same diagnostics the CLI prints, from the same parse and
 check, so the editor and `just structure` cannot disagree. Syntax highlighting
-comes from `lsps/tree-sitter-hstruct`, never from here.
+comes from `tree-sitter-hstruct` in the Helix fork, never from here.
