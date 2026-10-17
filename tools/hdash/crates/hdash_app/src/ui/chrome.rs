@@ -86,6 +86,7 @@ pub fn build_chrome(mut commands: Commands, fonts: Res<KitFonts>) {
             width: Val::Percent(100.0),
             height: Val::Percent(100.0),
             flex_direction: FlexDirection::Row,
+            min_height: Val::Px(0.0),
             ..default()
         },
         ThemeBackgroundColor(ft::WINDOW_BG),
