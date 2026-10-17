@@ -27,6 +27,9 @@ pub use hwt_core::projects_root;
 /// issue, since the topic dir only appears with the first worktree under it.
 pub const TOPIC_PREFIX: &str = "topic:";
 
+/// The label that marks an issue backlogged.
+pub const BACKLOG_LABEL: &str = "backlog";
+
 /// How many issues to ask `gh` for per project. Well past any hobby repo's open count;
 /// the cap only exists so a mis-pointed remote cannot stall the fetch.
 const ISSUE_LIMIT: &str = "200";
@@ -86,12 +89,31 @@ pub struct Issue {
     pub topic: Option<String>,
     /// Task/branch name this issue would get: `gh-<number>-<slug>`.
     pub task: String,
+    /// Why the last `backlog` label write failed, for the card. Cleared by a Refresh, which
+    /// rebuilds the issue from `gh`.
+    pub label_error: Option<String>,
 }
 
 impl Issue {
-    /// Labels other than the topic tag, for the card's label line.
+    /// Labels other than the topic tag and the backlog mark, for the card's label line — the
+    /// list mode already says which items are backlogged.
     pub fn other_labels(&self) -> impl Iterator<Item = &String> {
-        self.labels.iter().filter(|l| !l.starts_with(TOPIC_PREFIX))
+        self.labels
+            .iter()
+            .filter(|l| !l.starts_with(TOPIC_PREFIX) && *l != BACKLOG_LABEL)
+    }
+
+    /// Whether the issue carries the [`BACKLOG_LABEL`].
+    pub fn has_backlog_label(&self) -> bool {
+        self.labels.iter().any(|l| l == BACKLOG_LABEL)
+    }
+
+    /// Add or remove [`BACKLOG_LABEL`] in `labels`, matching a write that succeeded.
+    pub fn set_backlog_label_local(&mut self, backlog: bool) {
+        self.labels.retain(|l| l != BACKLOG_LABEL);
+        if backlog {
+            self.labels.push(BACKLOG_LABEL.to_owned());
+        }
     }
 }
 
@@ -104,6 +126,18 @@ pub struct ProjectIssues {
     pub state: FetchState,
     /// Open issues. Empty while loading or on failure.
     pub issues: Vec<Issue>,
+}
+
+/// A `backlog` label write's result, delivered from the async job over a channel.
+pub struct LabelMsg {
+    /// Project the issue belongs to.
+    pub project: String,
+    /// Issue number.
+    pub number: u64,
+    /// The label state that was written.
+    pub backlog: bool,
+    /// `Ok` or `Err(one-line reason)`.
+    pub result: Result<(), String>,
 }
 
 /// A fetch result for one project, delivered from the async query over a channel.
@@ -297,6 +331,56 @@ pub fn fetch_issues(project: &Project) -> Result<Vec<Issue>, String> {
     parse_issues(&out.stdout)
 }
 
+/// Add or remove [`BACKLOG_LABEL`] on the issue at `url` via `gh`. Blocking; call off the main
+/// thread.
+///
+/// The issue is addressed by its URL, not by a checkout's remote. When an add fails because the
+/// repo has no such label yet, the label is created in that repo and the add retried once.
+///
+/// Fails with a one-line reason — `gh` missing, not authenticated, no write access to the repo
+/// (an upstream clone).
+pub fn set_backlog_label(url: &str, backlog: bool) -> Result<(), String> {
+    let flag = if backlog {
+        "--add-label"
+    } else {
+        "--remove-label"
+    };
+    let edit = || run_gh(&["issue", "edit", url, flag, BACKLOG_LABEL]);
+    match edit() {
+        Err(reason) if backlog && reason.contains("not found") => {
+            let repo = repo_of_url(url).ok_or_else(|| format!("not an issue URL: {url}"))?;
+            if let Err(create) = run_gh(&["label", "create", BACKLOG_LABEL, "--repo", &repo])
+                && !create.contains("already exists")
+            {
+                return Err(create);
+            }
+            edit()
+        }
+        other => other,
+    }
+}
+
+fn run_gh(args: &[&str]) -> Result<(), String> {
+    let out = Command::new("gh")
+        .args(args)
+        .output()
+        .map_err(|e| format!("gh not runnable: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(first_stderr_line(&String::from_utf8_lossy(&out.stderr)))
+    }
+}
+
+fn repo_of_url(url: &str) -> Option<String> {
+    let path = url.split_once("://")?.1;
+    let mut parts = path.split('/');
+    let host = parts.next()?;
+    let (owner, repo) = (parts.next()?, parts.next()?);
+    (parts.next() == Some("issues") && !owner.is_empty() && !repo.is_empty())
+        .then(|| format!("{host}/{owner}/{repo}"))
+}
+
 /// Map `gh`'s JSON into [`Issue`]s, resolving the topic tag and task name. Split from
 /// [`fetch_issues`] so the mapping is testable without `gh` — and, since the worktree
 /// lookup moved to [`super::join`], without a filesystem fixture either.
@@ -318,6 +402,7 @@ pub fn parse_issues(json: &[u8]) -> Result<Vec<Issue>, String> {
                 labels,
                 updated: r.updated_at.as_deref().and_then(parse_rfc3339_utc),
                 author: r.author.and_then(|a| a.login).filter(|l| !l.is_empty()),
+                label_error: None,
             }
         })
         .collect())
@@ -464,5 +549,35 @@ mod tests {
         // Malformed output is an error for one project's line, never a panic.
         assert!(parse_issues(b"{ not json").is_err());
         assert!(parse_issues(b"[]").unwrap().is_empty());
+    }
+
+    // Pins that the backlog label is read, kept off the card's label line, and rewritten in
+    // place without duplicating or disturbing the other labels.
+    #[test]
+    fn backlog_label_is_read_hidden_and_rewritten() {
+        let json = br#"[{"number":4,"title":"Later","url":"https://github.com/o/r/issues/4",
+           "labels":[{"name":"backlog"},{"name":"bug"}],"updatedAt":null,"author":null}]"#;
+        let mut issue = parse_issues(json).unwrap().remove(0);
+        assert!(issue.has_backlog_label());
+        assert_eq!(issue.other_labels().collect::<Vec<_>>(), vec!["bug"]);
+
+        issue.set_backlog_label_local(true);
+        assert_eq!(issue.labels, vec!["bug", "backlog"], "never duplicated");
+        issue.set_backlog_label_local(false);
+        assert_eq!(issue.labels, vec!["bug"]);
+        assert!(!issue.has_backlog_label());
+    }
+
+    // Pins that a label create targets the repo the issue URL names, and refuses anything that
+    // is not an issue URL rather than guessing a repo.
+    #[test]
+    fn label_create_repo_comes_from_the_issue_url() {
+        assert_eq!(
+            repo_of_url("https://github.com/julianbieber/wusel/issues/12").as_deref(),
+            Some("github.com/julianbieber/wusel")
+        );
+        assert_eq!(repo_of_url("https://github.com/o/r/pull/3"), None);
+        assert_eq!(repo_of_url("https://gh/3"), None);
+        assert_eq!(repo_of_url("not a url"), None);
     }
 }

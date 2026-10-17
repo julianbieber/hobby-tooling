@@ -10,7 +10,7 @@ use feathers_kit::{
     kit_tokens as kt, scroll_list, sidebar_item, spacer_grow, text, text_bold, tok,
 };
 
-use crate::model::join::{Item, Model, Stage, UiState};
+use crate::model::join::{Item, Model, Stage, UiState, backlog_visible};
 
 use super::Pulls;
 
@@ -47,6 +47,10 @@ pub struct ShowDoneToggle;
 
 #[derive(Component)]
 pub struct ShowUntaggedToggle;
+
+/// Header button switching the list between the open work and the backlog.
+#[derive(Component)]
+pub struct BacklogModeToggle;
 
 #[derive(Component)]
 pub struct RefreshButton;
@@ -158,6 +162,10 @@ fn header_bar(fonts: &KitFonts) -> impl Bundle {
                 140.0,
                 icon_button(Variant::Normal, ShowUntaggedToggle, "Show untagged")
             ),
+            slot(
+                130.0,
+                icon_button(Variant::Normal, BacklogModeToggle, "Show backlog")
+            ),
             slot(90.0, icon_button(Variant::Normal, RefreshButton, "Refresh")),
             slot(
                 110.0,
@@ -175,7 +183,7 @@ fn counts(item: &Item<'_>, ui: &UiState) -> bool {
     !matches!(
         (item.stage(), ui.show_done, ui.show_untagged),
         (Stage::Done, false, _) | (Stage::Untagged, _, false)
-    )
+    ) && backlog_visible(item, ui)
 }
 
 pub fn rebuild_sidebar(
@@ -346,12 +354,16 @@ pub fn update_header(
     ui: Res<UiState>,
     mut q: Query<&mut Text, With<HeaderSummary>>,
 ) {
-    let (mut active, mut issues, mut done, mut untagged, mut orphans) =
-        (0usize, 0usize, 0usize, 0usize, 0usize);
+    let (mut active, mut issues, mut done, mut untagged, mut orphans, mut parked) =
+        (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
     for item in model.items() {
         if let Some(sel) = &ui.selected_project
             && item.project != sel
         {
+            continue;
+        }
+        if !backlog_visible(&item, &ui) {
+            parked += 1;
             continue;
         }
         match item.stage() {
@@ -367,7 +379,11 @@ pub fn update_header(
     }
 
     let scope = ui.selected_project.as_deref().unwrap_or("all projects");
-    let mut summary = format!("{scope}  ·  {active} active");
+    let mut summary = if ui.backlog_mode {
+        format!("{scope} backlog  ·  {active} backlogged tasks")
+    } else {
+        format!("{scope}  ·  {active} active")
+    };
     // Issues are fetched for the selected project only, so under "All" the count is not a
     // fact about the projects — it is a fact about which ones happened to be visited.
     if ui.selected_project.is_some() {
@@ -376,10 +392,15 @@ pub fn update_header(
     if orphans > 0 {
         summary.push_str(&format!(" · {orphans} orphan worktrees"));
     }
-    if ui.show_done {
-        summary.push_str(&format!(" · {done} done"));
-    } else if done > 0 {
-        summary.push_str(&format!(" · {done} done hidden"));
+    if !ui.backlog_mode {
+        if ui.show_done {
+            summary.push_str(&format!(" · {done} done"));
+        } else if done > 0 {
+            summary.push_str(&format!(" · {done} done hidden"));
+        }
+        if parked > 0 {
+            summary.push_str(&format!(" · {parked} backlogged hidden"));
+        }
     }
     if !ui.show_untagged && untagged > 0 {
         summary.push_str(&format!(" · {untagged} untagged hidden"));

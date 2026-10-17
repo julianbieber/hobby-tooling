@@ -318,6 +318,9 @@ pub struct Task {
     pub done: bool,
     /// Block from `task.json`, if present.
     pub block: Option<Block>,
+    /// Backlog mark from `task.json`: `None` until one has been set, which is what lets a fresh
+    /// `task.json` defer to its issue's `backlog` label rather than overrule it.
+    pub backlog: Option<bool>,
     /// Repos checked out under this task (may be empty).
     pub repos: Vec<Repo>,
     /// Pull requests declared in the task's `prs.json` (live status loaded async).
@@ -551,7 +554,9 @@ pub fn scan_tasks() -> Vec<Task> {
                 name: task_name,
             };
             let meta = read_meta(&id);
-            tasks.push(build_task(id, true, meta.done, meta.blocked));
+            let mut task = build_task(id, true, meta.done, meta.blocked);
+            task.backlog = meta.backlog;
+            tasks.push(task);
         }
     }
     tasks.extend(scan_orphan_worktrees());
@@ -610,6 +615,7 @@ fn build_task(id: TaskId, adopted: bool, done: bool, block: Option<Block>) -> Ta
         present,
         done,
         block,
+        backlog: None,
         repos,
         prs,
         subtasks,
@@ -629,6 +635,8 @@ struct TaskMeta {
     done: bool,
     #[serde(default)]
     blocked: Option<Block>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    backlog: Option<bool>,
 }
 
 /// Path to a task's `task.json` in the notes tree: `notes/PROJECT/TOPIC/TASK/task.json`.
@@ -784,11 +792,18 @@ pub fn toggle_done(id: &TaskId) -> std::io::Result<bool> {
     toggle_done_at(&meta_path(id))
 }
 
+/// Record `backlog` in a task's `task.json`, leaving `done` and `blocked` as they are. Creates
+/// the file (and notes dir) if absent.
+pub fn set_backlog(id: &TaskId, backlog: bool) -> std::io::Result<()> {
+    set_backlog_at(&meta_path(id), backlog)
+}
+
 /// Record an orphan worktree as a task by writing the `task.json` it is missing:
-/// `{ done: false, blocked: null }`, the same bytes `hwt new` writes.
+/// `{ done: false, blocked: null }`, the same bytes `hwt new` writes. `backlog` is left
+/// unrecorded, so a joined issue's `backlog` label carries over instead of being cleared.
 ///
 /// Writing the file here rather than shelling out to `hwt` keeps the dashboard's one write to the
-/// same two fields `hwt new` produces, with no dependency on `hwt` being on `PATH` and no
+/// same fields `hwt new` produces, with no dependency on `hwt` being on `PATH` and no
 /// subprocess to fail behind a button.
 pub fn adopt(id: &TaskId) -> std::io::Result<()> {
     write_meta_at(&meta_path(id), &TaskMeta::default())
@@ -799,6 +814,12 @@ fn toggle_done_at(path: &Path) -> std::io::Result<bool> {
     meta.done = !meta.done;
     write_meta_at(path, &meta)?;
     Ok(meta.done)
+}
+
+fn set_backlog_at(path: &Path, backlog: bool) -> std::io::Result<()> {
+    let mut meta = read_meta_at(path);
+    meta.backlog = Some(backlog);
+    write_meta_at(path, &meta)
 }
 
 #[cfg(test)]
@@ -952,7 +973,7 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
             done,
-            "only the done flag may change"
+            "a done toggle changes the done flag and nothing else"
         );
 
         assert!(!toggle_done_at(&path).unwrap(), "toggled back to not-done");
@@ -996,6 +1017,57 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
             "{\n  \"done\": true,\n  \"blocked\": {}\n}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Pins that `backlog` is appended after `blocked` only once set, so every unmarked
+    // `task.json` keeps the bytes hwt writes, and that marking leaves done and blocked alone.
+    #[test]
+    fn set_backlog_appends_after_blocked_and_keeps_the_rest() {
+        let dir = std::env::temp_dir().join("hdash_meta_backlog_fixture");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("task.json");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        std::fs::write(&path, "{\n  \"done\": false,\n  \"blocked\": null\n}").unwrap();
+        assert_eq!(
+            read_meta_at(&path).backlog,
+            None,
+            "an unmarked file records none"
+        );
+
+        set_backlog_at(&path, true).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "{\n  \"done\": false,\n  \"blocked\": null,\n  \"backlog\": true\n}"
+        );
+        toggle_done_at(&path).unwrap();
+        assert_eq!(
+            read_meta_at(&path).backlog,
+            Some(true),
+            "a done toggle keeps the mark"
+        );
+
+        set_backlog_at(&path, false).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "{\n  \"done\": true,\n  \"blocked\": null,\n  \"backlog\": false\n}",
+            "unmarking records false rather than dropping the key"
+        );
+
+        std::fs::write(
+            &path,
+            r#"{"done": false, "blocked": {"reason": "waiting"}}"#,
+        )
+        .unwrap();
+        set_backlog_at(&path, true).unwrap();
+        let back = read_meta_at(&path);
+        assert!(!back.done);
+        assert_eq!(
+            back.blocked.and_then(|b| b.reason).as_deref(),
+            Some("waiting")
         );
 
         let _ = std::fs::remove_dir_all(&dir);

@@ -1,4 +1,5 @@
-//! One generic for the three async reads (git status, PR status, issue lists).
+//! One generic for the async work: the reads (git status, PR status, issue lists) and the
+//! writes a click asks for (pulls, `backlog` labels).
 //!
 //! Both pre-merge dashboards wrote this out by hand — `hwt-overview` twice, `hgh-issues`
 //! once — as a `Sender` kept alongside a `Mutex<Receiver>` plus a `dispatched` set, a

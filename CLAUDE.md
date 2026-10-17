@@ -19,7 +19,7 @@ disappears.
 Consequences, all of which make this tooling smaller than its work counterpart:
 
 - No `wt add` — a task can't gain a second repo
-- `task.json` is just `{ done, blocked }`; no `repos[]`, since the project is in the path
+- `task.json` is just `{ done, blocked }`, plus `backlog` once hdash has set one; no `repos[]`, since the project is in the path
 - `hwt go <task>` takes no project argument
 - A task directory is itself a git repo, so Claude gets branch + git status for free
 - No experts (one repo means one expert, and a third path level strains the
@@ -121,6 +121,27 @@ either close issues that are still open questions or reopen tasks that are finis
 here, and it would put a network call behind a keystroke that currently writes one
 local file. `hdash` asks `gh` for open issues only, so a closed issue's task simply
 shows unjoined — which is the honest rendering of the two being independent.
+
+### `backlog` is the one mark that is mirrored
+
+A backlogged task is parked by choice — unlike `blocked`, nothing external is awaited —
+and the mark exists to keep `hdash` readable: the normal list hides backlogged open work,
+and **Show backlog** switches to a list of exactly that, done work excluded. It lives in
+both places a task can be recorded, `task.json` (`"backlog": true|false`, after `blocked`)
+and the issue label `backlog`, and the card's **Backlog** button writes whichever of the
+two exist.
+
+When a joined task and issue disagree, `hdash` unifies them as the issue list lands, and
+**the notes win**: `task.json` records no time a mark was set, so there is nothing to
+compare a label event against. The one exception is a `task.json` that has never recorded
+`backlog` — what `hwt new`, `hcdev wt` and **Adopt** write — which takes the label instead,
+so starting a task from a backlogged issue does not unmark it. That is why unmarking writes
+`false` rather than dropping the key.
+
+This is the one place a fetch writes, and it writes only to make the two halves agree; the
+`hwt` verbs never set `backlog` but carry it through every rewrite, because a dropped key
+reads as unrecorded: a task with an issue silently re-takes the label, and one without loses
+its mark.
 
 ## Two machines: what is actually at risk, and `hwt sync`
 
