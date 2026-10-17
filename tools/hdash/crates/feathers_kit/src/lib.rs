@@ -5,7 +5,7 @@
 //! fills that gap with composable builders (`card`, `panel`, `row`/`col`, `divider`, `badge`,
 //! `status_dot`, `scroll_list`, `sidebar_item`, `icon_button`, `text*`) built on raw `bevy_ui`,
 //! plus a handful of custom theme tokens and a [`KitPlugin`] that powers hover restyling and
-//! mouse-wheel scrolling.
+//! registers the `bevy_ui_widgets` behaviour those builders rely on.
 //!
 //! It is intentionally domain-agnostic: nothing here knows about git, worktrees, or tasks.
 
@@ -13,10 +13,9 @@
 #![allow(clippy::type_complexity)]
 
 use bevy::ecs::spawn::Spawn;
-use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
+use bevy::input::mouse::MouseScrollPixelsPerLine;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
-use bevy::ui::ScrollPosition;
 
 use bevy::picking::cursor::EntityCursor;
 use bevy::window::SystemCursorIcon;
@@ -183,10 +182,6 @@ pub struct KitHoverable {
 /// Marks a currently-selected item; suppresses [`KitHoverable`] restyling on that entity.
 #[derive(Component, Default)]
 pub struct KitSelected;
-
-/// Marks a node with `Overflow::scroll_y()` that should respond to the mouse wheel when hovered.
-#[derive(Component, Default)]
-pub struct KitScrollable;
 
 // ---------------------------------------------------------------------------
 // Text builders
@@ -386,9 +381,7 @@ pub fn scroll_list(overrides: impl Bundle, children: impl Bundle) -> impl Bundle
             padding: UiRect::all(Val::Px(sp::M)),
             ..default()
         },
-        ScrollPosition::default(),
-        KitScrollable,
-        Hovered::default(),
+        bevy_ui_widgets::ScrollArea,
         overrides,
         children,
     )
@@ -507,18 +500,30 @@ pub fn icon_button(
 // Plugin & systems
 // ---------------------------------------------------------------------------
 
-/// Installs kit tokens + fonts (PreStartup) and the hover/scroll systems (Update).
+/// Installs kit tokens + fonts (PreStartup), the hover restyling system (Update), and the
+/// `bevy_ui_widgets` plugins that text input and [`scroll_list`] scrolling need. Sets the global
+/// [`MouseScrollPixelsPerLine`] to 24, so a wheel line scrolls 24 logical pixels.
 pub struct KitPlugin;
 
 impl Plugin for KitPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(PreStartup, (install_kit_tokens_sys, load_kit_fonts));
-        app.add_systems(Update, (hover_restyle, scroll_system));
+        app.add_systems(
+            PreStartup,
+            (
+                install_kit_tokens_sys,
+                load_kit_fonts,
+                set_scroll_line_height,
+            ),
+        );
+        app.add_systems(Update, hover_restyle);
         app.add_observer(set_button_font);
         // Drives [`text_input`] editing (click-to-focus, keyboard, selection, IME). Not part of
         // `FeathersPlugins`, so register it here.
         if !app.is_plugin_added::<bevy_ui_widgets::TextInputPlugin>() {
             app.add_plugins(bevy_ui_widgets::TextInputPlugin);
+        }
+        if !app.is_plugin_added::<bevy_ui_widgets::ScrollAreaPlugin>() {
+            app.add_plugins(bevy_ui_widgets::ScrollAreaPlugin);
         }
     }
 }
@@ -536,23 +541,6 @@ fn hover_restyle(
     }
 }
 
-fn scroll_system(
-    mut wheel: MessageReader<MouseWheel>,
-    mut q: Query<(&Hovered, &mut ScrollPosition), With<KitScrollable>>,
-) {
-    let mut dy = 0.0;
-    for ev in wheel.read() {
-        dy += match ev.unit {
-            MouseScrollUnit::Line => ev.y * 24.0,
-            MouseScrollUnit::Pixel => ev.y,
-        };
-    }
-    if dy == 0.0 {
-        return;
-    }
-    for (hovered, mut scroll) in &mut q {
-        if hovered.get() {
-            scroll.0.y = (scroll.0.y - dy).max(0.0);
-        }
-    }
+fn set_scroll_line_height(mut pixels_per_line: ResMut<MouseScrollPixelsPerLine>) {
+    **pixels_per_line = 24.0;
 }
