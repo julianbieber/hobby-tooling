@@ -59,6 +59,18 @@ pub enum Stage {
     Coordinator,
 }
 
+/// What a joined task and issue need written so they agree on the backlog mark. The answer of
+/// [`Item::backlog_sync`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BacklogSync {
+    /// The task records backlogged; the issue lacks the label.
+    LabelAdd,
+    /// The task records not backlogged; the issue carries the label.
+    LabelRemove,
+    /// The task records nothing and the issue carries the label: record it in `task.json`.
+    NotesTrue,
+}
+
 /// One piece of work: a task, an issue, or both when they are the same work.
 ///
 /// Invariant: at least one of `task` / `issue` is `Some`, guaranteed by construction in
@@ -99,6 +111,29 @@ impl<'a> Item<'a> {
                 Some(_) => Stage::Startable,
                 None => Stage::Untagged,
             },
+        }
+    }
+
+    /// Whether the item is backlogged: what an adopted task's `task.json` records, else whether
+    /// the issue carries the `backlog` label.
+    pub fn backlogged(&self) -> bool {
+        match self.task.filter(|t| t.adopted).and_then(|t| t.backlog) {
+            Some(recorded) => recorded,
+            None => self.issue.is_some_and(Issue::has_backlog_label),
+        }
+    }
+
+    /// The write that would make an adopted task and its joined issue agree on the backlog
+    /// mark, or `None` when they already agree or only one side exists. A recorded `task.json`
+    /// value always wins; an unrecorded one takes the issue's label.
+    pub fn backlog_sync(&self) -> Option<BacklogSync> {
+        let task = self.task.filter(|t| t.adopted)?;
+        let labelled = self.issue?.has_backlog_label();
+        match (task.backlog, labelled) {
+            (Some(true), false) => Some(BacklogSync::LabelAdd),
+            (Some(false), true) => Some(BacklogSync::LabelRemove),
+            (None, true) => Some(BacklogSync::NotesTrue),
+            _ => None,
         }
     }
 
@@ -196,6 +231,9 @@ pub struct UiState {
     /// untagged issue is the one item this app cannot act on, so hiding it by default
     /// would hide the work that most needs attention.
     pub show_untagged: bool,
+    /// Whether the list shows the backlog instead of the open work. **Off** by default: the
+    /// backlog exists to keep the normal list readable.
+    pub backlog_mode: bool,
     /// Items hidden for this session only (in-memory; cleared on Refresh).
     pub hidden: HashSet<ItemKey>,
     /// Tasks whose PR list is expanded (in-memory; collapsed by default).
@@ -208,6 +246,7 @@ impl Default for UiState {
             selected_project: None,
             show_done: false,
             show_untagged: true,
+            backlog_mode: false,
             hidden: HashSet::new(),
             pr_expanded: HashSet::new(),
         }
@@ -337,6 +376,9 @@ impl Model {
 /// An orphan is never hidden by a content toggle — it is the one item the app is asking the
 /// user to resolve.
 ///
+/// Backlog mode shows only backlogged items that are not done; outside it a backlogged item is
+/// hidden while it is open, and a done one follows `show_done` like any other.
+///
 /// Under "All" the list is tasks only: `Startable` and `Untagged` are the issue-only stages,
 /// and `gh` is queried per selected project, so showing them here would report whichever
 /// projects happened to be visited this session rather than a whole list.
@@ -355,7 +397,22 @@ pub fn item_visible(item: &Item<'_>, ui: &UiState) -> bool {
         Stage::Untagged if !ui.show_untagged => return false,
         _ => {}
     }
-    !ui.hidden.contains(&item.key())
+    backlog_visible(item, ui) && !ui.hidden.contains(&item.key())
+}
+
+/// Whether the backlog mode lets an item through, ignoring every other filter — the part of
+/// [`item_visible`] the sidebar counts share.
+pub fn backlog_visible(item: &Item<'_>, ui: &UiState) -> bool {
+    let stage = item.stage();
+    if stage == Stage::Orphan {
+        return true;
+    }
+    let backlogged = item.backlogged();
+    if ui.backlog_mode {
+        backlogged && stage != Stage::Done
+    } else {
+        !backlogged || stage == Stage::Done
+    }
 }
 
 #[cfg(test)]
@@ -384,6 +441,7 @@ mod tests {
             present: true,
             done: false,
             block: None,
+            backlog: None,
             prs: Vec::new(),
             subtasks: Vec::new(),
             last_active: None,
@@ -403,6 +461,7 @@ mod tests {
             author: None,
             topic: topic.map(str::to_owned),
             task: crate::model::issue::task_name(number, title),
+            label_error: None,
         }
     }
 
@@ -739,5 +798,98 @@ mod tests {
                 "orphan visible with show_done={done} show_untagged={untagged}"
             );
         }
+    }
+
+    fn labelled(number: u64, title: &str) -> Issue {
+        let mut i = issue(number, title, Some("features"));
+        i.labels.push("backlog".into());
+        i
+    }
+
+    // Pins the backlog-mode grid: backlogged open work only in backlog mode, done work only
+    // outside it, and orphans in both.
+    #[test]
+    fn backlog_mode_splits_the_list() {
+        let mut parked = task("p", "t", "parked");
+        parked.backlog = Some(true);
+        let mut parked_done = task("p", "t", "parked-done");
+        parked_done.backlog = Some(true);
+        parked_done.done = true;
+        let mut orphan = task("p", "t", "stray");
+        orphan.adopted = false;
+        let m = model(
+            vec![task("p", "t", "live"), parked, parked_done, orphan],
+            vec![(
+                "p",
+                vec![
+                    labelled(5, "Later issue"),
+                    issue(6, "Now issue", Some("features")),
+                ],
+            )],
+        );
+        let items = m.items();
+        let visible = |ui: &UiState| -> Vec<&str> {
+            let mut v: Vec<&str> = items
+                .iter()
+                .filter(|i| item_visible(i, ui))
+                .map(|i| i.task_name())
+                .collect();
+            v.sort();
+            v
+        };
+
+        let mut ui = UiState {
+            selected_project: Some("p".into()),
+            ..UiState::default()
+        };
+        assert_eq!(visible(&ui), vec!["gh-6-now-issue", "live", "stray"]);
+
+        ui.show_done = true;
+        assert!(
+            visible(&ui).contains(&"parked-done"),
+            "show done reveals a done item whether or not it is backlogged"
+        );
+
+        ui.backlog_mode = true;
+        assert_eq!(visible(&ui), vec!["gh-5-later-issue", "parked", "stray"]);
+    }
+
+    // Pins the unification rule: a recorded task.json value wins, and an unrecorded one takes
+    // the label, so starting or adopting a task from a backlogged issue keeps the mark.
+    #[test]
+    fn backlog_sync_lets_recorded_notes_win() {
+        let case = |recorded: Option<bool>, label: bool| {
+            let mut t = task("p", "t", "gh-9-x");
+            t.backlog = recorded;
+            let i = if label {
+                labelled(9, "X")
+            } else {
+                issue(9, "X", Some("t"))
+            };
+            let m = model(vec![t], vec![("p", vec![i])]);
+            let item = m.items().remove(0);
+            (item.backlog_sync(), item.backlogged())
+        };
+        assert_eq!(case(Some(true), false), (Some(BacklogSync::LabelAdd), true));
+        assert_eq!(
+            case(Some(false), true),
+            (Some(BacklogSync::LabelRemove), false)
+        );
+        assert_eq!(case(None, true), (Some(BacklogSync::NotesTrue), true));
+        assert_eq!(case(None, false), (None, false));
+        assert_eq!(case(Some(true), true), (None, true));
+
+        let mut alone = task("p", "t", "solo");
+        alone.backlog = Some(true);
+        let m = model(vec![alone], vec![("p", vec![labelled(3, "Issue only")])]);
+        assert!(m.items().iter().all(|i| i.backlog_sync().is_none()));
+
+        let mut orphan = task("p", "t", "gh-9-x");
+        orphan.adopted = false;
+        orphan.backlog = Some(false);
+        let m = model(vec![orphan], vec![("p", vec![labelled(9, "X")])]);
+        let item = m.items().remove(0);
+        assert_eq!(item.backlog_sync(), None);
+        assert!(item.backlogged());
     }
 }

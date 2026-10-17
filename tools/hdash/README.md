@@ -43,6 +43,7 @@ does. `~/fun_worktrees` is not enumerated: it answers `present`, and nothing els
 | a task exists | `notes/P/T/TASK/task.json` | which tasks there are |
 | a task is checked out | `~/fun_worktrees/P/T/TASK` | `present` — Active vs Removed |
 | a task is done / blocked | `task.json` | the badges and the sort rank |
+| an item is backlogged | `task.json`, else the `backlog` label | which list mode shows it |
 | what the work *is* | the GitHub issue | title, labels, author, `topic:` |
 
 A worktree with no `task.json` behind it is an **orphan**: on disk, recorded nowhere. It
@@ -120,7 +121,12 @@ Two content toggles, both with load-bearing defaults:
 - **Show untagged** — on. An untagged issue is the one item the app cannot act on, so
   it is the one that most needs to be seen.
 
-Neither toggle can hide an orphan.
+A third toggle, **Show backlog**, switches the list: off, backlogged open work is hidden;
+on, only backlogged items that are not done are shown. The **Backlog** button on a card
+writes `task.json` and the issue's `backlog` label, whichever exist, and a disagreement
+between the two is settled in favour of `task.json` when the issue list lands.
+
+No toggle can hide an orphan.
 
 **"All" is a task list.** Issues are queried for the selected project only (see *Fetching*),
 so with no project selected there is nothing to show but tasks — an issue-only card under
@@ -131,7 +137,7 @@ The sidebar filters by project, and leads with the projects that have a `notes/<
 directory; the rest of `~/fun_repos` follows after a divider. Every project keeps a row —
 with issues fetched per selection, a missing row would mean unreachable issues. Counts
 ignore the project selection and session hides (a dismissal should not make a project's
-total drop) but do honour both toggles, so a project's badge can exceed the number of its
+total drop) but do honour the toggles, so a project's badge can exceed the number of its
 cards visible under "All".
 
 TODO(jb-doc): why selection, rather than a denylist or an ownership filter, is what scopes

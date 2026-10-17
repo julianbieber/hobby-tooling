@@ -92,14 +92,17 @@ def ensure-notes-dir [project: string, topic: string, task: string] {
 
 # --- task.json metadata -----------------------------------------------------
 # A task's metadata lives at notes/<project>/<topic>/<task>/task.json:
-#   { done: bool, blocked: {until?, reason?}|null }
+#   { done: bool, blocked: {until?, reason?}|null, backlog?: bool }
 # It outlives the worktree, so done/blocked state survives `hwt rm` and lets
 # `hwt restore` re-create the checkout. Tracked in the notes repo, not gitignored.
 #
 # Unlike the work module there is no `repos` field — the project is in the path,
 # and a task is exactly one repo. Because the file is tracked and hdash
-# writes it too, both writers must emit the same keys: `blocked` is always
-# present (null when unblocked), and nothing else is ever added.
+# writes it too, both writers must emit the same keys in the same order:
+# `blocked` is always present (null when unblocked), and `backlog` follows it
+# only once hdash has recorded one. No hwt verb sets `backlog`, but every
+# rewrite here carries it through: a dropped key reads as unrecorded, so a
+# task with no issue to re-take the label from would lose its mark.
 
 # Path to a task's task.json.
 def task-meta-path [project: string, topic: string, task: string] {
@@ -125,10 +128,12 @@ def read-task-meta [project: string, topic: string, task: string] {
     if not ($f | path exists) { return $default }
     let parsed = (try { open --raw $f | from json } catch { null })
     if not (($parsed | describe) | str starts-with 'record') { return $default }
-    {
+    let meta = {
         done: ($parsed.done? | default false)
         blocked: ($parsed.blocked? | default null)
     }
+    let backlog = ($parsed.backlog? | default null)
+    if $backlog == null { $meta } else { $meta | insert backlog $backlog }
 }
 
 # Write a task's task.json (creating the notes dir if needed). Never touches git.

@@ -1,6 +1,6 @@
 //! UI layer: static chrome built once, systems that rebuild the sidebar and item list when
-//! the model or selection changes, the three async fetches, and a global observer that
-//! turns button clicks into actions.
+//! the model or selection changes, the async fetches and label writes, and a global observer
+//! that turns button clicks into actions.
 
 mod card;
 mod chrome;
@@ -12,8 +12,8 @@ use bevy::prelude::*;
 
 use feathers_kit::{Activate, KitFonts, kit_tokens as kt, text, tok};
 
-use crate::model::issue::{FetchState, IssueMsg, fetch_issues};
-use crate::model::join::{ItemKey, Model, UiState, item_visible, scan};
+use crate::model::issue::{FetchState, IssueMsg, LabelMsg, fetch_issues, set_backlog_label};
+use crate::model::join::{BacklogSync, ItemKey, Model, UiState, item_visible, scan};
 use crate::model::launch::{
     launch_coordinator, launch_hcdev, launch_restore, launch_start, launch_terminal, open_notes,
     open_url,
@@ -21,15 +21,16 @@ use crate::model::launch::{
 use crate::model::pull::{PullMsg, PullOutcome, pull};
 use crate::model::task::{
     CachedPr, GitMsg, PrMsg, TaskId, adopt, clear_pr_cache, read_git, read_pr_cache,
-    read_pr_status, toggle_done, write_pr_cache,
+    read_pr_status, set_backlog, toggle_done, write_pr_cache,
 };
 
 use card::{
     CardAction, CardButton, PrButton, SubtaskButton, install_pr_hover_tokens, spawn_item_card,
 };
 use chrome::{
-    ClearCacheButton, ItemListContainer, ProjectButton, PullButton, RefreshButton, ShowDoneToggle,
-    ShowUntaggedToggle, build_chrome, ft_text_dim, rebuild_sidebar, update_header,
+    BacklogModeToggle, ClearCacheButton, ItemListContainer, ProjectButton, PullButton,
+    RefreshButton, ShowDoneToggle, ShowUntaggedToggle, build_chrome, ft_text_dim, rebuild_sidebar,
+    update_header,
 };
 use fetch::Fetch;
 
@@ -44,6 +45,9 @@ struct IssueFetch(Fetch<String, IssueMsg>);
 
 #[derive(Resource, Default)]
 struct PullFetch(Fetch<String, PullMsg>);
+
+#[derive(Resource, Default)]
+struct LabelFetch(Fetch<(String, u64), LabelMsg>);
 
 /// How long a *finished* pull's status line stays on screen, in seconds. A failure has no
 /// expiry — its reason has to stay readable — and clears on the next pull or Refresh.
@@ -101,6 +105,7 @@ impl Plugin for UiPlugin {
             .init_resource::<PrFetch>()
             .init_resource::<IssueFetch>()
             .init_resource::<PullFetch>()
+            .init_resource::<LabelFetch>()
             .init_resource::<Pulls>()
             // Registered up front, not inserted by `load_pr_cache`: `dispatch_all` takes it
             // as a plain `Res`, which panics on a missing resource, and relying on a
@@ -118,6 +123,7 @@ impl Plugin for UiPlugin {
                     drain_pr,
                     drain_issues,
                     drain_pulls,
+                    drain_labels,
                     expire_pull_lines,
                     dispatch_all
                         .run_if(resource_changed::<Model>.or_else(resource_changed::<UiState>)),
@@ -228,6 +234,50 @@ fn dispatch_prs(model: &Model, ui: &UiState, prs: &mut PrFetch, cache: &PrCache)
     }
 }
 
+fn write_label(labels: &mut LabelFetch, project: &str, number: u64, url: &str, backlog: bool) {
+    let (project, url) = (project.to_owned(), url.to_owned());
+    labels
+        .0
+        .dispatch((project.clone(), number), move || LabelMsg {
+            result: set_backlog_label(&url, backlog),
+            project,
+            number,
+            backlog,
+        });
+}
+
+fn unify_backlog(model: &mut Model, labels: &mut LabelFetch, projects: &[String]) {
+    let syncs: Vec<(TaskId, String, u64, String, BacklogSync)> = model
+        .items()
+        .into_iter()
+        .filter(|i| projects.iter().any(|p| p == i.project))
+        .filter_map(|i| {
+            let (task, issue) = (i.task?, i.issue?);
+            Some((
+                task.id.clone(),
+                i.project.to_owned(),
+                issue.number,
+                issue.url.clone(),
+                i.backlog_sync()?,
+            ))
+        })
+        .collect();
+    for (id, project, number, url, sync) in syncs {
+        match sync {
+            BacklogSync::LabelAdd => write_label(labels, &project, number, &url, true),
+            BacklogSync::LabelRemove => write_label(labels, &project, number, &url, false),
+            BacklogSync::NotesTrue => match set_backlog(&id, true) {
+                Ok(()) => {
+                    if let Some(task) = model.task_mut(&id) {
+                        task.backlog = Some(true);
+                    }
+                }
+                Err(err) => warn!("recording backlog failed for {id:?}: {err}"),
+            },
+        }
+    }
+}
+
 fn start_pull(project: &str, model: &Model, fetch: &mut PullFetch, pulls: &mut Pulls) {
     let Some(entry) = model.projects.iter().find(|p| p.project.name == project) else {
         return;
@@ -298,11 +348,12 @@ fn drain_pr(prs: Res<PrFetch>, mut model: ResMut<Model>, mut cache: ResMut<PrCac
     }
 }
 
-fn drain_issues(issues: Res<IssueFetch>, mut model: ResMut<Model>) {
+fn drain_issues(issues: Res<IssueFetch>, mut model: ResMut<Model>, mut labels: ResMut<LabelFetch>) {
     let msgs = issues.0.drain(64);
     if msgs.is_empty() {
         return;
     }
+    let landed: Vec<String> = msgs.iter().map(|m| m.project.clone()).collect();
     for msg in msgs {
         let Some(entry) = model.project_mut(&msg.project) else {
             continue;
@@ -315,6 +366,36 @@ fn drain_issues(issues: Res<IssueFetch>, mut model: ResMut<Model>) {
             Err(reason) => {
                 entry.issues.clear();
                 entry.state = FetchState::Failed(reason);
+            }
+        }
+    }
+    unify_backlog(&mut model, &mut labels, &landed);
+}
+
+fn drain_labels(mut labels: ResMut<LabelFetch>, mut model: ResMut<Model>) {
+    let msgs = labels.0.drain(64);
+    if msgs.is_empty() {
+        return;
+    }
+    for msg in msgs {
+        labels.0.forget(&(msg.project.clone(), msg.number));
+        let Some(issue) = model
+            .project_mut(&msg.project)
+            .and_then(|e| e.issues.iter_mut().find(|i| i.number == msg.number))
+        else {
+            continue;
+        };
+        match msg.result {
+            Ok(()) => {
+                issue.set_backlog_label_local(msg.backlog);
+                issue.label_error = None;
+            }
+            Err(reason) => {
+                warn!(
+                    "backlog label write failed for {}#{}: {reason}",
+                    msg.project, msg.number
+                );
+                issue.label_error = Some(reason);
             }
         }
     }
@@ -429,7 +510,7 @@ fn rebuild_item_list(
         let msg = if model.projects.is_empty() && model.tasks.is_empty() {
             "No projects under ~/fun_repos and no tasks in the notes repo."
         } else {
-            "Nothing here. Toggle \"show done\"/\"show untagged\", or pick another project."
+            "Nothing here. Toggle \"show done\"/\"show untagged\"/\"show backlog\", or pick another project."
         };
         commands
             .entity(c)
@@ -448,6 +529,7 @@ fn on_chrome_activate(
     pull_buttons: Query<&PullButton>,
     show_done: Query<(), With<ShowDoneToggle>>,
     show_untagged: Query<(), With<ShowUntaggedToggle>>,
+    backlog_mode: Query<(), With<BacklogModeToggle>>,
     refreshes: Query<(), With<RefreshButton>>,
     clears: Query<(), With<ClearCacheButton>>,
     mut ui: ResMut<UiState>,
@@ -477,6 +559,10 @@ fn on_chrome_activate(
     }
     if show_untagged.contains(e) {
         ui.show_untagged = !ui.show_untagged;
+        return;
+    }
+    if backlog_mode.contains(e) {
+        ui.backlog_mode = !ui.backlog_mode;
         return;
     }
     if refreshes.contains(e) {
@@ -511,6 +597,7 @@ fn on_card_activate(
     subtask_buttons: Query<&SubtaskButton>,
     mut ui: ResMut<UiState>,
     mut model: ResMut<Model>,
+    mut labels: ResMut<LabelFetch>,
 ) {
     let e = ev.entity;
 
@@ -526,8 +613,6 @@ fn on_card_activate(
         return;
     };
 
-    // The three actions that need no model lookup — two are pure UI state, and a done
-    // toggle needs the model mutably, which rules out holding an `Item` borrow.
     match btn.action {
         CardAction::Hide => {
             ui.hidden.insert(btn.key.clone());
@@ -552,6 +637,29 @@ fn on_card_activate(
                     }
                 }
                 Err(err) => warn!("toggle done failed for {id:?}: {err}"),
+            }
+            return;
+        }
+        CardAction::ToggleBacklog => {
+            let Some(item) = model.item(&btn.key) else {
+                return;
+            };
+            let backlog = !item.backlogged();
+            let task = item.task.filter(|t| t.adopted).map(|t| t.id.clone());
+            let issue = item
+                .issue
+                .map(|i| (item.project.to_owned(), i.number, i.url.clone()));
+            if let Some(id) = task {
+                if let Err(err) = set_backlog(&id, backlog) {
+                    warn!("recording backlog failed for {id:?}: {err}");
+                    return;
+                }
+                if let Some(task) = model.task_mut(&id) {
+                    task.backlog = Some(backlog);
+                }
+            }
+            if let Some((project, number, url)) = issue {
+                write_label(&mut labels, &project, number, &url, backlog);
             }
             return;
         }
@@ -614,7 +722,11 @@ fn on_card_activate(
                 open_url(&issue.url);
             }
         }
-        CardAction::Hide | CardAction::TogglePrs | CardAction::ToggleDone | CardAction::Adopt => {
+        CardAction::Hide
+        | CardAction::TogglePrs
+        | CardAction::ToggleDone
+        | CardAction::ToggleBacklog
+        | CardAction::Adopt => {
             unreachable!()
         }
     }

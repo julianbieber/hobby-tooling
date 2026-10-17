@@ -23,6 +23,9 @@ pub enum CardAction {
     ToggleDone,
     /// Write the missing `task.json` for an orphan worktree, making it a task.
     Adopt,
+    /// Flip the backlog mark on the task's `task.json` and the issue's `backlog` label,
+    /// whichever exist.
+    ToggleBacklog,
     /// Open an `hcdev` session in an existing worktree.
     Hcdev,
     /// `hwt new` the worktree, then open an `hcdev` session in it.
@@ -320,6 +323,18 @@ fn meta_row(commands: &mut Commands, fonts: &KitFonts, item: &Item<'_>, stage: S
         commands.entity(meta).add_child(c);
     }
 
+    if let Some(err) = item.issue.and_then(|i| i.label_error.as_ref()) {
+        let e = commands
+            .spawn(text(
+                fonts,
+                format!("· backlog label not written: {err}"),
+                12.0,
+                tok(kt::STATUS_CLOSED),
+            ))
+            .id();
+        commands.entity(meta).add_child(e);
+    }
+
     if let Some(reason) = item
         .task
         .and_then(|t| t.block.as_ref())
@@ -373,6 +388,20 @@ fn action_row(
                 if task.done { "Reopen" } else { "Done" },
             ));
         }
+    }
+    if item.task.map_or(item.issue.is_some(), |t| t.adopted) {
+        buttons.push(button(
+            commands,
+            Variant::Normal,
+            CardAction::ToggleBacklog,
+            if item.backlogged() {
+                "Unbacklog"
+            } else {
+                "Backlog"
+            },
+        ));
+    }
+    if let Some(task) = item.task {
         if task.present {
             buttons.push(button(
                 commands,
