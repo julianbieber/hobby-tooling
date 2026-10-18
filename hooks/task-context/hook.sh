@@ -47,7 +47,7 @@ coordinator_context() {
   local last
   last=$(find "$dir" -maxdepth 1 -type f -name '????-??-??.md' -printf '%f\n' 2>/dev/null | sort -r | head -n1 || true)
   [ -n "$last" ] && ctx="${ctx}Latest journal entry: ${last%.md}"$'\n'
-  ctx="${ctx}Issue tracking for hobby projects is GitHub issues via \`gh\`, not Jira."
+  ctx="${ctx}Issues for hobby projects are \`issue.md\` files in the task notes dirs — no GitHub issues, no Jira."
   emit "$ctx"
 }
 
@@ -116,6 +116,10 @@ if [ -d "$NOTES_DIR" ]; then
   # Most recent journal entry, so a resume knows where to pick up.
   LAST=$(find "$NOTES_DIR" -maxdepth 1 -type f -name '????-??-??.md' -printf '%f\n' 2>/dev/null | sort -r | head -n1 || true)
   [ -n "$LAST" ] && CTX="${CTX}Latest journal entry: ${LAST%.md}"$'\n'
+  if [ -f "$NOTES_DIR/issue.md" ]; then
+    ISSUE_TITLE=$(sed -n '2,/^---$/s/^title: *"\{0,1\}\(.*[^"]\)"\{0,1\} *$/\1/p' "$NOTES_DIR/issue.md" | head -n1)
+    CTX="${CTX}Issue: \`issue.md\` in the notes dir${ISSUE_TITLE:+ — ${ISSUE_TITLE}}"$'\n'
+  fi
   # Flag HMML specs so the hmml-* skills don't have to hunt for them.
   MML_COUNT=$(find "$NOTES_DIR" -maxdepth 1 -type f -name '*.hmml' 2>/dev/null | wc -l)
   [ "$MML_COUNT" -gt 0 ] && CTX="${CTX}HMML specs in notes: ${MML_COUNT}"$'\n'
@@ -123,7 +127,7 @@ else
   CTX="${CTX}Notes dir does not exist yet (would be \`${NOTES_DIR/#$HOME/\~}\`)."$'\n'
 fi
 
-CTX="${CTX}Issue tracking for hobby projects is GitHub issues via \`gh\`, not Jira."
+CTX="${CTX}Issues for hobby projects are \`issue.md\` files in the task notes dirs — no GitHub issues, no Jira."
 
 jaq -n --arg c "$CTX" '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $c}}'
 exit 0

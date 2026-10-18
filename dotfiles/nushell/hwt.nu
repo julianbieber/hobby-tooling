@@ -101,8 +101,7 @@ def ensure-notes-dir [project: string, topic: string, task: string] {
 # writes it too, both writers must emit the same keys in the same order:
 # `blocked` is always present (null when unblocked), and `backlog` follows it
 # only once hdash has recorded one. No hwt verb sets `backlog`, but every
-# rewrite here carries it through: a dropped key reads as unrecorded, so a
-# task with no issue to re-take the label from would lose its mark.
+# rewrite here carries it through, or the mark would be lost.
 
 # Path to a task's task.json.
 def task-meta-path [project: string, topic: string, task: string] {

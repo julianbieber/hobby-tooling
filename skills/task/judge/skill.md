@@ -130,6 +130,6 @@ PR. Append one line to `<notes dir>/YYYY-MM-DD.md`, in the format
 
 - **Re-running resumes.** `judged=` in `list` says what is already recorded, and a
   scenario already judged is skipped unless I ask for it again.
-- **No issue is filed.** The follow-up lines are the output, and
-  `/gh-issue-create` files them when I want them filed.
+- **No issue is written.** The follow-up lines are the output, and
+  `/issue-create` writes them up when I want them.
 - **The goal is never edited.** A goal that was wrong is itself a `wrong`.

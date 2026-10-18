@@ -15,7 +15,7 @@ told to skip a level. Where the two disagree, **this file wins**:
 | Task path is `~/worktrees/TOPIC/TASK/project` | `~/fun_worktrees/PROJECT/TOPIC/TASK` |
 | Task ID is the second subdirectory under `~/worktrees` | Task is the **third** level: project / topic / task |
 | Pre-cached schemas at `~/.claude/context/schemas/` | Not applicable — no databases here |
-| Jira for issue tracking | **GitHub issues**, via `gh` |
+| Jira for issue tracking | **`issue.md` in the task's notes dir** — no tracker |
 
 The CLI tool list in `~/CLAUDE.md` (ripgrep, fd, bat, sd, jaq, just, mise, dust,
 difftastic, bottom, …) is accurate and applies here too.
@@ -173,12 +173,9 @@ line already does here, and nothing consumes them.
 **Title** — same rule as a commit subject: imperative, capitalized, no trailing
 period, at most 72 characters, naming the effect.
 
-**Three sections, in this order, and nothing else** — above them, when the task has
-an issue, the one line that closes it:
+**Three sections, in this order, and nothing else:**
 
 ````markdown
-Closes #12
-
 ## What do we change
 
 One or two sentences. No more.
@@ -196,16 +193,6 @@ One or two sentences. No more.
 
 The PR carries the argument for the **whole change**. The commit bodies carry the
 per-decision record — do not restate them here, and never paste the diff.
-
-**A PR that has an issue closes it, and the body is the only thing that can.** The
-first line is `Closes #<n>` — GitHub then closes the issue the moment the PR merges,
-which is the only point at which the work is actually in the default branch. Leaving
-it out means closing the issue by hand later, which is to say not closing it. The
-issue number is the one in the task or branch name (`gh-12-…`), or the issue the
-brief named; a task with no issue writes no line, and never invents a number. The
-keyword fires only on a merge into the **default** branch, so a PR based on another
-branch has to name the issue again when it is re-targeted. The line is not a section
-and does not count against the three.
 
 **Why** is under the same sourcing rule as a commit message: it comes from my
 prompts, from what we settled in discussion, or from something you verified. Never
@@ -225,7 +212,7 @@ cover it (`cargo test -p hdash`, `just doctor`, CI).
 ## Task shaping
 
 Rules for carving a project into issues. They bind wherever work is split —
-`/task-split` runs the pass, `/gh-issue-create` checks the result before filing,
+`/task-split` runs the pass, `/issue-create` checks the result before writing it,
 and `/spawn` and `/subtask` are subject to them too.
 
 **1. Every task has a verifiable impact on user-driven behaviour.** What this
@@ -282,16 +269,25 @@ unverified cause is a question in the body, not a claim.
 **Working practices that were tangled up in the old policy and still hold:**
 
 - Before starting anything substantial, search for prior art
-  (`gh pr list --search`, `gh issue list --search`) and state the expected diff
+  (`gh pr list --search`, and `rg` over the project's `issue.md` files in the
+  notes) and state the expected diff
   size. No sweeping changes without prior discussion; do not accelerate past
   someone else's active work.
 - Never be a direct pipe. Findings get verified before they are reported.
 
 ## Issue Tracking
 
-GitHub issues via `gh`, never Jira. `gh issue list`, `gh issue view <n>`,
-`gh issue comment <n>`. The `/gh-issue-create` and `/gh-issue-update` skills wrap
-the common cases.
+**The notes repo is the only tracker** — no GitHub issues, never Jira. These repos
+have one author, so a second record of the same work was bookkeeping with nothing
+to coordinate. An issue is `issue.md` beside `task.json` in
+`notes/<project>/<topic>/<task>/`: zk frontmatter (`title`, `created`, tag
+`issue`) and the problem statement, with dated progress entries appended under
+`## Progress`. `/issue-create` writes or refreshes one, `/issue-update` appends
+progress. A task needs no issue; `task.json` alone is a complete task.
+
+New task names are plain slugs. A `gh-<n>` prefix on an older task is part of its
+name and points at a closed GitHub issue, whose content was copied into that
+task's `issue.md` (with a `github:` line naming it).
 
 ## Git Identity
 

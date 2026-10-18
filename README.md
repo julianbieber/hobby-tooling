@@ -106,11 +106,11 @@ names.
 | `hcdev` | Zellij dev sessions with Helix + Claude side by side, on the hobby account |
 | `chobby` | Bare `claude` on the hobby account |
 | `hx-claude` | `$EDITOR` for ctrl-g — Helix on the prompt buffer, conversation in a vsplit |
-| `hdash` | Bevy dashboard over every work item — GitHub issues, the worktrees they become, PRs, done. One card per piece of work |
+| `hdash` | Bevy dashboard over every task in the notes tree — the issue it records, its worktree, PRs, done. One card per piece of work |
 | `hcoord` | The coordinator's task-list pane (ratatui) and `hcoord wait`, which blocks a coordinator on a task's pipeline state |
 | `hobby-mml-lsp` | HMML language server, routed to `.hmml` specs by file type |
 | 4 vendored LSPs | `claude-lsp`, `claude-skills-lsp`, `treesitter-class-lsp`, `path-lsp` — buildable without the work checkout |
-| 24 skills | Task loop (journal, resume, spawn, subtask, triage, reflect), HMML suite, comment review, PR + task:build, the unattended task:auto and task:coordinate, the goal interview task:goal and the judgement pass task:judge, GitHub issues |
+| 24 skills | Task loop (journal, resume, spawn, subtask, triage, reflect), HMML suite, comment review, PR + task:build, the unattended task:auto and task:coordinate, the goal interview task:goal and the judgement pass task:judge, issues in the notes |
 
 ## Account Separation
 

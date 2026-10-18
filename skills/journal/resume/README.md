@@ -47,5 +47,5 @@ shortcut the pick prompt when it resolves to a single candidate.
 
 - Requires the team notes repo at
   `~/fun_repos/hobby-mimisbrunnr/notes/`.
-- The GitHub-issue fallback only fires when the task name carries a `gh-<number>`
-  prefix; tasks without an issue degrade to "summarize what exists and ask".
+- The issue fallback only fires when the notes dir holds an `issue.md`; tasks
+  without one degrade to "summarize what exists and ask".

@@ -1,17 +1,17 @@
 ---
-description: Carve a project or an oversized issue into a sequence of tasks that each satisfy the task-shaping rules, and hand back the list for me to edit before any of it is filed
-allowed-tools: Bash(git branch:*), Bash(git log:*), Bash(git remote:*), Bash(pwd:*), Bash(ls:*), Bash(gh issue:*), Bash(gh pr:*), Read, Grep, Glob
+description: Carve a project or an oversized issue into a sequence of tasks that each satisfy the task-shaping rules, and hand back the list for me to edit before any of it is written up
+allowed-tools: Bash(git branch:*), Bash(git log:*), Bash(git remote:*), Bash(pwd:*), Bash(ls:*), Bash(rg:*), Bash(gh pr:*), Read, Grep, Glob
 ---
 
 Take a body of work and produce the ordered list of tasks it should be split
 into, with each one tested against the shaping rules in `CLAUDE.md`.
 
-**Arguments:** $ARGUMENTS — the project, goal, or issue number to carve up. If
+**Arguments:** $ARGUMENTS — the project, goal, or task with an `issue.md` to carve up. If
 empty, ask what is being split.
 
-**This skill files nothing.** Its output is a proposed list for me to edit;
-turning an accepted entry into an issue is `/gh-issue-create`, one at a time,
-because the body and the topic label are per-issue decisions.
+**This skill writes nothing.** Its output is a proposed list for me to edit;
+turning an accepted entry into an issue is `/issue-create`, one at a time,
+because the body, the topic and the task name are per-issue decisions.
 
 ## The rules this pass applies
 
@@ -29,7 +29,7 @@ applying them and the re-cuts to reach for when one fails.
 2. **Search prior art** before proposing anything, as `CLAUDE.md` requires:
 
    ```bash
-   gh issue list --search "<terms>" --state all
+   rg -il "<terms>" ~/fun_repos/hobby-mimisbrunnr/notes/<project>/*/*/issue.md
    gh pr list --search "<terms>" --state all
    ```
 
@@ -75,9 +75,10 @@ applying them and the re-cuts to reach for when one fails.
    candidates and the re-cuts — I want to see what was rejected and why, not only
    what survived.
 
-8. **Suggest the follow-up**, once I accept the list: `/gh-issue-create` per
-   entry, in order. Mention that each issue needs its own `topic:` label and that
-   the dependency lines below should become issue references in the bodies.
+8. **Suggest the follow-up**, once I accept the list: `/issue-create` per
+   entry, in order. Mention that each issue needs its own topic and that the
+   dependency lines below should become task references (`<topic>/<task>`) in the
+   bodies.
 
 ## Output layout
 

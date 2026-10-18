@@ -5,33 +5,36 @@
 | Type         | desktop app (Bevy)                                          |
 | Binary       | `hdash`                                                     |
 | Owner        | @julianbieber                                               |
-| Dependencies | `hwt`/`hcdev` on PATH, alacritty, nushell, `gh` (authenticated) |
+| Dependencies | `hwt`/`hcdev` on PATH, alacritty, nushell, `gh` (authenticated, for PR status) |
 | Status       | experimental                                                |
 
 ## Description
 
-A desktop dashboard of every hobby work item: **one card per piece of work**,
-wherever it sits in the lifecycle. An open GitHub issue nobody has started, the
-worktree it became, the PRs that came out of it, and the day it was marked done are
-all the same card — not four rows in two windows.
+A desktop dashboard of every hobby work item: **one card per task in the notes repo**,
+wherever it sits in the lifecycle. A task nobody has started, the worktree it became,
+the PRs that came out of it, and the day it was marked done are all the same card.
 
-Replaces `hwt-overview` and `hgh-issues`, which were the same app over two halves of
-one list.
+The card's headline is the `title:` in the task's `issue.md` frontmatter (what
+`/issue-create` writes), falling back to the task name.
 
 ## The card is a lifecycle, and the primary button is the next step
 
 | Stage | Condition | Primary button |
 | --- | --- | --- |
 | orphan | a worktree with no `task.json` in the notes repo | **Adopt** — writes the `task.json` |
-| untagged | an issue with no usable `topic:` label | *(none — a line names the missing label)* |
-| startable | a tagged issue with no worktree | **Start task** — `hwt new` then `hcdev wt` |
+| not started | `task.json`, no worktree, and no branch of that name in the main checkout | **Start task** — `hwt restore` then `hcdev wt` |
 | active | a live worktree | **Open hcdev** |
-| removed | worktree gone, notes kept | **Restore** — `hwt restore` then `hcdev wt` |
+| removed | worktree gone, branch and notes kept | **Restore** — `hwt restore` then `hcdev wt` |
 | done | `done` in `task.json` | **Open hcdev** (and **Reopen**) |
 | coordinator | a task under the reserved `coordinator` topic | **Open coordinator** — `hcdev coordinator` in the main checkout; the card shows the `tasks.json` counts |
 
-Plus, as they apply: **Done**/**Reopen**, **Terminal**, **Notes**, **Browser** (any
-card with an issue half — something neither predecessor could offer), **Hide**.
+Plus, as they apply: **Done**/**Reopen**, **Backlog**/**Unbacklog**, **Terminal**,
+**Notes**, **Hide**.
+
+*Not started* and *removed* run the same command: `hwt restore` re-creates a worktree on
+its existing branch, and creates the branch from the main checkout's `HEAD` when there is
+none. The branch check is one `git for-each-ref` per project with a worktree-less task,
+during the scan; a checkout that cannot be read leaves its tasks at *removed*.
 
 ## A task exists because the notes repo says so
 
@@ -41,10 +44,11 @@ does. `~/fun_worktrees` is not enumerated: it answers `present`, and nothing els
 | | source | answers |
 | --- | --- | --- |
 | a task exists | `notes/P/T/TASK/task.json` | which tasks there are |
-| a task is checked out | `~/fun_worktrees/P/T/TASK` | `present` — Active vs Removed |
+| a task is checked out | `~/fun_worktrees/P/T/TASK` | `present` — Active vs Removed / Not started |
+| a task was ever started | a branch named after it in `~/fun_repos/P` | Removed vs Not started |
 | a task is done / blocked | `task.json` | the badges and the sort rank |
-| an item is backlogged | `task.json`, else the `backlog` label | which list mode shows it |
-| what the work *is* | the GitHub issue | title, labels, author, `topic:` |
+| an item is backlogged | `task.json` | which list mode shows it |
+| what the work *is* | `notes/P/T/TASK/issue.md` | the card's title |
 
 A worktree with no `task.json` behind it is an **orphan**: on disk, recorded nowhere. It
 gets a card at the top of the list with an **Adopt** button that writes the file, byte for
@@ -57,98 +61,37 @@ TODO(jb-doc): why the notes repo, and not the worktree tree, is the thing that d
 
 TODO(jb-doc): why an orphan is surfaced for a click rather than adopted during the scan
 
-## The join is what makes it one list
-
-An issue's worktree is named `gh-<number>-<slug>`, so the two halves are matched on
-the **number**:
-
-```
-issue #7  +  ~/fun_worktrees/wusel/perf/issue-7_chunk_loading   ->  one card
-```
-
-Matching on the number rather than on the derived name is what catches the
-pre-convention spellings (`issue-9_dotfile_repo_retire`) and survives an issue title
-being edited. `gh-42-x`, `gh42-x`, `issue-42_x` and bare `gh-42` all belong to issue
-42; `gh-421-x` and `some-task-42` do not.
-
-The match never crosses projects, and if two worktrees claim one issue the first in
-`(project, topic, name)` order wins while the other keeps its own card — nothing is
-silently dropped. **Open hcdev** always takes topic and task from the worktree path,
-never from the `topic:` label, because the path is what `hcdev wt` has to find.
-
-Because the task half already holds `~/fun_worktrees`, the issue half touches no
-filesystem at all — the per-issue directory walk `hgh-issues` did is gone.
-
-## `topic:<name>` is the one thing an issue cannot supply
-
-A worktree lives at `~/fun_worktrees/PROJECT/TOPIC/TASK`. An issue implies two of
-those three — the project is the repo it was filed in, the task is
-`gh-<number>-<slug>` — so the topic rides on a label:
-
-```
-labels: [topic:features, bug]   ->  ~/fun_worktrees/<proj>/features/gh-42-<slug>
-labels: [bug, enhancement]      ->  untagged; nothing to launch
-```
-
-Prefixed rather than bare, because a repo's ordinary labels (`bug`, `enhancement`,
-`good first issue`) must never be read as topics, and the prefix lets an issue name a
-topic whose directory does not exist yet — the normal case. The value must look like
-a directory name (`[A-Za-z0-9._-]+`, no leading dot); anything else is treated as
-*untagged* rather than escaped, since it becomes both a path component and a shell
-argument. `/gh-issue-create` writes the label, so issues opened through the skill
-arrive launchable.
-
 ## Order and filters
 
-The list is **flat and globally sorted** — not grouped by topic, because an unstarted
-issue has a topic *label* and no topic *directory* to group under. Rank, then most
-recent activity, then name:
+The list is **flat and globally sorted**, with project and topic printed on the card.
+Rank, then most recent activity, then name:
 
 ```
-0  orphan worktree                  5  issue tagged, no worktree
-1  task, block lifted ("ready")     6  task removed-but-remembered
-2  task active, PR awaiting review  7  issue untagged
-3  task active                      8  task done
+0  orphan worktree                  5  task not started
+1  task, block lifted ("ready")     6  task removed-but-remembered, or a coordinator
+2  task active, PR awaiting review  8  task done
+3  task active
 4  task blocked
 ```
 
-This keeps both predecessors' orders: `hwt-overview`'s ready < active < blocked <
-done and `hgh-issues`' worktree < tagged < untagged.
-
-Two content toggles, both with load-bearing defaults:
-
-- **Show done** — off. Done tasks outnumber open ones ~25:1 and would swamp the list.
-- **Show untagged** — on. An untagged issue is the one item the app cannot act on, so
-  it is the one that most needs to be seen.
-
-A third toggle, **Show backlog**, switches the list: off, backlogged open work is hidden;
-on, only backlogged items that are not done are shown. The **Backlog** button on a card
-writes `task.json` and the issue's `backlog` label, whichever exist, and a disagreement
-between the two is settled in favour of `task.json` when the issue list lands.
+**Show done** is off by default: done tasks outnumber open ones ~25:1 and would swamp the
+list. **Show backlog** switches the list: off, backlogged open work is hidden; on, only
+backlogged items that are not done are shown. The **Backlog** button writes `backlog` into
+`task.json`, after `blocked`, in the same key order `hwt` writes.
 
 No toggle can hide an orphan.
 
-**"All" is a task list.** Issues are queried for the selected project only (see *Fetching*),
-so with no project selected there is nothing to show but tasks — an issue-only card under
-"All" would report whichever projects happened to be visited this session and no others.
-Select a project to see its issues.
-
-The sidebar filters by project, and leads with the projects that have a `notes/<project>/`
-directory; the rest of `~/fun_repos` follows after a divider. Every project keeps a row —
-with issues fetched per selection, a missing row would mean unreachable issues. Counts
-ignore the project selection and session hides (a dismissal should not make a project's
-total drop) but do honour the toggles, so a project's badge can exceed the number of its
-cards visible under "All".
-
-TODO(jb-doc): why selection, rather than a denylist or an ownership filter, is what scopes
-the issue query
+The sidebar lists the projects with a `notes/<project>/` directory — an upstream clone
+under `~/fun_repos` with no notes gets no row — plus any project an orphan worktree sits
+in. Counts ignore the project selection and session hides (a dismissal should not make a
+project's total drop) but do honour the toggles, so a project's badge can exceed the
+number of its cards visible under "All".
 
 ## Pull — the one thing here that writes to a repo
 
 Each project's sidebar row carries a **Pull** button that runs `git pull --ff-only` in
 that project's main checkout (`~/fun_repos/<project>`), in the background. Not on the
-"All" row: `~/fun_repos` holds upstream clones too (see the limitations below), so one
-click that pulls every checkout would fire dozens of network fetches nobody asked for.
+"All" row, and not on a project with no checkout at `~/fun_repos/<project>`.
 
 `--ff-only` is the whole safety story. A diverged or dirty checkout is **refused**, with
 git's own reason on a line above the item list, rather than silently growing a merge
@@ -167,32 +110,26 @@ branch you are working on.
 
 ## Fetching
 
-Three async reads, all through one `Fetch<K, M>` keyed at-most-once fan-out onto the
+Two async reads and one write, all through one `Fetch<K, M>` keyed at-most-once fan-out onto the
 `IoTaskPool`:
 
 | | key | scope | cache |
 | --- | --- | --- | --- |
 | git status | (task, repo) | every present task | none |
 | PR status (`gh pr view`) | (task, PR) | visible items | terminal states, on disk |
-| issues (`gh issue list`) | project | the **selected** project only | none |
 | pull (`git pull --ff-only`) | project | clicked projects only | none |
 
 Git is eager because a local `git status` is cheap and the branch is what makes the
-list readable immediately. The other two reads are lazy: `gh` is a network call. The
+list readable immediately. The PR read is lazy: `gh` is a network call. The
 pull is neither — it writes, so it happens on a click and never as a side effect of a
 filter change, and its guard is dropped as soon as it answers so the same repo can be
 pulled again.
-
-Issues go one step further than lazy: under "All" **no** issue query is made at all.
-`~/fun_repos` holds ~50 checkouts, and querying every one of them on startup is what the
-Known Limitations below used to describe.
 
 The PR cache holds only **merged/closed** statuses — the states that can never change
 — in `~/.cache/hdash/pr-status.json`, falling back once to `hwt-overview`'s old path
 so the rename does not cost a re-query of every merged PR. **Refresh** re-scans and
 re-queries but keeps the cache; **Clear cache** wipes it so merged/closed PRs are
-checked again too. Open issues are never cached: they change on GitHub's side, so a
-cache could only serve stale data.
+checked again too.
 
 ## Install
 
@@ -223,25 +160,11 @@ crates/feathers_kit  — a fork of the work repo's kit; domain-agnostic Bevy UI 
                        (cards, rows, badges, scroll lists, tokens). The fork exists so
                        the work dashboard cannot regress; this is the only copy here.
 crates/hwt_core      — well-known paths, detached process spawning, date/time helpers
-crates/hdash_app     — model/{task,issue,join,launch} and ui/{chrome,card,fetch}
+crates/hdash_app     — model/{task,project,item,launch,pull} and ui/{chrome,card,fetch}
 ```
 
 ## Known Limitations
 
-- **`~/fun_repos` holds upstream clones, not just my projects.** Selecting `bevy` or
-  `helix` still fetches its 200 open issues (the fetch cap), none of which is work here.
-  There is no denylist or ownership filter — only the selection gate, which keeps them out
-  of the default view.
-- A **closed** issue whose task still exists shows as an unjoined task:
-  `gh issue list --state open` never returns it. Closing an issue therefore does not mark
-  its task done, and marking a task done does not close its issue — `task.json` is the only
-  authority on `done`.
-- **The issue ↔ task link is parsed from the directory name** (`matches_issue`), not
-  recorded, so a task named for no issue can never join one.
-- Projects with no GitHub remote (`bevy_asset_lsp` is on codeberg) and forks with
-  issues disabled report a red line. Aggregated to one line while "All" is selected;
-  select the project to see the reason.
-- No issue *editing*: labels, comments, and closing are `gh`/`/gh-issue-*` work.
 - Launch actions assume alacritty + nushell with `hwt.nu`/`hcdev.nu` loaded.
-- `Start task` runs `hwt new`, which needs the project's main checkout at
-  `~/fun_repos/<project>`.
+- **Start task** and **Restore** run `hwt restore`, which needs the project's main
+  checkout at `~/fun_repos/<project>`.

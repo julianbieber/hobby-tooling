@@ -25,9 +25,7 @@ the second the topic. Example: `~/fun_worktrees/bevy_survivor/features/gh-42-ene
 task `gh-42-enemy-waves`, topic `features`.
 
 b. **From git branch**: Run `git branch --show-current`. Use the branch name
-**verbatim** as the task ID (skip `main`, `master`, `laptop`, `develop`). A
-`gh-<number>` pattern in it is the **GitHub issue number** for API calls only —
-never the notes-directory name.
+**verbatim** as the task ID (skip `main`, `master`, `laptop`, `develop`).
 
 c. **From user input**: If in `~/fun_repos` directly, ask which task to resume or
 list recent `~/fun_repos/hobby-mimisbrunnr/notes/` files.
@@ -47,11 +45,9 @@ If no task ID can be determined, ask the user for it.
 If the notes dir **doesn't exist** or contains **no journal `.md` files** (only
 `task.json` / `prs.json`, or nothing), do NOT spawn a subagent. Instead:
 
-- **Fetch GitHub issue context (fallback)**: if the task name carries a
-  `gh-<number>` prefix, run
-  `gh issue view <number> --repo julianbieber/<project> --comments` and review the
-  description, comments, and state. If there is no such prefix, skip this — a
-  hobby task often has no issue at all.
+- **Read the issue (fallback)**: if the notes dir holds an `issue.md`, read it —
+  the problem statement and its `## Progress` entries. If there is none, skip
+  this — a hobby task often has no issue at all.
 - Summarize what little exists and **ask the user how to proceed**.
 - Stop here — the rest of this skill is for tasks with real journal history.
 

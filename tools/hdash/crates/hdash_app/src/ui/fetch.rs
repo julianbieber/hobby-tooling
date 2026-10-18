@@ -1,10 +1,5 @@
-//! One generic for the async work: the reads (git status, PR status, issue lists) and the
-//! writes a click asks for (pulls, `backlog` labels).
-//!
-//! Both pre-merge dashboards wrote this out by hand — `hwt-overview` twice, `hgh-issues`
-//! once — as a `Sender` kept alongside a `Mutex<Receiver>` plus a `dispatched` set, a
-//! `kick_*` startup system, a `kick_*_on_change` system, a `dispatch_visible_*` and a
-//! `drain_*`. The three differed only in their key and payload types.
+//! The async work: one keyed, at-most-once fan-out for the reads (git status, PR status) and
+//! the writes a click asks for (pulls).
 //!
 //! Two properties are load-bearing and easy to lose:
 //!

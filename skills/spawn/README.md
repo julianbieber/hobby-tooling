@@ -15,9 +15,7 @@ sets up its directories — but launches nothing. Given a subgoal it:
 
 - Detects the parent task context from `pwd` (must be inside a
   `~/fun_worktrees/PROJECT/TOPIC/TASK` worktree).
-- Derives a blurb from the subgoal and names the new task `gh-{number}-{blurb}`
-  when the parent carries a GitHub-issue prefix (e.g. `gh-42-enemy-waves`), else just
-  `{blurb}`.
+- Derives a blurb from the subgoal and names the new task `{blurb}`.
 - Creates the worktree (same topic + project) via `hwt new`.
 - Seeds the subtask's notes directory with a stub `implementation.md` carrying
   the brief and a link back to the parent.
@@ -28,8 +26,8 @@ The subtask is surfaced under the parent task in the `hdash` dashboard,
 where the dashboard's open action launches it. `/spawn` never starts a session
 itself.
 
-Sibling to `subtask`: `/subtask` optionally mints a **new** GitHub issue;
-`/spawn` reuses the parent's GitHub issue number with a new blurb and records ownership.
+Sibling to `subtask`: `/subtask` optionally writes the subtask an `issue.md` of its
+own; `/spawn` links back to the parent's and records ownership.
 
 ## Installation
 

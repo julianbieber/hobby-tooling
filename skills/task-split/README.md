@@ -11,9 +11,9 @@
 ## Description
 
 Carves a project, or an issue that turned out to be too big, into an ordered list
-of tasks that each satisfy the **Task shaping** rules in `CLAUDE.md`. It files
+of tasks that each satisfy the **Task shaping** rules in `CLAUDE.md`. It writes
 nothing — the output is a list to edit, and an accepted entry becomes an issue
-through `/gh-issue-create`.
+through `/issue-create`.
 
 ## Where the rules live, and why not here
 
@@ -74,7 +74,7 @@ people optimise against rather than satisfy.
 
 ## Related
 
-- `/gh-issue-create` — turns one accepted entry into an issue, and runs the shape
-  check before filing
+- `/issue-create` — turns one accepted entry into an issue, and runs the shape
+  check before writing it
 - `/subtask`, `/spawn` — splitting work already in progress; bound by the same
   rules

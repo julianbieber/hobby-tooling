@@ -268,8 +268,7 @@ written.
 It refuses, writing nothing, a goal that fails `lint` (an open `?` included), a
 task that owns no scenario, a list with no `goal`, and a task whose notes already
 hold a `build-task.json` — `--force` overwrites both files. It makes no network
-call: for a `gh-<n>` task the brief names the issue and the `Closes #<n>` line the
-PR needs, and the issue's own text is not read.
+call.
 
 ## A hand scenario is captured, not checked
 

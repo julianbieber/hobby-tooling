@@ -24,7 +24,7 @@ the check.
 4. **A screen that exists is captured, never drawn from the code.** Only a
    `(target)` screen is drawn.
 5. **Nothing is filed and nothing is built.** The output is `goal.md` and
-   `tasks.json`. `/gh-issue-create` files an entry; `hcdev coordinator` runs the
+   `tasks.json`. `/issue-create` writes an entry up; `hcdev coordinator` runs the
    list.
 6. **The notes repo is never committed**, and there is no machine attribution
    anywhere.
@@ -195,8 +195,8 @@ must print `ok`.
 
 Print the goal path, the lint line, the screens captured, the task list as a
 table (number, task, title, scenarios, depends on) and `tasks.json`'s path. One
-closing line: nothing is filed — `/gh-issue-create` files an entry when I want it
-filed, and `hcdev coordinator <blurb>` from the project starts the run.
+closing line: nothing is filed — `/issue-create` writes an entry up when I want
+it, and `hcdev coordinator <blurb>` from the project starts the run.
 
 Append one line to `<coordinator dir>/YYYY-MM-DD.md` naming the goal and the
 split, in the format `/task:coordinate` describes under *Journal* (front matter

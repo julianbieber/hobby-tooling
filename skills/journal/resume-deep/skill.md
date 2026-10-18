@@ -22,8 +22,7 @@ single structured pass.
    b. **From git branch**: Run `git branch --show-current`
 
    - Use the branch name **verbatim** as the task ID (skip `main`, `master`,
-     `develop`). A `gh-<number>` pattern in it is the **GitHub issue number**,
-     for `gh issue` calls only — never the notes-directory name.
+     `develop`).
 
    c. **From user input**: If above methods fail, ask which task to resume or
    list recent `~/fun_repos/hobby-mimisbrunnr/notes/` files

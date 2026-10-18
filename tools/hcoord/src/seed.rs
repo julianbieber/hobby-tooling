@@ -258,11 +258,6 @@ fn brief(
         format!("- title: {}", entry.title),
         format!("- goal: `{}`", goal_path.display()),
     ];
-    if let Some(n) = issue_number(&entry.task) {
-        this.push(format!(
-            "- GitHub: issue #{n}; the PR body's first line is `Closes #{n}`"
-        ));
-    }
     if let Some(note) = &entry.note {
         this.push(format!("- note from the split: {note}"));
     }
@@ -359,15 +354,6 @@ fn business_context(task: &str, goal_path: &Path, selected: &[&Decision], today:
         out.push_str(&format!("\n## {}\n\n{}", d.handle, d.text));
     }
     out
-}
-
-fn issue_number(task: &str) -> Option<&str> {
-    let rest = task.strip_prefix("gh-")?;
-    let digits = rest
-        .find(|c: char| !c.is_ascii_digit())
-        .unwrap_or(rest.len());
-    let boundary = rest[digits..].is_empty() || rest[digits..].starts_with('-');
-    (digits > 0 && boundary).then(|| &rest[..digits])
 }
 
 #[cfg(test)]
@@ -511,30 +497,6 @@ mod tests {
         )
         .unwrap_err();
         assert!(e.contains("open question"), "{e}");
-    }
-
-    // Pins that the `Closes #<n>` line is derived from a `gh-<digits>` task name and
-    // from no other.
-    #[test]
-    fn the_issue_line_appears_only_for_a_gh_task() {
-        let coord = two_tasks();
-        let plain = seeded(&coord, 0).unwrap();
-        assert!(
-            !state(&plain)["brief"]
-                .as_str()
-                .unwrap()
-                .contains("Closes #")
-        );
-        let gh = seeded(&coord, 1).unwrap();
-        assert!(
-            state(&gh)["brief"]
-                .as_str()
-                .unwrap()
-                .contains("issue #7; the PR body's first line is `Closes #7`")
-        );
-        assert_eq!(issue_number("gh-12"), Some("12"));
-        assert_eq!(issue_number("gh-x-1"), None);
-        assert_eq!(issue_number("gh-12x"), None);
     }
 
     // Pins `model` as the task's, else the list's, else omitted (`hauto` then passes no

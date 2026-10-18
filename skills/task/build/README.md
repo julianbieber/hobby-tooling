@@ -12,8 +12,8 @@
 ## Description
 
 The whole task as one pipeline with a recorded stage. Asks once whether this is
-really one task; takes a brief from a description, a GitHub issue, or the task
-notes; specs the unit as it is today; collects the business context only I have;
+really one task; takes a brief from a description, the task's `issue.md`, or the
+task notes; specs the unit as it is today; collects the business context only I have;
 writes the change on top of that baseline as `# +` / `# -` annotations; loops on
 my review until the delta is right; implements and tests; runs `/comment-pass`
 and `/structure`; stops for me to read the diff; then the PR and the journal
