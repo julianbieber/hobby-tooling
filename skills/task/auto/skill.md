@@ -1,6 +1,6 @@
 ---
 description: Run a task unattended in two separate processes — a headless plan stage that reads the code once and writes plan.md, then a fresh build stage that implements from the plan alone and, unattended, runs the acceptance observation as commands before the PR opens, or hands me the running app when I am there to look
-argument-hint: 'plan | build [<description> | #<issue>]'
+argument-hint: 'plan | build [<description> | --issue]'
 allowed-tools: Skill, Read, Write, Edit, Bash
 ---
 
@@ -114,8 +114,8 @@ to `planned`; `build` runs from `planned` to `done`. A `build` invoked with no
 resumes at that phase (this is `hauto`'s `--continue` path).
 
 **The brief** is the seeded state file's `brief` when `brief_source` is
-`coordinator`; otherwise the argument after the stage — free text, or `#<n>`
-via `gh issue view`. Record it verbatim.
+`coordinator`; otherwise the argument after the stage — free text, or `--issue`
+for the task's `issue.md`. Record it verbatim.
 
 Announce `{project, topic, task, stage, phase}` in one line and run.
 
@@ -144,8 +144,8 @@ same turn. Finish by telling me to exit the session.
 
 **P2 — Read the code once.** Find the units the change lands in — the plugin,
 system, module or command — and read them, plus whatever they call that the
-change touches. Prior art check: `gh pr list --search` and
-`gh issue list --search` on the repo, reported in the plan, never a stop.
+change touches. Prior art check: `gh pr list --search` on the repo and `rg -il` over the
+project's `issue.md` files in the notes, reported in the plan, never a stop.
 A `structure.hstruct` at the root is read and its relevant standards named.
 
 **P3 — Turn the acceptance observation into commands.** Unattended only; an
@@ -372,10 +372,7 @@ ______________________________________________________________________
 4. `git push -u origin <branch>`.
 5. `gh pr create`: title in commit-subject shape, the three sections and
    nothing else per `~/.claude-hobby/CLAUDE.md`. The manual-test bullets are
-   the acceptance observation plus the `run` command. A task that has an issue
-   — a `gh-<number>` in the task or branch name, or the issue the brief was
-   read from — opens the body with `Closes #<number>`, which is what closes it
-   on merge. No issue, no line; never a guessed number. Unattended, the
+   the acceptance observation plus the `run` command. Unattended, the
    manual-test bullets are the acceptance check commands, which are known to
    pass because the PR would not be open otherwise.
 6. Record the PR in `prs.json` if the `track-pr` hook did not, and as `pr` in

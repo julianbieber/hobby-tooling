@@ -49,8 +49,8 @@ not one this pass makes for me.
 
 ## What it deliberately does not do
 
-- **File issues.** The follow-up lines are the output; `/gh-issue-create` files
-  them when I choose.
+- **Write issues.** The follow-up lines are the output; `/issue-create` writes
+  them up when I choose.
 - **Edit the goal.** A goal that was wrong is itself a `wrong`.
 - **Write into the running application's own files.** The goal's decision `tune`
   says a tune is a change to the project's code.

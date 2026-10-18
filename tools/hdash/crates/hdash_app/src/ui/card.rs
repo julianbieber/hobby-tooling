@@ -1,6 +1,5 @@
-//! One card per item, whatever stage it is at. The two pre-merge dashboards hand-rolled
-//! the same recipe — header row, meta row, action row ending in a Primary button — over
-//! their own data; here it is written once and switches on [`Stage`].
+//! One card per item, whatever stage it is at: header row, meta row, action row ending in a
+//! Primary button chosen by [`Stage`].
 
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
@@ -13,24 +12,22 @@ use feathers_kit::{
 use hwt_core::rel_time;
 
 use super::chrome::{ft_text_dim, ft_text_main};
-use crate::model::join::{Item, ItemKey, Stage};
+use crate::model::item::{Item, Stage};
 use crate::model::task::{Pr, PrStatus, Repo, SubtaskRef, Task, TaskId};
 
-/// What a card button does. The union of both pre-merge action sets.
+/// What a card button does.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CardAction {
     /// Flip the `done` flag in the task's `task.json`.
     ToggleDone,
     /// Write the missing `task.json` for an orphan worktree, making it a task.
     Adopt,
-    /// Flip the backlog mark on the task's `task.json` and the issue's `backlog` label,
-    /// whichever exist.
+    /// Flip the backlog mark in the task's `task.json`.
     ToggleBacklog,
     /// Open an `hcdev` session in an existing worktree.
     Hcdev,
-    /// `hwt new` the worktree, then open an `hcdev` session in it.
-    Start,
-    /// `hwt restore` a removed worktree.
+    /// `hwt restore` the worktree — a removed one, or a first one for a task not started —
+    /// then open an `hcdev` session in it.
     Restore,
     /// Open (or re-attach) the coordinator session for a task under the `coordinator` topic.
     Coordinator,
@@ -38,20 +35,18 @@ pub enum CardAction {
     Terminal,
     /// Terminal in the task's notes directory.
     Notes,
-    /// Open the issue on GitHub.
-    Browse,
     /// Dismiss this item for the session.
     Hide,
     /// Expand/collapse the PR list.
     TogglePrs,
 }
 
-/// A button on an item card. The [`ItemKey`] identifies the item; the model is re-read on
+/// A button on an item card. The [`TaskId`] identifies the item; the model is re-read on
 /// click so the action always uses current data.
 #[derive(Component, Clone)]
 pub struct CardButton {
     pub action: CardAction,
-    pub key: ItemKey,
+    pub key: TaskId,
 }
 
 /// A clickable PR button carrying the PR's GitHub URL; clicking opens it in the browser.
@@ -78,22 +73,21 @@ pub fn spawn_item_card(
     prs_expanded: bool,
 ) -> Entity {
     let stage = item.stage();
-    let key = item.key();
+    let key = item.task.id.clone();
     let card_id = commands.spawn(card(())).id();
 
     let header = header_row(commands, fonts, item, stage);
-    let meta = meta_row(commands, fonts, item, stage);
+    let meta = meta_row(commands, fonts, item);
     commands.entity(card_id).add_children(&[header, meta]);
 
-    if let Some(task) = item.task {
-        if !task.prs.is_empty() {
-            let section = pr_section(commands, fonts, task, prs_expanded);
-            commands.entity(card_id).add_child(section);
-        }
-        if !task.subtasks.is_empty() {
-            let section = subtask_section(commands, fonts, task);
-            commands.entity(card_id).add_child(section);
-        }
+    let task = item.task;
+    if !task.prs.is_empty() {
+        let section = pr_section(commands, fonts, task, prs_expanded);
+        commands.entity(card_id).add_child(section);
+    }
+    if !task.subtasks.is_empty() {
+        let section = subtask_section(commands, fonts, task);
+        commands.entity(card_id).add_child(section);
     }
 
     let actions = action_row(commands, fonts, item, stage, &key);
@@ -104,38 +98,17 @@ pub fn spawn_item_card(
 fn header_row(commands: &mut Commands, fonts: &KitFonts, item: &Item<'_>, stage: Stage) -> Entity {
     let header = commands.spawn(row(feathers_kit::sp::S, ())).id();
 
+    let task = item.task;
     let dot = match stage {
         Stage::Done => DotState::Done,
-        // Green means "a live worktree with nothing uncommitted". Everything else — an
-        // unstarted issue, a removed worktree, uncommitted work — is amber.
-        Stage::Active if item.task.is_some_and(|t| t.dirty_total() == 0) => DotState::Clean,
-        Stage::Coordinator
-            if item
-                .task
-                .and_then(|t| t.coordinator.as_ref())
-                .is_none_or(|c| c.wants_me() == 0) =>
-        {
+        Stage::Active if task.dirty_total() == 0 => DotState::Clean,
+        Stage::Coordinator if task.coordinator.as_ref().is_none_or(|c| c.wants_me() == 0) => {
             DotState::Clean
         }
-        Stage::Orphan => DotState::Dirty,
         _ => DotState::Dirty,
     };
     let dot_id = commands.spawn(status_dot(dot)).id();
     commands.entity(header).add_child(dot_id);
-
-    // The issue number, when there is an issue — the one thing a joined card shows that
-    // neither pre-merge dashboard could.
-    if let Some(issue) = item.issue {
-        let num = commands
-            .spawn(text_mono(
-                fonts,
-                format!("#{}", issue.number),
-                13.0,
-                tok(ft_text_dim()),
-            ))
-            .id();
-        commands.entity(header).add_child(num);
-    }
 
     let title = commands
         .spawn(text_bold(
@@ -148,94 +121,61 @@ fn header_row(commands: &mut Commands, fonts: &KitFonts, item: &Item<'_>, stage:
     let grow = commands.spawn(spacer_grow()).id();
     commands.entity(header).add_children(&[title, grow]);
 
-    // Topic badge. Accent when it comes from a `topic:` label — there it is the thing
-    // that makes the item launchable — and a plain chip when it is just a path level.
-    match (item.topic(), stage) {
-        (_, Stage::Untagged) => {
-            // Nothing to launch without a topic, so say so rather than showing a dead button.
-            let b = commands
-                .spawn(badge(fonts, "untagged", kt::CHIP_BG, tok(ft_text_dim())))
-                .id();
-            commands.entity(header).add_child(b);
-        }
-        (Some(topic), Stage::Startable) => {
-            let b = commands
-                .spawn(badge(
-                    fonts,
-                    format!("topic:{topic}"),
-                    kt::ACCENT,
-                    tok(kt::PANEL_BG),
-                ))
-                .id();
-            commands.entity(header).add_child(b);
-        }
-        (Some(topic), _) => {
-            let b = commands
-                .spawn(badge(
-                    fonts,
-                    topic.to_owned(),
-                    kt::CHIP_BG,
-                    tok(ft_text_dim()),
-                ))
-                .id();
-            commands.entity(header).add_child(b);
-        }
-        (None, _) => {}
-    }
+    let topic = commands
+        .spawn(badge(
+            fonts,
+            item.topic().to_owned(),
+            kt::CHIP_BG,
+            tok(ft_text_dim()),
+        ))
+        .id();
+    commands.entity(header).add_child(topic);
 
-    if let Some(task) = item.task {
-        if task.done {
-            let b = commands
-                .spawn(badge(fonts, "done", kt::DOT_DONE, tok(ft_text_main())))
-                .id();
-            commands.entity(header).add_child(b);
-        } else if task.ready() {
-            // Block has lifted: highlight in the attention colour with the date it freed up.
-            let until = task
-                .block
-                .as_ref()
-                .and_then(|b| b.until.clone())
-                .unwrap_or_default();
-            let b = commands
-                .spawn(badge(
-                    fonts,
-                    format!("ready · {until}"),
-                    kt::DOT_DIRTY,
-                    tok(ft_text_main()),
-                ))
-                .id();
-            commands.entity(header).add_child(b);
-        } else if let Some(block) = &task.block {
-            let label = match &block.until {
-                Some(until) => format!("blocked · until {until}"),
-                None => "blocked".to_string(),
-            };
-            let b = commands
-                .spawn(badge(fonts, label, kt::CHIP_BG, tok(ft_text_dim())))
-                .id();
-            commands.entity(header).add_child(b);
-        }
-        if !task.adopted {
-            let b = commands
-                .spawn(badge(fonts, "orphan", kt::DOT_DIRTY, tok(ft_text_main())))
-                .id();
-            commands.entity(header).add_child(b);
-        } else if task.is_coordinator() {
-            let b = commands
-                .spawn(badge(fonts, "coordinator", kt::ACCENT, tok(kt::PANEL_BG)))
-                .id();
-            commands.entity(header).add_child(b);
-        } else if !task.present {
-            let b = commands
-                .spawn(badge(fonts, "removed", kt::CHIP_BG, tok(ft_text_dim())))
-                .id();
-            commands.entity(header).add_child(b);
-        }
+    if task.done {
+        let b = commands
+            .spawn(badge(fonts, "done", kt::DOT_DONE, tok(ft_text_main())))
+            .id();
+        commands.entity(header).add_child(b);
+    } else if task.ready() {
+        let until = task
+            .block
+            .as_ref()
+            .and_then(|b| b.until.clone())
+            .unwrap_or_default();
+        let b = commands
+            .spawn(badge(
+                fonts,
+                format!("ready · {until}"),
+                kt::DOT_DIRTY,
+                tok(ft_text_main()),
+            ))
+            .id();
+        commands.entity(header).add_child(b);
+    } else if let Some(block) = &task.block {
+        let label = match &block.until {
+            Some(until) => format!("blocked · until {until}"),
+            None => "blocked".to_string(),
+        };
+        let b = commands
+            .spawn(badge(fonts, label, kt::CHIP_BG, tok(ft_text_dim())))
+            .id();
+        commands.entity(header).add_child(b);
+    }
+    let state_badge = match stage {
+        Stage::Orphan => Some(("orphan", kt::DOT_DIRTY, ft_text_main())),
+        _ if task.is_coordinator() => Some(("coordinator", kt::ACCENT, kt::PANEL_BG)),
+        Stage::NotStarted => Some(("not started", kt::CHIP_BG, ft_text_dim())),
+        _ if !task.present => Some(("removed", kt::CHIP_BG, ft_text_dim())),
+        _ => None,
+    };
+    if let Some((label, bg, fg)) = state_badge {
+        let b = commands.spawn(badge(fonts, label, bg, tok(fg))).id();
+        commands.entity(header).add_child(b);
     }
     header
 }
 
-fn meta_row(commands: &mut Commands, fonts: &KitFonts, item: &Item<'_>, stage: Stage) -> Entity {
+fn meta_row(commands: &mut Commands, fonts: &KitFonts, item: &Item<'_>) -> Entity {
     let meta = commands
         .spawn(Node {
             flex_direction: FlexDirection::Row,
@@ -247,43 +187,22 @@ fn meta_row(commands: &mut Commands, fonts: &KitFonts, item: &Item<'_>, stage: S
         })
         .id();
 
-    // With one flat list across projects, the project has to be on the card — it is no
-    // longer implied by a section the card sits in.
-    let mut line = item.project.to_owned();
-    if let Some(topic) = item.topic() {
-        line.push_str(&format!(" · {topic}"));
-    }
-    if let Some(task) = item.task
-        && let Some(t) = task.last_active
-    {
+    let task = item.task;
+    let mut line = format!("{} · {}", item.project(), item.topic());
+    if let Some(t) = task.last_active {
         line.push_str(&format!(" · {}", rel_time(t)));
-    } else if let Some(t) = item.issue.and_then(|i| i.updated) {
-        line.push_str(&format!(" · updated {}", rel_time(t)));
-    }
-    if let Some(author) = item.issue.and_then(|i| i.author.as_ref()) {
-        line.push_str(&format!(" · @{author}"));
     }
     let line_id = commands
         .spawn(text(fonts, line, 12.0, tok(ft_text_dim())))
         .id();
     commands.entity(meta).add_child(line_id);
 
-    // Repo chip only for a live worktree: a removed task has no git to read, so its chip
-    // would sit at "…" forever.
-    if let Some(task) = item.task
-        && task.present
-    {
+    if task.present {
         for repo in &task.repos {
             let chip = repo_chip(commands, fonts, repo);
             commands.entity(meta).add_child(chip);
         }
-    }
-
-    // The task/branch name — for an unstarted issue this is what **Start task** will
-    // create, which is worth seeing before clicking; for a removed task it is what
-    // **Restore** will re-create. A live worktree already prints it as the branch in the
-    // chip just above, so printing it again only doubled the row.
-    if !item.task.is_some_and(|t| t.present) {
+    } else {
         let name = commands
             .spawn(text_mono(
                 fonts,
@@ -295,23 +214,7 @@ fn meta_row(commands: &mut Commands, fonts: &KitFonts, item: &Item<'_>, stage: S
         commands.entity(meta).add_child(name);
     }
 
-    // Labels only on cards with no task half: once there is a worktree the row is already
-    // carrying project, topic, time, branch and dirty count, and `bug`/`enhancement` chips
-    // stop earning their space.
-    if matches!(stage, Stage::Startable | Stage::Untagged)
-        && let Some(issue) = item.issue
-    {
-        for label in issue.other_labels() {
-            let chip = commands
-                .spawn(badge(fonts, label.clone(), kt::CHIP_BG, tok(ft_text_dim())))
-                .id();
-            commands.entity(meta).add_child(chip);
-        }
-    }
-
-    if let Some(task) = item.task
-        && task.is_coordinator()
-    {
+    if task.is_coordinator() {
         let (line, color) = match &task.coordinator {
             Some(counts) if counts.wants_me() > 0 => (counts.summary(), kt::DOT_DIRTY),
             Some(counts) => (counts.summary(), ft_text_main()),
@@ -323,23 +226,7 @@ fn meta_row(commands: &mut Commands, fonts: &KitFonts, item: &Item<'_>, stage: S
         commands.entity(meta).add_child(c);
     }
 
-    if let Some(err) = item.issue.and_then(|i| i.label_error.as_ref()) {
-        let e = commands
-            .spawn(text(
-                fonts,
-                format!("· backlog label not written: {err}"),
-                12.0,
-                tok(kt::STATUS_CLOSED),
-            ))
-            .id();
-        commands.entity(meta).add_child(e);
-    }
-
-    if let Some(reason) = item
-        .task
-        .and_then(|t| t.block.as_ref())
-        .and_then(|b| b.reason.as_ref())
-    {
+    if let Some(reason) = task.block.as_ref().and_then(|b| b.reason.as_ref()) {
         let r = commands
             .spawn(text(fonts, format!("· {reason}"), 12.0, tok(ft_text_dim())))
             .id();
@@ -353,7 +240,7 @@ fn action_row(
     fonts: &KitFonts,
     item: &Item<'_>,
     stage: Stage,
-    key: &ItemKey,
+    key: &TaskId,
 ) -> Entity {
     let actions = commands
         .spawn(Node {
@@ -377,19 +264,15 @@ fn action_row(
             .id()
     };
 
+    let task = item.task;
     let mut buttons = Vec::new();
-    if let Some(task) = item.task {
-        // An orphan has no `task.json` to flip, and Adopt is the only thing to do with it.
-        if task.adopted {
-            buttons.push(button(
-                commands,
-                Variant::Normal,
-                CardAction::ToggleDone,
-                if task.done { "Reopen" } else { "Done" },
-            ));
-        }
-    }
-    if item.task.map_or(item.issue.is_some(), |t| t.adopted) {
+    if task.adopted {
+        buttons.push(button(
+            commands,
+            Variant::Normal,
+            CardAction::ToggleDone,
+            if task.done { "Reopen" } else { "Done" },
+        ));
         buttons.push(button(
             commands,
             Variant::Normal,
@@ -401,34 +284,24 @@ fn action_row(
             },
         ));
     }
-    if let Some(task) = item.task {
-        if task.present {
-            buttons.push(button(
-                commands,
-                Variant::Normal,
-                CardAction::Terminal,
-                "Terminal",
-            ));
-        }
+    if task.present {
         buttons.push(button(
             commands,
             Variant::Normal,
-            CardAction::Notes,
-            "Notes",
+            CardAction::Terminal,
+            "Terminal",
         ));
     }
-    if item.issue.is_some() {
-        buttons.push(button(
-            commands,
-            Variant::Normal,
-            CardAction::Browse,
-            "Browser",
-        ));
-    }
+    buttons.push(button(
+        commands,
+        Variant::Normal,
+        CardAction::Notes,
+        "Notes",
+    ));
     buttons.push(button(commands, Variant::Normal, CardAction::Hide, "Hide"));
 
     match stage {
-        Stage::Done if item.task.is_some_and(Task::is_coordinator) => buttons.push(button(
+        Stage::Done if task.is_coordinator() => buttons.push(button(
             commands,
             Variant::Primary,
             CardAction::Coordinator,
@@ -452,23 +325,12 @@ fn action_row(
             CardAction::Coordinator,
             "Open coordinator",
         )),
-        Stage::Startable => buttons.push(button(
+        Stage::NotStarted => buttons.push(button(
             commands,
             Variant::Primary,
-            CardAction::Start,
+            CardAction::Restore,
             "Start task",
         )),
-        Stage::Untagged => {
-            let hint = commands
-                .spawn(text(
-                    fonts,
-                    "add a topic:<name> label to start a task",
-                    12.0,
-                    tok(ft_text_dim()),
-                ))
-                .id();
-            buttons.push(hint);
-        }
         Stage::Orphan => {
             let hint = commands
                 .spawn(text(
@@ -600,7 +462,7 @@ fn pr_section(commands: &mut Commands, fonts: &KitFonts, task: &Task, expanded: 
             Variant::Normal,
             CardButton {
                 action: CardAction::TogglePrs,
-                key: ItemKey::Task(task.id.clone()),
+                key: task.id.clone(),
             },
             format!("{arrow} PRs ({})", task.prs.len()),
         ))

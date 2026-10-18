@@ -298,21 +298,8 @@ here until the PR has landed. The task is not `done` while it is open, and no
    - `outcome: merged` → go to W6.
    - exit 1 → `gh` failed. `status: blocked`, `note` with the error, stop.
 
-**W6 — The issue, then done.** A merged PR whose body carried its closing line
-has already closed the issue; this confirms it rather than trusting it.
-
-1. Only when the task name carries a `gh-<number>` prefix — the tasks this
-   coordinator creates do not, so this is usually one skipped line:
-   ```bash
-   gh issue view <number> --json state
-   ```
-   `OPEN` means the closing line was missing or the PR did not merge into the
-   default branch. Close it, naming the PR, and say so in the note:
-   ```bash
-   gh issue close <number> --reason completed --comment "Merged in <pr url>."
-   ```
-2. `status: done`, `updated`, clear `note`, keep `pr`. Print one line naming the task and its PR,
-   and a journal line naming the PR. Back to W1.
+**W6 — Done.** `status: done`, `updated`, clear `note`, keep `pr`. Print one
+line naming the task and its PR, and a journal line naming the PR. Back to W1.
 
 `hwt`, `hcdev` and `hcoord` are all on `PATH`; each `nu -l -c` is a fresh
 login shell so the modules are loaded.
@@ -336,7 +323,7 @@ The coordinator has no worktree, so `journal:write` cannot find it. Write
 `<coordinator notes dir>/YYYY-MM-DD.md` directly, in the same front matter
 as any task journal (`title: "<blurb> — coordinator"`, `created`, tag
 `journal`), appending one timestamped line per event: task started (with
-base), gate reached, PR opened, PR merged and by whom, an issue closed by hand,
+base), gate reached, PR opened, PR merged and by whom,
 task done, anything refused. Terse; the task's own journal has the detail.
 
 ## Notes on scope
@@ -349,9 +336,9 @@ task done, anything refused. Terse; the task's own journal has the detail.
 - **Editing `tasks.json` by hand is fine** between tasks — reorder, drop, add.
   The file is re-read at every W1. A running task's entry is the one thing not
   to edit.
-- **No GitHub issues are filed.** `/gh-issue-create` is an editing session,
-  and this skill is meant to run without one. File them afterwards from the
-  PRs if you want the record.
+- **No issues are written.** `/issue-create` is an editing session, and this
+  skill is meant to run without one. The tasks it creates are recorded by their
+  `task.json` and the brief in `tasks.json`, which is the record.
 - **The coordinator never pushes to the default branch.** A merge it makes is
   `gh pr merge` on a PR whose checks are green, and only when `merge` says
   `coordinator`.

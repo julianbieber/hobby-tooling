@@ -1,26 +1,22 @@
-//! The task half of the model: the notes filesystem scan, git status reads, PR
-//! status via `gh`, and the `task.json` done flag. No Bevy UI here.
+//! The tasks: the notes filesystem scan, git status reads, PR status via `gh`, and the
+//! `task.json` marks. No Bevy UI here.
 //!
 //! A task is a notes directory carrying a `task.json`. The worktree under
 //! `~/fun_worktrees/PROJECT/TOPIC/TASK` is not consulted for existence — only for
 //! [`Task::present`]. A worktree with no `task.json` behind it is an **orphan**
 //! ([`scan_orphan_worktrees`]), carried as a `Task` with `adopted: false`.
 //!
-//! Unlike the pre-merge `hwt-overview`, tasks are **not** grouped into topics here: an
-//! unstarted issue has a topic *label* and no topic *directory*, so the merged list groups
-//! by project only and carries the topic as a card label. See [`super::join`].
-//!
 //! The notes repo decides rather than the worktree tree because `~/fun_worktrees` answers one
 //! question only — *is it checked out* — and is never enumerated to find out what work there
 //! is. `hwt` reads the same file by the same rule, so its task count and the dashboard's agree.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bevy::prelude::*;
-use hwt_core::{days_from_civil, git_capture, parse_ymd};
+use hwt_core::{days_from_civil, git_capture, parse_ymd, projects_root};
 use serde::{Deserialize, Serialize};
 
 pub use hwt_core::{notes_root, worktrees_root};
@@ -311,16 +307,21 @@ pub struct Task {
     pub present: bool,
     /// Whether the notes repo records this task at all. `false` marks an **orphan**: a worktree
     /// on disk with no `task.json` behind it. It stays a `Task` rather than its own type so the
-    /// join, the sort, the git-status plumbing and the card handle it unchanged; the stage and
+    /// sort, the git-status plumbing and the card handle it unchanged; the stage and
     /// the **Adopt** button are the only things that read this flag.
     pub adopted: bool,
     /// Whether the task is marked done in its `task.json`.
     pub done: bool,
     /// Block from `task.json`, if present.
     pub block: Option<Block>,
-    /// Backlog mark from `task.json`: `None` until one has been set, which is what lets a fresh
-    /// `task.json` defer to its issue's `backlog` label rather than overrule it.
+    /// Backlog mark from `task.json`: `None` until one has been set.
     pub backlog: Option<bool>,
+    /// The `title:` from the task's `issue.md` frontmatter, if it has one.
+    pub title: Option<String>,
+    /// Whether a branch named after the task exists in the project's main checkout, locally
+    /// or on a remote. Always `true` for a present worktree, and for a removed task whose
+    /// checkout could not be read; `false` only when the checkout answered and had none.
+    pub has_branch: bool,
     /// Repos checked out under this task (may be empty).
     pub repos: Vec<Repo>,
     /// Pull requests declared in the task's `prs.json` (live status loaded async).
@@ -531,11 +532,11 @@ fn collect_tasks(
 /// scalar lets the async git-status plumbing and the card rendering stay as they are.
 ///
 /// The result is in `(project, topic, name)` order with the orphans after the tasks —
-/// deterministic, but not display order; [`super::join::Model::items`] applies the merged
+/// deterministic, but not display order; [`super::item::Model::items`] applies the display
 /// sort.
 ///
 /// Orphans ride in this vector rather than a second field on the model so that every consumer —
-/// the join, the merged sort, the async git-status fetches, the card — treats them as tasks with
+/// the sort, the async git-status fetches, the card — treats them as tasks with
 /// nothing special done for them. `adopted` is the only thing that tells them apart.
 pub fn scan_tasks() -> Vec<Task> {
     let mut by_group: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
@@ -559,8 +560,58 @@ pub fn scan_tasks() -> Vec<Task> {
             tasks.push(task);
         }
     }
+    mark_unstarted(&mut tasks);
     tasks.extend(scan_orphan_worktrees());
     tasks
+}
+
+fn mark_unstarted(tasks: &mut [Task]) {
+    let projects: BTreeSet<String> = tasks
+        .iter()
+        .filter(|t| !t.present && !t.is_coordinator())
+        .map(|t| t.id.project.clone())
+        .collect();
+    for project in projects {
+        let Some(branches) = branch_names(&projects_root().join(&project)) else {
+            continue;
+        };
+        for task in tasks
+            .iter_mut()
+            .filter(|t| t.id.project == project && !t.present && !t.is_coordinator())
+        {
+            task.has_branch = branches.contains(&task.id.name);
+        }
+    }
+}
+
+fn branch_names(checkout: &Path) -> Option<HashSet<String>> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(checkout)
+        .args([
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/heads",
+            "refs/remotes",
+        ])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    Some(parse_branch_refs(&String::from_utf8_lossy(&out.stdout)))
+}
+
+fn parse_branch_refs(refs: &str) -> HashSet<String> {
+    refs.lines()
+        .filter_map(|r| {
+            r.strip_prefix("refs/heads/").or_else(|| {
+                r.strip_prefix("refs/remotes/")
+                    .and_then(|rest| rest.split_once('/'))
+                    .map(|(_, branch)| branch)
+            })
+        })
+        .filter(|b| *b != "HEAD")
+        .map(str::to_owned)
+        .collect()
 }
 
 /// Every worktree under `~/fun_worktrees/PROJECT/TOPIC/TASK` with no `task.json` in the
@@ -603,6 +654,9 @@ fn build_task(id: TaskId, adopted: bool, done: bool, block: Option<Block>) -> Ta
     let subtasks = read_subtasks(&id);
     let last_active =
         notes_path(&id).and_then(|p| std::fs::metadata(&p).ok().and_then(|m| m.modified().ok()));
+    let title = std::fs::read_to_string(issue_path(&id))
+        .ok()
+        .and_then(|text| frontmatter_title(&text));
     let coordinator = (id.topic == COORDINATOR_TOPIC)
         .then(|| std::fs::read_to_string(coordinator_tasks_path(&id)).ok())
         .flatten()
@@ -616,12 +670,35 @@ fn build_task(id: TaskId, adopted: bool, done: bool, block: Option<Block>) -> Ta
         done,
         block,
         backlog: None,
+        title,
+        has_branch: true,
         repos,
         prs,
         subtasks,
         last_active,
         coordinator,
     }
+}
+
+/// Path to a task's `issue.md` in the notes tree: `notes/PROJECT/TOPIC/TASK/issue.md`.
+pub fn issue_path(id: &TaskId) -> PathBuf {
+    notes_root().join(id.rel()).join("issue.md")
+}
+
+fn frontmatter_title(text: &str) -> Option<String> {
+    let mut lines = text.lines();
+    if lines.next()?.trim_end() != "---" {
+        return None;
+    }
+    let value = lines
+        .take_while(|l| l.trim_end() != "---")
+        .find_map(|l| l.strip_prefix("title:"))?
+        .trim();
+    let unquoted = match value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
+        Some(inner) => inner.replace("\\\"", "\""),
+        None => value.to_owned(),
+    };
+    (!unquoted.is_empty()).then_some(unquoted)
 }
 
 /// Path to a coordinator's `tasks.json`: `notes/PROJECT/coordinator/BLURB/tasks.json`.
@@ -799,8 +876,7 @@ pub fn set_backlog(id: &TaskId, backlog: bool) -> std::io::Result<()> {
 }
 
 /// Record an orphan worktree as a task by writing the `task.json` it is missing:
-/// `{ done: false, blocked: null }`, the same bytes `hwt new` writes. `backlog` is left
-/// unrecorded, so a joined issue's `backlog` label carries over instead of being cleared.
+/// `{ done: false, blocked: null }`, the same bytes `hwt new` writes.
 ///
 /// Writing the file here rather than shelling out to `hwt` keeps the dashboard's one write to the
 /// same fields `hwt new` produces, with no dependency on `hwt` being on `PATH` and no
@@ -1113,6 +1189,39 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Pins what a card headline reads from `issue.md`: the frontmatter's `title:`, quoted or
+    // bare, and nothing from a file without frontmatter or from the body.
+    #[test]
+    fn issue_title_comes_from_the_frontmatter_only() {
+        let doc = "---\ntitle: \"Seasons \\\"and\\\" weather\"\ncreated: 2026-10-18\n---\n\ntitle: body\n";
+        assert_eq!(
+            frontmatter_title(doc).as_deref(),
+            Some("Seasons \"and\" weather")
+        );
+        assert_eq!(
+            frontmatter_title("---\ntitle: Bare\n---\n").as_deref(),
+            Some("Bare")
+        );
+        assert_eq!(frontmatter_title("# title: no frontmatter\n"), None);
+        assert_eq!(
+            frontmatter_title("---\ncreated: x\n---\ntitle: late\n"),
+            None
+        );
+        assert_eq!(frontmatter_title("---\ntitle: \"\"\n---\n"), None);
+    }
+
+    // Pins the branch set a not-started task is judged against: local and remote branches by
+    // their bare name, slashes kept, and a remote's `HEAD` pointer not counted as a branch.
+    #[test]
+    fn branch_refs_are_named_without_their_remote() {
+        let set = parse_branch_refs(
+            "refs/heads/main\nrefs/heads/feature/x\nrefs/remotes/origin/HEAD\nrefs/remotes/origin/gh-9-y\nrefs/remotes/up/a/b\n",
+        );
+        let mut names: Vec<&str> = set.iter().map(String::as_str).collect();
+        names.sort();
+        assert_eq!(names, vec!["a/b", "feature/x", "gh-9-y", "main"]);
     }
 
     // A status the dashboard does not know falls into `todo`, which would have reported a

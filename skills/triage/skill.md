@@ -29,7 +29,7 @@ one.
 
 4. **Ask the user to decide** on each item. Offer these options per item:
 
-   - **do** — Create a task for it (GitHub issue or worktree). Ask for priority.
+   - **do** — Create a task for it (an issue in the notes, or a worktree). Ask for priority.
    - **defer** — Keep it open, optionally set a review date
    - **drop** — Remove it (not worth doing). Mark as `- [x] DROPPED:` with
      reason
@@ -43,7 +43,7 @@ one.
 
    - Update `~/.claude-hobby/context/known-issues.md` Action Items section
      (check/uncheck, add notes)
-   - For **do** items: offer to create a GitHub issue via `/gh-issue-create` or set
+   - For **do** items: offer to write an issue via `/issue-create` or set
      up a worktree
    - For **drop**/**done** items: move from `- [ ]` to `- [x]` with annotation
    - For **defer** items: append `(deferred until YYYY-MM-DD)` if a date was

@@ -6,7 +6,7 @@ name = "hdash_app"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
-description = "A Bevy desktop dashboard of hobby work items: GitHub issues and the worktrees, PRs and notes they become."
+description = "A Bevy desktop dashboard of hobby work items: the tasks in the notes repo and their worktrees and PRs."
 
 [[bin]]
 name = "hdash"

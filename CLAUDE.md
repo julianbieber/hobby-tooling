@@ -44,37 +44,33 @@ tools/hdash/                          # the work dashboard (Bevy)
 tools/hcoord/                         # the coordinator's task-list pane + `hcoord wait` (ratatui)
 ```
 
-## `topic:<name>` is how an issue names its worktree
+## An issue is a notes file, because these repos have one author
 
-`hdash` lists open GitHub issues and turns one into a dev session with a
-click. The whole thing rests on a label. A worktree lives at
-`~/fun_worktrees/PROJECT/TOPIC/TASK`, and an issue already implies two of those
-three — the **project** is the repo it was filed in, the **task** is
-`gh-<number>-<slug>` from its number and title. **Topic is the one component
-nothing else supplies**, so the issue carries it as `topic:features`.
+An issue is `issue.md` beside `task.json` in `notes/<project>/<topic>/<task>/` — zk
+frontmatter (`title`, `created`, tag `issue`) and the problem statement, with dated
+entries appended under `## Progress`. `/issue-create` writes or refreshes one,
+`/issue-update` appends progress, and `hdash` shows the `title:` on the task's card.
+There is no GitHub issue behind it and nothing reads one.
 
-Prefixed, with no fallback to bare labels. Every hobby repo already has `bug`,
-`enhancement`, `good first issue` from GitHub's defaults, and `wusel` labels its
-issues `world_gen` / `world_sim` / `persistence` — all of which read like topics
-and none of which are. Requiring the prefix keeps the tag an explicit statement
-rather than a guess, and lets an issue name a topic whose directory does not exist
-yet, which is the normal case: a topic dir only appears with the first worktree
-under it. The value must be directory-shaped (`[A-Za-z0-9._-]+`, no leading dot);
-anything else is treated as untagged rather than escaped, because it becomes both
-a path component and a shell argument.
+**It used to be a GitHub issue, and that was double bookkeeping.** Every piece of
+work with an issue was recorded twice — the issue said what the work was, `task.json`
+said it existed — and most of the machinery around the two existed only to make them
+agree: a `topic:<name>` label to supply the one path component an issue could not
+imply, a match from worktree name to issue number that had to accept three
+historical spellings, untagged-issue cards that could not be launched, and a
+`backlog` label mirrored against `task.json` with a rule for which side wins. These
+repos are worked on alone, so the second record coordinated nothing. It was
+dropped, not reconciled.
 
-An untagged issue is still listed — it is the one that most needs attention — but
-it has no launch button, only a line naming the missing label. `/gh-issue-create`
-writes the label (creating it in the repo when absent), so issues opened through
-the skill arrive launchable.
+The open issues were migrated rather than abandoned: each got `issue.md` in its
+task's notes dir (seven of them a new notes dir, named `gh-<n>-<slug>` like the rest
+of their generation), carrying the body and comments verbatim and a `github:` line
+naming the original, which was then closed with a comment pointing at the notes.
 
-Existing worktrees are matched to issues **by number, not by task name**:
-`gh-42-*`, `gh42-*`, `issue-42_*` and bare `gh-42` all belong to issue 42. Task
-names predating the convention are spelled differently (`issue-9_dotfile_repo_retire`)
-and a slug changes whenever the title is edited, so the derived name is what a
-*new* task gets, never what a lookup relies on. When such a worktree exists, its
-path — not the label — supplies the topic for `hcdev wt`, since the path is what
-`hcdev` has to find.
+**New tasks are plain slugs.** `gh-<n>` had a number to point at; a notes entry does
+not, and a per-project counter would be a second thing to keep in step for no reader.
+Existing `gh-<n>-…` names stay — a name is a path and a branch, and renaming either
+buys nothing.
 
 ## The notes repo is what makes a task exist
 
@@ -86,8 +82,8 @@ checked out*, and is never enumerated to find out what work there is.
 |---|---|---|
 | a task exists | `notes/P/T/TASK/task.json` | which tasks there are |
 | a task is checked out | `~/fun_worktrees/P/T/TASK` | Active vs Removed |
-| done / blocked | `task.json` | state, and nothing on GitHub |
-| what the work *is* | the GitHub issue | title, labels, author, `topic:` |
+| done / blocked / backlog | `task.json` | state |
+| what the work *is* | `notes/P/T/TASK/issue.md`, when there is one | title, problem, progress |
 
 `hdash` and `hwt` apply the same rule from the same file — `scan_tasks` reads the notes
 tree, `known-tasks` reads the notes tree — so `hwt list | length` and the dashboard's task
@@ -99,13 +95,8 @@ A worktree with no `task.json` behind it is an **orphan**: on disk, recorded now
 `hwt orphans` lists them; `hdash` gives each one a card at the top of the list with an
 **Adopt** button that writes the file. Nothing adopts silently — a scan never writes.
 
-Two things this rule deliberately does **not** buy:
-
-- **Issue-less tasks stay first-class.** `hwt new` does not touch GitHub, and a notes dir
-  alone is a complete task. GitHub is the source of truth for the tasks that have an issue.
-- **`done` is local.** `task.json` is the only authority; closing an issue does not mark
-  its task done and marking a task done does not close its issue. `hdash` asks `gh` for
-  open issues only, so a closed issue's task shows unjoined.
+**Issue-less tasks stay first-class.** `hwt new` writes no `issue.md`, and a notes dir
+with only `task.json` is a complete task.
 
 The notes repo decides because it is the only one of the two that survives everything.
 A worktree is deleted the moment the work pauses — `hwt rm` is routine — so a tree that
@@ -114,34 +105,14 @@ on a second machine. The notes dir is committed and shared; the worktree is scra
 Enumerating the worktree tree would also answer a different question than the one asked:
 it lists what is on this disk, not what work there is.
 
-`done` stayed local because the two flags do not mean the same thing. An issue closes
-when the change ships; a task is done when I stop working on it, which happens on
-abandonment and on splitting the work in two as well as on shipping. Mirroring would
-either close issues that are still open questions or reopen tasks that are finished
-here, and it would put a network call behind a keystroke that currently writes one
-local file. `hdash` asks `gh` for open issues only, so a closed issue's task simply
-shows unjoined — which is the honest rendering of the two being independent.
-
-### `backlog` is the one mark that is mirrored
+### `backlog` parks a task by choice
 
 A backlogged task is parked by choice — unlike `blocked`, nothing external is awaited —
 and the mark exists to keep `hdash` readable: the normal list hides backlogged open work,
 and **Show backlog** switches to a list of exactly that, done work excluded. It lives in
-both places a task can be recorded, `task.json` (`"backlog": true|false`, after `blocked`)
-and the issue label `backlog`, and the card's **Backlog** button writes whichever of the
-two exist.
-
-When a joined task and issue disagree, `hdash` unifies them as the issue list lands, and
-**the notes win**: `task.json` records no time a mark was set, so there is nothing to
-compare a label event against. The one exception is a `task.json` that has never recorded
-`backlog` — what `hwt new`, `hcdev wt` and **Adopt** write — which takes the label instead,
-so starting a task from a backlogged issue does not unmark it. That is why unmarking writes
-`false` rather than dropping the key.
-
-This is the one place a fetch writes, and it writes only to make the two halves agree; the
-`hwt` verbs never set `backlog` but carry it through every rewrite, because a dropped key
-reads as unrecorded: a task with an issue silently re-takes the label, and one without loses
-its mark.
+`task.json` (`"backlog": true|false`, after `blocked`) and nowhere else; the card's
+**Backlog** button writes it. The `hwt` verbs never set `backlog` but carry it through
+every rewrite, because a dropped key would lose the mark.
 
 ## Two machines: what is actually at risk, and `hwt sync`
 
@@ -299,34 +270,28 @@ worktree, `hwt-overview` drew that worktree with no idea an issue existed, and
 ~370 lines of chrome, sidebar, channel plumbing and card recipe were duplicated
 per app.
 
-**The join is the whole point.** An issue's worktree is named `gh-<number>-<slug>`,
-so matching on the *number* pairs the two halves — and `matches_issue` accepts the
-pre-convention spellings (`issue-9_dotfile_repo_retire`) that a name-based match
-would miss. One card then carries a piece of work from the issue through the
-worktree and its PRs to the day it is marked done, with the primary button always
-the next step: **Start task** → **Open hcdev** → (**Restore** if the worktree was
-removed). The filesystem walk `find_worktree` did is gone: the task half already
-holds that tree, so the match is pure and in-memory.
+It began as a join of GitHub issues to the tasks they became, matched by issue number;
+with issues now in the notes (above) the join is gone and every card is a task. One card
+carries a piece of work from its notes entry through the worktree and its PRs to the day it
+is marked done, with the primary button always the next step: **Start task** (no worktree
+and no branch yet — a fresh `/issue-create`) → **Open hcdev** → **Restore** if the worktree
+was removed. Start and Restore run the same `hwt restore` + `hcdev wt`; what separates the
+two stages is whether a branch named after the task exists in `~/fun_repos/<project>`. The
+card's title is `issue.md`'s `title:` when there is one, else the task name.
 
-Four consequences worth knowing:
+Three consequences worth knowing:
 
 - **An orphan outranks everything.** A worktree the notes repo has never heard of sorts
   above even a lifted block, and no content toggle can hide it.
-- **Topic is no longer a grouping level.** An unstarted issue has a topic *label*
-  and no topic *directory*, so there is nothing to group it under. The list is
-  flat and globally sorted by how much attention an item wants; project and topic
-  are printed on the card.
-- **Both content toggles are load-bearing defaults.** `show_done` off (there are
-  ~25× more done tasks than open ones) and `show_untagged` on (an untagged issue
-  is the one item the app cannot act on, so it is the one that most needs to be
-  seen).
-- **`~/fun_repos` holds upstream clones**, not just my projects — a `bevy` or `helix`
-  checkout has 200 open issues that are nobody's work here. `hdash` therefore asks `gh`
-  for the **selected** project and no other, which makes "All" a task list: an issue-only
-  card there would report whichever projects happened to be visited this session. There is
-  still no denylist or ownership filter; the selection is the gate. The sidebar leads with
-  the projects that have a notes directory, and every project keeps a row, because a row is
-  now the only way to reach a project's issues.
+- **Topic is not a grouping level.** The list is flat and globally sorted by how much
+  attention an item wants; project and topic are printed on the card.
+- **`show_done` off is a load-bearing default** — there are ~25× more done tasks than
+  open ones.
+
+The sidebar lists the projects that have a notes directory. It used to list every clone in
+`~/fun_repos`, because a row was the only way to reach a project's issues; `~/fun_repos`
+holds upstream clones too (`bevy`, `helix`), and with no issues to reach a row for them
+would be empty.
 
 `feathers_kit` stays a deliberate fork of the work copy so the *work* dashboard
 cannot regress, and this is the repo's only copy. With one workspace there is no
@@ -449,13 +414,6 @@ whenever a review changed anything early in it. Now the list holds in
 `awaiting-merge` between the session ending and the PR landing, and the stack
 is gone with it: every task branches off the default branch, because everything
 before it is already there.
-
-That also makes `Closes #<n>` work. A closing keyword fires only on a merge into
-the **default** branch, so on a stacked PR it silently did nothing; every PR now
-merges there, which is what makes an issue closing on merge a fact rather than a
-hope. The line is required of every PR that has an issue, in
-`dotfiles/claude-md/hobby.CLAUDE.md`, and the coordinator confirms it afterwards
-for a `gh-<number>` task rather than trusting it.
 
 **Merging is mine by default, and the list says so.** `merge` in `tasks.json` is
 `mine` — report the green PR once, hold — or `coordinator`, which I set
@@ -913,7 +871,7 @@ Only the *general-purpose* three are here, and the omissions are deliberate rath
 than pending work:
 
 - `db-mcp` and `jira-mcp` speak to work systems. Hobby projects have no databases,
-  and issue tracking is GitHub via `gh`.
+  and issues are `issue.md` files in the notes.
 - `experts-mcp` assumes a repo level *below* the task, which this layout does not
   have — the same reason `CLAUDE.md` gives for there being no experts at all.
 - `constellation-mcp` is not mine and is work-specific besides.
@@ -1270,7 +1228,7 @@ by the time of the split is a question the interview did not finish.
 
 The rules for carving a project into issues — six of them, with one labelled
 escape — are in `dotfiles/claude-md/hobby.CLAUDE.md` under **Task shaping**. The
-skill that runs the pass is `/task-split`, and `/gh-issue-create` checks the three
+skill that runs the pass is `/task-split`, and `/issue-create` checks the three
 text-decidable rules before it files anything.
 
 **The rules are in the always-loaded file on purpose.** That file is symlinked to
@@ -1286,8 +1244,8 @@ way it is. Nothing is duplicated across the three, because the failure mode of a
 rule stated twice is the two copies drifting.
 
 `/task-split` deliberately **files nothing.** Its output is a proposed list to
-edit; an accepted entry becomes an issue through `/gh-issue-create`, one at a
-time, because the topic label and the body are per-issue decisions and a batch
+edit; an accepted entry becomes an issue through `/issue-create`, one at a
+time, because the topic, the task name and the body are per-issue decisions and a batch
 would make both of them mine to fix afterwards rather than mine to make.
 
 `/task:build` applies them too, in its `assess-split` phase — the one-time
@@ -1435,8 +1393,8 @@ and unsure, check `echo $CLAUDE_CONFIG_DIR`.
 - Every tool is a folder with a `README.md`, never a loose file.
 - `skill.md` is the canonical skill filename.
 - No `julian-` prefix — this repo has one author, so provenance prefixes are noise.
-- Hobby projects use **GitHub issues**, not Jira. Anything reaching for a tracker
-  goes through `gh`.
+- Hobby projects track work in the notes repo — `issue.md` beside `task.json` — not
+  in GitHub issues or Jira. Anything reaching for a tracker reads and writes there.
 - No secrets, no work identifiers, no company hostnames. This repo is private but
   it is not a work repo.
 

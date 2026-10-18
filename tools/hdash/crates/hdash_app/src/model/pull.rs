@@ -41,7 +41,7 @@ impl PullOutcome {
 }
 
 /// A pull result for one project, delivered from the async job over a channel. Mirrors
-/// [`super::issue::IssueMsg`].
+/// [`super::task::GitMsg`].
 pub struct PullMsg {
     /// Project name the result belongs to.
     pub project: String,

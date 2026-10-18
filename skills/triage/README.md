@@ -12,7 +12,7 @@
 
 Collects open action items from `known-issues.md` and recent daily journals
 (last 30 days), deduplicates, and walks through each item with the user.
-Supported decisions per item: `do` (turn into a GitHub issue/worktree), `defer`
+Supported decisions per item: `do` (turn into an issue/worktree), `defer`
 (with optional review date), `drop` (mark `- [x] DROPPED:`), `done`, or
 `delegate`. Batch decisions are supported.
 
@@ -38,5 +38,5 @@ Or: `just install-skills`.
 
 - Journal scan uses a plain `find -mtime -30` — files touched for unrelated
   reasons will be scanned too. Harmless, just slower.
-- Doesn't auto-create GitHub issues for `do` items; delegates to
-  `/gh-issue-create` or a manual flow.
+- Doesn't auto-create issues for `do` items; delegates to
+  `/issue-create` or a manual flow.

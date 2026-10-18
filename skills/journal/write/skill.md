@@ -16,7 +16,7 @@ Document what was accomplished and what remains open for the current task.
     - Path format: `~/fun_worktrees/PROJECT/TOPIC/TASK`
     - Run `pwd` and parse: if path matches `~/fun_worktrees/*/*/`, the **third**
       subdirectory is the task name — use it **verbatim, including any blurb
-      suffix**. Do NOT shorten it to a bare GitHub issue number.
+      suffix**. Do NOT shorten it to a bare `gh-<number>`.
     - Example: `~/fun_worktrees/bevy_survivor/features/gh-42-enemy-waves` -> task
       is `gh-42-enemy-waves`, topic is `features`
     - Example:
@@ -28,9 +28,8 @@ Document what was accomplished and what remains open for the current task.
 
     - Use the branch name **verbatim** as the task name (skip `main`, `master`,
       `laptop`, `develop`).
-    - A `gh-<number>` pattern in the name is the **GitHub issue number** — derive
-      it only when you need it for a `gh issue` call. It is NOT the
-      notes-directory name and must never replace the full task name.
+    - A `gh-<number>` prefix (older tasks carry one) is part of the name and
+      must never replace the full task name.
 
     c. **From recent notes**: Check
     `~/fun_repos/hobby-mimisbrunnr/notes/` for recently modified

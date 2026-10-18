@@ -1,10 +1,10 @@
 ---
-description: Split current work into a subtask with an optional GitHub issue
-allowed-tools: Skill, Bash(git branch:*), Bash(git status:*), Bash(git rev-parse:*), Bash(gh issue:*), Bash(gh repo:*), Bash(ls:*), Bash(pwd:*), Bash(mkdir:*), Bash(nu -c:*), Read, Write, Edit
+description: Split current work into a subtask with an optional issue in its notes
+allowed-tools: Skill, Bash(git branch:*), Bash(git status:*), Bash(git rev-parse:*), Bash(ls:*), Bash(pwd:*), Bash(mkdir:*), Bash(nu -c:*), Read, Write, Edit
 ---
 
 Split part of the current task into a separate subtask with its own worktree,
-notes, and optionally a GitHub issue.
+notes, and optionally an `issue.md`.
 
 **Arguments:** $ARGUMENTS — a short description of what to split out (e.g.,
 "extract the spatial hash into its own module")
@@ -28,33 +28,24 @@ notes, and optionally a GitHub issue.
 
 3. **Ask the user** two questions:
 
-   a. **Create a GitHub issue?** (yes/no) — should an issue be opened in the
-   project's repo and linked to the parent's issue?
-   b. **Subtask ID** — if creating an issue, use `gh-{number}-{slug}` (e.g.
-   `gh-42-spatial-hash`). If not, ask for a short slug (e.g. `spatial-hash`) or
-   suggest one derived from the description.
+   a. **Write an issue?** (yes/no) — should the subtask get an `issue.md` of its
+   own, linked to the parent?
+   b. **Subtask ID** — a short plain slug (e.g. `spatial_hash`), or suggest one
+   derived from the description. It must not already exist under
+   `notes/{project}/`.
 
-4. **If creating a GitHub issue:**
-
-   a. Find the parent's issue number, if any. Check in order:
-      - `prs.json` / notes in the parent's notes dir for a `gh-<n>` reference
-      - the parent task name itself, if it carries a `gh-<n>` prefix
-      - `gh issue list --search "<parent task name>"` in the project repo
-   b. File it with `/gh-issue-create` (Skill tool), passing the subtask
-      description, the project, the parent's topic as the `topic:` label, and
-      the parent task and issue number (`#<n>`) to name in the body so GitHub
-      cross-links them. That skill writes the label and runs the task-shaping
-      check; this one does not file issues itself.
-   c. `/gh-issue-create` reports the issue URL; its trailing number gives the
-      subtask ID: `gh-{number}-{slug}`.
-
-5. **Create the worktree:**
+4. **Create the worktree:**
 
    ```bash
    nu -c "use ~/.config/nushell/hwt.nu *; hwt new {subtask_id} -p {project} -t {topic} --no-cd"
    ```
 
    Same project and topic as the parent. `--no-cd` because this runs from bash.
+
+5. **If writing an issue:** run `/issue-create` (Skill tool) as a **refresh** of
+   `{project}/{topic}/{subtask_id}`, passing the subtask description and the
+   parent task to name in its Context section. That skill writes `issue.md` and
+   runs the task-shaping check; this one does not write issues itself.
 
 6. **Create the notes directory** at
    `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{subtask_id}/`:
@@ -104,7 +95,7 @@ notes, and optionally a GitHub issue.
 7. **Report to the user:**
 
    - Subtask ID and worktree path
-   - GitHub issue URL, if created
+   - The `issue.md` path, if written
    - Navigate: `hwt go {subtask_id}`
    - Start a session there: `hcdev wt {subtask_id}`
 

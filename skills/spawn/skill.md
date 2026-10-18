@@ -1,5 +1,5 @@
 ---
-description: Carve the current task into a sibling subtask worktree (same GitHub issue, new blurb) with seeded notes, recorded as owned in the parent's subtasks.json — sets up directories only, launches nothing
+description: Carve the current task into a sibling subtask worktree (new blurb, linked to the parent) with seeded notes, recorded as owned in the parent's subtasks.json — sets up directories only, launches nothing
 allowed-tools: Bash(pwd:*), Bash(date:*), Bash(mkdir:*), Bash(ls:*), Bash(test:*), Bash(nu -c:*), Bash(git:*), Read, Write, Edit
 ---
 
@@ -36,14 +36,9 @@ suffix).
    replace runs of non-`[a-z0-9]` with `-`, strip leading/trailing `-`, truncate
    to ~30 chars.)
 
-4. **Build the new task name** from the parent task:
-
-   - If the parent task name starts with a GitHub-issue prefix (`^gh-[0-9]+`,
-     e.g. `gh-42`), the new task **reuses that issue number**:
-     `new_task = gh-{number}-{blurb}`. The parent may carry its own blurb after
-     the number (e.g. `gh-42-enemy-waves`) — strip it; only `gh-42` is reused.
-     Both tasks then trace back to the same GitHub issue, which is the point.
-   - Otherwise, `new_task = {blurb}` — a standalone sibling under the same topic.
+4. **The new task name** is `new_task = {blurb}` — a sibling under the same
+   topic, tied to the parent by its `subtasks.json` entry and the parent link in
+   its notes, not by its name.
    - No timestamp suffix. `hwt new` is idempotent, so re-running with the same
      blurb just reuses the existing worktree.
 
@@ -84,6 +79,7 @@ suffix).
      {subgoal — written as a full brief, not just a title}
 
      Split from [{parent_task}](../{parent_task}/implementation.md).
+     {when the parent has an issue.md: The problem it serves: [{parent_task}](../{parent_task}/issue.md).}
 
      ## Requirements
 

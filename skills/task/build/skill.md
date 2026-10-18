@@ -1,6 +1,6 @@
 ---
 description: Run a task end to end as one human-gated pipeline with a recorded stage — assess once whether it splits into standalone subtasks, brief, HMML baseline, the business context only I hold, annotated delta, spec review loop, implement and test, comment pass, code quality standards, my review, PR, journal
-argument-hint: '[<description> | #<issue> | --notes] [<phase>] [--no-hmml] [--no-context] [--no-split] [--resume-deep]'
+argument-hint: '[<description> | --issue | --notes] [<phase>] [--no-hmml] [--no-context] [--no-split] [--resume-deep]'
 allowed-tools: Skill, Read, Write, Edit, AskUserQuestion, Bash(hobby-struct-parser:*), Bash(pwd:*), Bash(date:*), Bash(ls:*), Bash(rg:*), Bash(git branch:*), Bash(git -C * status:*), Bash(git -C * diff:*), Bash(git -C * log:*), Bash(git -C * rev-parse:*), Bash(git -C * ls-files:*), Bash(git status:*), Bash(git diff:*), Bash(git log:*), Bash(gh pr list:*), Bash(gh pr view:*), Bash(gh issue view:*), Bash(gh issue list:*), Bash(gh repo view:*), Bash(hcoord ci:*), Bash(gh run list:*), Bash(gh run rerun:*)
 ---
 
@@ -30,7 +30,7 @@ except where a sub-skill already does (`journal:resume`).
    own change at GATE 2; give me the diff and the evidence.
 2. **Never auto-commit** — not the source repo, not the notes repo where the
    `.hmml` baseline lives. That is my call, same contract as every sub-skill.
-   Read-only git, `gh pr list` and `gh issue view` are fine. You do write the
+   Read-only git and `gh pr list` are fine. You do write the
    commit *message* when I ask for one, to the rule in `~/.claude-hobby/CLAUDE.md`
    — terse, a record of the decisions, and **no justification you were not
    given**. If a decision in the diff has no justification from my prompts or from
@@ -62,11 +62,11 @@ except where a sub-skill already does (`journal:resume`).
    | argument | brief |
    |---|---|
    | free text | the text itself, recorded verbatim |
-   | `#<n>` or `gh-<n>` | `gh issue view <n>` — title, body, acceptance criteria |
+   | `--issue` | the task's `issue.md` — title, body, acceptance criteria, progress |
    | `--notes`, or nothing | `journal:resume` over the task's notes dir |
 
-   With no argument and a task named `gh-<n>-…`, do both: `journal:resume` **and**
-   the issue. Record `brief_source` and the brief itself in the state file, and
+   With no argument and an `issue.md` in the task's notes dir, do both:
+   `journal:resume` **and** the issue. Record `brief_source` and the brief itself in the state file, and
    summarize the goal and next step in 2–4 lines. That framing carries through
    every later phase.
 
@@ -247,7 +247,7 @@ Only after I approve the decomposition. Per approved subtask, in order:
 
 1. **Create it** with `/subtask "<the full brief>"`. That skill owns the
    worktree, the branch, the notes seed, the `subtasks.json` entry and the
-   GitHub-issue decision — do not reimplement any of it. Pass the brief as a
+   issue decision — do not reimplement any of it. Pass the brief as a
    complete, self-contained deliverable description: goal, file paths,
    constraints, done-when. It is read by a session that has no memory of this
    conversation.
@@ -286,9 +286,9 @@ ______________________________________________________________________
 **Gate 0 — prior art and size.** Before any spec or code. No sweeping changes
 without prior discussion, and do not accelerate past someone else's active work.
 
-- `gh pr list --search "<keywords>" --state all` and
-  `gh issue list --search "<keywords>" --state all` on the repo this task targets.
-  Report anything overlapping, with its state and author.
+- `gh pr list --search "<keywords>" --state all` on the repo this task targets,
+  and `rg -il "<keywords>" ~/fun_repos/hobby-mimisbrunnr/notes/<project>/*/*/issue.md`
+  for the issues in the notes. Report anything overlapping, with its state.
 - State an expected size: files touched, rough lines changed.
 - **Stop and ask** if an open PR or active issue covers this work, or the expected
   change exceeds **10 files or 500 lines**.
@@ -347,7 +347,7 @@ Skip this step entirely on `--no-context`: set `phase: context` and carry on to
 the annotate step in the same turn.
 
 First **read what is already written down**: the brief, the baseline spec, the
-GitHub issue, and the task notes. Ask for nothing recoverable from those — quote
+task's `issue.md`, and the task notes. Ask for nothing recoverable from those — quote
 it instead.
 
 Then derive the questions from the goal read against the baseline: what does
@@ -624,11 +624,6 @@ two sentences each, then **How can you test it by hand** as an ordered bullet li
 whose last bullet says what I should see. No other sections, no `## AI use`, no
 empty section, no attribution.
 
-When the task has an issue — a `gh-<number>` in the task or branch name, or the one
-`brief_source: issue` read — the body's first line is `Closes #<number>`, so the
-issue closes when the PR merges. A task with no issue writes no such line, and a
-number is never guessed.
-
 The *why* is sourced, not invented — from my prompts, from what we settled, or from
 something you verified in the `implement` phase. If you do not have one, ask before
 opening the PR.
@@ -683,7 +678,7 @@ ______________________________________________________________________
 - **A subtask is a separate deliverable; this pipeline is one branch.** Work that
   wants its own worktree, branch and PR is a subtask, decided once at GATE S back
   before this branch had commits. Once it does, the answer is to finish this task
-  and file the rest as issues.
+  and write the rest up as issues with `/issue-create`.
 - If artifacts and the state file disagree, trust the artifacts, say so, and
   correct the state file.
 - If I ask for something off-pipeline mid-run, handle it, then re-anchor on the

@@ -42,10 +42,6 @@ simplifications:
   because everything before it is already in that branch. `W2` is a
   fast-forward and nothing else, and the two-open-dependencies question that
   had no good answer is gone with it.
-- **A GitHub closing keyword works.** `Closes #12` fires only on a merge into
-  the **default** branch, so on a stacked PR it silently did nothing. Now every
-  PR merges there, which is what makes "the issue closes when the PR merges" a
-  fact rather than a hope.
 - **The cost is real and is the point.** The list now stalls on me. That is the
   trade the whole skill makes: unattended until it needs a person, and what it
   needs is the thing only I can give.
@@ -57,7 +53,7 @@ PR once, and holds. Told to (`go, you merge`, or a later `merge:
 "coordinator"`), each task's **own session** merges its own PR: it is seeded
 with `merge: coordinator` in its `build-task.json`, watches its checks itself,
 and reports `done` with the merge already landed — the coordinator's W4 reads
-that off the `hcoord wait` line and skips straight to confirming the issue and
+that off the `hcoord wait` line and skips straight to
 moving on, making no merge call of its own. That is a per-coordinator
 decision, made when I trust how the run is going, and it is in the file rather
 than in the conversation so a resumed session still knows.
@@ -118,9 +114,7 @@ check on a PR, and for the same reason: waiting longer does not resolve it.
 
 ## What it deliberately does not do
 
-- File GitHub issues: `/gh-issue-create` is an editing session. It does close
-  one after a merge, and only when the task name carries a `gh-<number>` and
-  GitHub did not close it itself.
+- Write issues: `/issue-create` is an editing session.
 - Push to the default branch, or merge a PR it was not handed the merges for.
 - Run `/task-split` itself: that skill owns the shaping rules and their re-cuts.
 - Answer a task's gate on my behalf: an `awaiting-human` task is reported and

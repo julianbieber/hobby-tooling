@@ -1,14 +1,8 @@
-//! Domain layer: the two halves of the model, their join, and the shell actions.
-//! No Bevy UI here.
-//!
-//! - [`task`] — the filesystem half: worktrees ∪ notes-with-`task.json`, git status, PRs
-//! - [`issue`] — the GitHub half: `gh issue list` per project, the `topic:` convention
-//! - [`join`] — the union: one [`join::Item`] per piece of work, at some [`join::Stage`]
-//! - [`launch`] — terminals, `hcdev` sessions, notes, browser
-//! - [`pull`] — `git pull --ff-only` for a project's main checkout
+//! Domain layer: what the notes tree and the checkouts say about the work, and the shell
+//! actions taken on it. No Bevy UI here.
 
-pub mod issue;
-pub mod join;
+pub mod item;
 pub mod launch;
+pub mod project;
 pub mod pull;
 pub mod task;

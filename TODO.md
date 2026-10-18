@@ -153,9 +153,7 @@ one-per-machine build.
       **generated** — anything worth keeping belongs in the checkout, or in
       `~/.config/helix/languages.local.toml` if it is machine-specific.
 - [ ] **`just install-dash`** — same one-per-machine Rust build as above. Until it
-      runs, `hdash` is not on `PATH` and `just doctor` shows it as a gap. Note the
-      issue half is only as useful as the `topic:<name>` labels are: `wusel`'s issues
-      carry them, the other repos' do not yet.
+      runs, `hdash` is not on `PATH` and `just doctor` shows it as a gap.
 - [ ] **Clone the hobby projects you actually want to work on.** `~/fun_repos` holds
       only `helix`, `hobby-mimisbrunnr`, `hobby-tooling` and the freshly cloned
       `bevy_asset_lsp`, so `hwt` still has nothing to make a worktree from.

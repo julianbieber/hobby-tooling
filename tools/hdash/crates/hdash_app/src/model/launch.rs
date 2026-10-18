@@ -1,9 +1,5 @@
-//! The shell actions: opening terminals, `hcdev` sessions, notes, and the browser.
-//!
-//! Both pre-merge dashboards spelled `hcdev wt …` and the `hcdev-<p>-<t>-<task>` window
-//! title for themselves, and `hwt-overview` open-coded the alacritty invocation four
-//! times. Everything funnels through [`launch_nu`] and [`LaunchSpec`] here, so the
-//! command line exists once.
+//! The shell actions: opening terminals, `hcdev` sessions, notes, and the browser — the one
+//! place each command line is spelled.
 
 use std::path::Path;
 
@@ -19,16 +15,14 @@ pub use hwt_core::projects_root;
 pub struct LaunchSpec {
     /// Project (and the repo under `~/fun_repos` the worktree derives from).
     pub project: String,
-    /// Topic — from an existing worktree's path, or from the issue's `topic:` label.
+    /// Topic (second level).
     pub topic: String,
     /// Task/branch name.
     pub task: String,
 }
 
 impl LaunchSpec {
-    /// The spec for an existing task. The worktree path is the authority, not an issue's
-    /// `topic:` label: the label can have been changed since the worktree was made, and
-    /// it is the path that `hcdev wt` has to find.
+    /// The spec for a task, from its path.
     pub fn from_task(id: &TaskId) -> Self {
         Self {
             project: id.project.clone(),
@@ -41,16 +35,6 @@ impl LaunchSpec {
         format!(
             "hcdev wt '{}' --project '{}' --topic '{}'",
             self.task, self.project, self.topic
-        )
-    }
-
-    fn start_cmd(&self) -> String {
-        format!(
-            "hwt new '{}' -p '{}' -t '{}' --no-cd | ignore; {}",
-            self.task,
-            self.project,
-            self.topic,
-            self.hcdev_cmd()
         )
     }
 
@@ -106,24 +90,10 @@ pub fn launch_hcdev(dir: &Path, spec: &LaunchSpec) {
     );
 }
 
-/// Create the worktree for an issue and open an `hcdev` session in it, in one terminal.
-///
-/// Runs from the project's main checkout, because the worktree does not exist yet and
-/// `hwt new` derives the project from either `--project` or the current repo. `hwt new`
-/// is idempotent (an existing worktree is reported and reused), so a double click costs
-/// a second session and nothing worse.
-pub fn launch_start(spec: &LaunchSpec) {
-    let dir = projects_root().join(&spec.project);
-    launch_nu(
-        &dir.to_string_lossy(),
-        &spec.session_title(),
-        &spec.start_cmd(),
-    );
-}
-
-/// Re-create a removed task's worktree and open an `hcdev` session in it, in one
-/// terminal. The task dir does not exist yet, so the terminal opens in the worktrees
-/// root; `hcdev wt` resolves the restored path itself from the three components.
+/// Create a recorded task's worktree — re-created from its branch, or on a new branch from
+/// the main checkout's HEAD when it has none — and open an `hcdev` session in it, in one
+/// terminal. The task dir does not exist yet, so the terminal opens in the worktrees root;
+/// `hcdev wt` resolves the restored path itself from the three components.
 pub fn launch_restore(spec: &LaunchSpec) {
     launch_nu(
         &worktrees_root().to_string_lossy(),
@@ -174,6 +144,7 @@ pub fn open_notes(task: &Task) {
 mod tests {
     use super::*;
 
+    // Pins the exact nu command lines a card click runs, since none can be clicked in a test.
     #[test]
     fn launch_commands_are_explicit() {
         let spec = LaunchSpec {
@@ -185,16 +156,8 @@ mod tests {
             spec.hcdev_cmd(),
             "hcdev wt 'gh-7-chunk-loading' --project 'wusel' --topic 'perf'"
         );
-        // The one command with a real side effect, and the one that cannot be clicked in a
-        // test: `hwt new` creates the worktree, `| ignore` swallows the path it returns, and
-        // the session opens in it.
-        assert_eq!(
-            spec.start_cmd(),
-            "hwt new 'gh-7-chunk-loading' -p 'wusel' -t 'perf' --no-cd | ignore; \
-             hcdev wt 'gh-7-chunk-loading' --project 'wusel' --topic 'perf'"
-        );
-        // Restore is a two-step command for the same reason Start is: re-creating the
-        // worktree without opening the session leaves the click with nothing running.
+        // Restore is a two-step command: re-creating the worktree without opening the
+        // session leaves the click with nothing running.
         assert_eq!(
             spec.restore_cmd(),
             "hwt restore 'gh-7-chunk-loading' --no-cd | ignore; \

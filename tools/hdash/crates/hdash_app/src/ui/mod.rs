@@ -1,5 +1,5 @@
 //! UI layer: static chrome built once, systems that rebuild the sidebar and item list when
-//! the model or selection changes, the async fetches and label writes, and a global observer
+//! the model or selection changes, the async fetches and pulls, and a global observer
 //! that turns button clicks into actions.
 
 mod card;
@@ -12,11 +12,9 @@ use bevy::prelude::*;
 
 use feathers_kit::{Activate, KitFonts, kit_tokens as kt, text, tok};
 
-use crate::model::issue::{FetchState, IssueMsg, LabelMsg, fetch_issues, set_backlog_label};
-use crate::model::join::{BacklogSync, ItemKey, Model, UiState, item_visible, scan};
+use crate::model::item::{Model, UiState, item_visible, scan};
 use crate::model::launch::{
-    launch_coordinator, launch_hcdev, launch_restore, launch_start, launch_terminal, open_notes,
-    open_url,
+    launch_coordinator, launch_hcdev, launch_restore, launch_terminal, open_notes, open_url,
 };
 use crate::model::pull::{PullMsg, PullOutcome, pull};
 use crate::model::task::{
@@ -29,8 +27,7 @@ use card::{
 };
 use chrome::{
     BacklogModeToggle, ClearCacheButton, ItemListContainer, ProjectButton, PullButton,
-    RefreshButton, ShowDoneToggle, ShowUntaggedToggle, build_chrome, ft_text_dim, rebuild_sidebar,
-    update_header,
+    RefreshButton, ShowDoneToggle, build_chrome, ft_text_dim, rebuild_sidebar, update_header,
 };
 use fetch::Fetch;
 
@@ -41,13 +38,7 @@ struct GitFetch(Fetch<(TaskId, usize), GitMsg>);
 struct PrFetch(Fetch<(TaskId, usize), PrMsg>);
 
 #[derive(Resource, Default)]
-struct IssueFetch(Fetch<String, IssueMsg>);
-
-#[derive(Resource, Default)]
 struct PullFetch(Fetch<String, PullMsg>);
-
-#[derive(Resource, Default)]
-struct LabelFetch(Fetch<(String, u64), LabelMsg>);
 
 /// How long a *finished* pull's status line stays on screen, in seconds. A failure has no
 /// expiry — its reason has to stay readable — and clears on the next pull or Refresh.
@@ -56,7 +47,7 @@ const PULL_LINE_LINGER: f32 = 10.0;
 /// Where each project's pull has got to, keyed by project name.
 ///
 /// UI state rather than model state: a pull is something the dashboard *does*, whereas
-/// [`Model`] is what a scan *found*. Keeping it out of `ProjectIssues` also means a Refresh
+/// [`Model`] is what a scan *found*. Keeping it out of the model also means a Refresh
 /// (which rebuilds the model wholesale) cannot lose track of a pull still in flight.
 #[derive(Resource, Default)]
 pub(crate) struct Pulls {
@@ -103,9 +94,7 @@ impl Plugin for UiPlugin {
             .init_resource::<UiState>()
             .init_resource::<GitFetch>()
             .init_resource::<PrFetch>()
-            .init_resource::<IssueFetch>()
             .init_resource::<PullFetch>()
-            .init_resource::<LabelFetch>()
             .init_resource::<Pulls>()
             // Registered up front, not inserted by `load_pr_cache`: `dispatch_all` takes it
             // as a plain `Res`, which panics on a missing resource, and relying on a
@@ -121,9 +110,7 @@ impl Plugin for UiPlugin {
                 (
                     drain_git,
                     drain_pr,
-                    drain_issues,
                     drain_pulls,
-                    drain_labels,
                     expire_pull_lines,
                     dispatch_all
                         .run_if(resource_changed::<Model>.or_else(resource_changed::<UiState>)),
@@ -164,7 +151,6 @@ fn dispatch_all(
     ui: Res<UiState>,
     mut git: ResMut<GitFetch>,
     mut prs: ResMut<PrFetch>,
-    mut issues: ResMut<IssueFetch>,
     cache: Res<PrCache>,
 ) {
     // Git: every present task, visible or not.
@@ -182,19 +168,6 @@ fn dispatch_all(
         }
     }
 
-    // Issues: the selected project only. Nothing is fetched under "All".
-    if let Some(sel) = ui.selected_project.as_deref()
-        && let Some(entry) = model.projects.iter().find(|e| e.project.name == sel)
-    {
-        let project = entry.project.clone();
-        issues
-            .0
-            .dispatch(entry.project.name.clone(), move || IssueMsg {
-                result: fetch_issues(&project),
-                project: project.name,
-            });
-    }
-
     dispatch_prs(&model, &ui, &mut prs, &cache);
 }
 
@@ -203,7 +176,7 @@ fn dispatch_prs(model: &Model, ui: &UiState, prs: &mut PrFetch, cache: &PrCache)
         if !item_visible(&item, ui) {
             continue;
         }
-        let Some(task) = item.task else { continue };
+        let task = item.task;
         for (i, pr) in task.prs.iter().enumerate() {
             let key = (task.id.clone(), i);
             if let Some(hit) = cache.map.get(&pr.url) {
@@ -234,55 +207,11 @@ fn dispatch_prs(model: &Model, ui: &UiState, prs: &mut PrFetch, cache: &PrCache)
     }
 }
 
-fn write_label(labels: &mut LabelFetch, project: &str, number: u64, url: &str, backlog: bool) {
-    let (project, url) = (project.to_owned(), url.to_owned());
-    labels
-        .0
-        .dispatch((project.clone(), number), move || LabelMsg {
-            result: set_backlog_label(&url, backlog),
-            project,
-            number,
-            backlog,
-        });
-}
-
-fn unify_backlog(model: &mut Model, labels: &mut LabelFetch, projects: &[String]) {
-    let syncs: Vec<(TaskId, String, u64, String, BacklogSync)> = model
-        .items()
-        .into_iter()
-        .filter(|i| projects.iter().any(|p| p == i.project))
-        .filter_map(|i| {
-            let (task, issue) = (i.task?, i.issue?);
-            Some((
-                task.id.clone(),
-                i.project.to_owned(),
-                issue.number,
-                issue.url.clone(),
-                i.backlog_sync()?,
-            ))
-        })
-        .collect();
-    for (id, project, number, url, sync) in syncs {
-        match sync {
-            BacklogSync::LabelAdd => write_label(labels, &project, number, &url, true),
-            BacklogSync::LabelRemove => write_label(labels, &project, number, &url, false),
-            BacklogSync::NotesTrue => match set_backlog(&id, true) {
-                Ok(()) => {
-                    if let Some(task) = model.task_mut(&id) {
-                        task.backlog = Some(true);
-                    }
-                }
-                Err(err) => warn!("recording backlog failed for {id:?}: {err}"),
-            },
-        }
-    }
-}
-
 fn start_pull(project: &str, model: &Model, fetch: &mut PullFetch, pulls: &mut Pulls) {
-    let Some(entry) = model.projects.iter().find(|p| p.project.name == project) else {
+    let Some(entry) = model.projects.iter().find(|p| p.name == project) else {
         return;
     };
-    let (name, path) = (entry.project.name.clone(), entry.project.path.clone());
+    let (name, path) = (entry.name.clone(), entry.path.clone());
     let for_msg = name.clone();
     let started = fetch.0.dispatch(name.clone(), move || PullMsg {
         project: for_msg,
@@ -348,59 +277,6 @@ fn drain_pr(prs: Res<PrFetch>, mut model: ResMut<Model>, mut cache: ResMut<PrCac
     }
 }
 
-fn drain_issues(issues: Res<IssueFetch>, mut model: ResMut<Model>, mut labels: ResMut<LabelFetch>) {
-    let msgs = issues.0.drain(64);
-    if msgs.is_empty() {
-        return;
-    }
-    let landed: Vec<String> = msgs.iter().map(|m| m.project.clone()).collect();
-    for msg in msgs {
-        let Some(entry) = model.project_mut(&msg.project) else {
-            continue;
-        };
-        match msg.result {
-            Ok(issues) => {
-                entry.issues = issues;
-                entry.state = FetchState::Ready;
-            }
-            Err(reason) => {
-                entry.issues.clear();
-                entry.state = FetchState::Failed(reason);
-            }
-        }
-    }
-    unify_backlog(&mut model, &mut labels, &landed);
-}
-
-fn drain_labels(mut labels: ResMut<LabelFetch>, mut model: ResMut<Model>) {
-    let msgs = labels.0.drain(64);
-    if msgs.is_empty() {
-        return;
-    }
-    for msg in msgs {
-        labels.0.forget(&(msg.project.clone(), msg.number));
-        let Some(issue) = model
-            .project_mut(&msg.project)
-            .and_then(|e| e.issues.iter_mut().find(|i| i.number == msg.number))
-        else {
-            continue;
-        };
-        match msg.result {
-            Ok(()) => {
-                issue.set_backlog_label_local(msg.backlog);
-                issue.label_error = None;
-            }
-            Err(reason) => {
-                warn!(
-                    "backlog label write failed for {}#{}: {reason}",
-                    msg.project, msg.number
-                );
-                issue.label_error = Some(reason);
-            }
-        }
-    }
-}
-
 fn drain_pulls(mut fetch: ResMut<PullFetch>, mut pulls: ResMut<Pulls>, time: Res<Time>) {
     let msgs = fetch.0.drain(64);
     if msgs.is_empty() {
@@ -435,34 +311,12 @@ fn expire_pull_lines(time: Res<Time>, mut pulls: ResMut<Pulls>) {
 // Item list
 // ---------------------------------------------------------------------------
 
-fn status_strip(model: &Model, ui: &UiState) -> Vec<(String, &'static str)> {
-    let Some(sel) = ui.selected_project.as_deref() else {
-        return Vec::new();
-    };
-    model
-        .projects
-        .iter()
-        .filter(|e| e.project.name == sel)
-        .filter_map(|e| match &e.state {
-            FetchState::Loading => Some((
-                format!("{} · loading issues…", e.project.name),
-                ft_text_dim(),
-            )),
-            FetchState::Failed(reason) => Some((
-                format!("{} · no issues from gh: {reason}", e.project.name),
-                kt::STATUS_CLOSED,
-            )),
-            FetchState::Ready => None,
-        })
-        .collect()
-}
-
 fn pull_strip(model: &Model, pulls: &Pulls) -> Vec<(String, &'static str)> {
     model
         .projects
         .iter()
         .filter_map(|entry| {
-            let name = &entry.project.name;
+            let name = &entry.name;
             Some(match &pulls.map.get(name)?.state {
                 PullState::Running => (format!("{name} · pulling…"), ft_text_dim()),
                 PullState::Done(outcome) => {
@@ -489,10 +343,7 @@ fn rebuild_item_list(
     };
     commands.entity(c).despawn_children();
 
-    let lines = pull_strip(&model, &pulls)
-        .into_iter()
-        .chain(status_strip(&model, &ui));
-    for (msg, token) in lines {
+    for (msg, token) in pull_strip(&model, &pulls) {
         let id = commands.spawn(text(&fonts, msg, 12.0, tok(token))).id();
         commands.entity(c).add_child(id);
     }
@@ -500,17 +351,17 @@ fn rebuild_item_list(
     let items = model.items();
     let mut shown = 0;
     for item in items.iter().filter(|i| item_visible(i, &ui)) {
-        let expanded = item.task.is_some_and(|t| ui.pr_expanded.contains(&t.id));
+        let expanded = ui.pr_expanded.contains(&item.task.id);
         let card_id = spawn_item_card(&mut commands, &fonts, item, expanded);
         commands.entity(c).add_child(card_id);
         shown += 1;
     }
 
     if shown == 0 {
-        let msg = if model.projects.is_empty() && model.tasks.is_empty() {
-            "No projects under ~/fun_repos and no tasks in the notes repo."
+        let msg = if model.tasks.is_empty() {
+            "No tasks in the notes repo."
         } else {
-            "Nothing here. Toggle \"show done\"/\"show untagged\"/\"show backlog\", or pick another project."
+            "Nothing here. Toggle \"show done\"/\"show backlog\", or pick another project."
         };
         commands
             .entity(c)
@@ -528,7 +379,6 @@ fn on_chrome_activate(
     projects: Query<&ProjectButton>,
     pull_buttons: Query<&PullButton>,
     show_done: Query<(), With<ShowDoneToggle>>,
-    show_untagged: Query<(), With<ShowUntaggedToggle>>,
     backlog_mode: Query<(), With<BacklogModeToggle>>,
     refreshes: Query<(), With<RefreshButton>>,
     clears: Query<(), With<ClearCacheButton>>,
@@ -536,7 +386,6 @@ fn on_chrome_activate(
     mut model: ResMut<Model>,
     mut git: ResMut<GitFetch>,
     mut prs: ResMut<PrFetch>,
-    mut issues: ResMut<IssueFetch>,
     mut pull_fetch: ResMut<PullFetch>,
     mut pulls: ResMut<Pulls>,
     mut cache: ResMut<PrCache>,
@@ -557,16 +406,12 @@ fn on_chrome_activate(
         ui.show_done = !ui.show_done;
         return;
     }
-    if show_untagged.contains(e) {
-        ui.show_untagged = !ui.show_untagged;
-        return;
-    }
     if backlog_mode.contains(e) {
         ui.backlog_mode = !ui.backlog_mode;
         return;
     }
     if refreshes.contains(e) {
-        // Re-scan both halves and clear every dispatch guard so `dispatch_all` re-issues the
+        // Re-scan and clear every dispatch guard so `dispatch_all` re-issues the
         // work — it runs because both resources just changed. The terminal-PR-status cache is
         // deliberately kept: a refresh only re-queries the PRs that can still change. Use
         // Clear cache to force merged/closed PRs to be re-checked too.
@@ -574,7 +419,6 @@ fn on_chrome_activate(
         *model = scan();
         git.0.reset();
         prs.0.reset();
-        issues.0.reset();
         // Finished pull lines are session chatter and go with the hides. A pull still in
         // flight keeps both its line and its guard — its result is still coming.
         pulls
@@ -597,7 +441,6 @@ fn on_card_activate(
     subtask_buttons: Query<&SubtaskButton>,
     mut ui: ResMut<UiState>,
     mut model: ResMut<Model>,
-    mut labels: ResMut<LabelFetch>,
 ) {
     let e = ev.entity;
 
@@ -619,17 +462,14 @@ fn on_card_activate(
             return;
         }
         CardAction::TogglePrs => {
-            if let ItemKey::Task(id) = &btn.key
-                && !ui.pr_expanded.remove(id)
-            {
+            let id = &btn.key;
+            if !ui.pr_expanded.remove(id) {
                 ui.pr_expanded.insert(id.clone());
             }
             return;
         }
         CardAction::ToggleDone => {
-            let ItemKey::Task(id) = &btn.key else {
-                return;
-            };
+            let id = &btn.key;
             match toggle_done(id) {
                 Ok(done) => {
                     if let Some(task) = model.task_mut(id) {
@@ -644,29 +484,22 @@ fn on_card_activate(
             let Some(item) = model.item(&btn.key) else {
                 return;
             };
-            let backlog = !item.backlogged();
-            let task = item.task.filter(|t| t.adopted).map(|t| t.id.clone());
-            let issue = item
-                .issue
-                .map(|i| (item.project.to_owned(), i.number, i.url.clone()));
-            if let Some(id) = task {
-                if let Err(err) = set_backlog(&id, backlog) {
-                    warn!("recording backlog failed for {id:?}: {err}");
-                    return;
-                }
-                if let Some(task) = model.task_mut(&id) {
-                    task.backlog = Some(backlog);
-                }
+            if !item.task.adopted {
+                return;
             }
-            if let Some((project, number, url)) = issue {
-                write_label(&mut labels, &project, number, &url, backlog);
+            let backlog = !item.backlogged();
+            let id = item.task.id.clone();
+            if let Err(err) = set_backlog(&id, backlog) {
+                warn!("recording backlog failed for {id:?}: {err}");
+                return;
+            }
+            if let Some(task) = model.task_mut(&id) {
+                task.backlog = Some(backlog);
             }
             return;
         }
         CardAction::Adopt => {
-            let ItemKey::Task(id) = &btn.key else {
-                return;
-            };
+            let id = &btn.key;
             match adopt(id) {
                 // The file is now on disk, so flipping the flag in place is the whole
                 // update: everything else about the task was already read from the worktree.
@@ -686,42 +519,13 @@ fn on_card_activate(
     let Some(item) = model.item(&btn.key) else {
         return;
     };
+    let (task, spec) = (item.task, item.launch_spec());
     match btn.action {
-        CardAction::Hcdev => {
-            if let (Some(task), Some(spec)) = (item.task, item.launch_spec()) {
-                launch_hcdev(&task.dir, &spec);
-            }
-        }
-        CardAction::Start => {
-            if let Some(spec) = item.launch_spec() {
-                launch_start(&spec);
-            }
-        }
-        CardAction::Restore => {
-            if let Some(spec) = item.launch_spec() {
-                launch_restore(&spec);
-            }
-        }
-        CardAction::Coordinator => {
-            if let Some(spec) = item.launch_spec() {
-                launch_coordinator(&spec);
-            }
-        }
-        CardAction::Terminal => {
-            if let Some(task) = item.task {
-                launch_terminal(&task.dir, &format!("term-{}", task.id.name));
-            }
-        }
-        CardAction::Notes => {
-            if let Some(task) = item.task {
-                open_notes(task);
-            }
-        }
-        CardAction::Browse => {
-            if let Some(issue) = item.issue {
-                open_url(&issue.url);
-            }
-        }
+        CardAction::Hcdev => launch_hcdev(&task.dir, &spec),
+        CardAction::Restore => launch_restore(&spec),
+        CardAction::Coordinator => launch_coordinator(&spec),
+        CardAction::Terminal => launch_terminal(&task.dir, &format!("term-{}", task.id.name)),
+        CardAction::Notes => open_notes(task),
         CardAction::Hide
         | CardAction::TogglePrs
         | CardAction::ToggleDone
