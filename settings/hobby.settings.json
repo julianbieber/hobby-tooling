@@ -107,5 +107,6 @@
   "effortLevel": "high",
   "autoUpdatesChannel": "latest",
   "theme": "dark",
-  "voiceEnabled": false
+  "voiceEnabled": false,
+  "autoCompactEnabled": false
 }
