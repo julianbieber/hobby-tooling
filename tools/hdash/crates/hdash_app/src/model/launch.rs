@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use hwt_core::spawn_detached;
+use hwt_core::{spawn_detached, spawn_detached_with};
 
 use super::task::{Task, TaskId, notes_path, worktrees_root};
 
@@ -31,26 +31,12 @@ impl LaunchSpec {
         }
     }
 
-    fn hcdev_cmd(&self) -> String {
-        format!(
-            "hcdev wt '{}' --project '{}' --topic '{}'",
-            self.task, self.project, self.topic
-        )
-    }
-
-    fn restore_cmd(&self) -> String {
-        format!(
-            "hwt restore '{}' --no-cd | ignore; {}",
-            self.task,
-            self.hcdev_cmd()
-        )
-    }
-
-    fn coordinator_cmd(&self) -> String {
-        format!(
-            "hcdev coordinator '{}' --project '{}'",
-            self.task, self.project
-        )
+    fn env(&self) -> [(&'static str, &str); 3] {
+        [
+            ("HDASH_PROJECT", &self.project),
+            ("HDASH_TOPIC", &self.topic),
+            ("HDASH_TASK", &self.task),
+        ]
     }
 
     fn session_title(&self) -> String {
@@ -58,26 +44,37 @@ impl LaunchSpec {
     }
 }
 
+const HCDEV_SCRIPT: &str =
+    "hcdev wt $env.HDASH_TASK --project $env.HDASH_PROJECT --topic $env.HDASH_TOPIC";
+
+const RESTORE_SCRIPT: &str = "hwt restore $env.HDASH_TASK --no-cd | ignore; \
+     hcdev wt $env.HDASH_TASK --project $env.HDASH_PROJECT --topic $env.HDASH_TOPIC";
+
+const COORDINATOR_SCRIPT: &str = "hcdev coordinator $env.HDASH_TASK --project $env.HDASH_PROJECT";
+
 fn hold_on_error(cmd: &str) -> String {
     format!(
         "try {{ {cmd} }} catch {{|e| print $e.msg; print ''; print 'Failed. Press enter to close.'; input }}"
     )
 }
 
-fn launch_nu(dir: &str, title: &str, cmd: &str) {
-    spawn_detached(&[
-        "-f",
-        "alacritty",
-        "--working-directory",
-        dir,
-        "--title",
-        title,
-        "-e",
-        "nu",
-        "--login",
-        "-c",
-        &hold_on_error(cmd),
-    ]);
+fn launch_nu(dir: &str, title: &str, cmd: &str, spec: &LaunchSpec) {
+    spawn_detached_with(
+        &[
+            "-f",
+            "alacritty",
+            "--working-directory",
+            dir,
+            "--title",
+            title,
+            "-e",
+            "nu",
+            "--login",
+            "-c",
+            &hold_on_error(cmd),
+        ],
+        &spec.env(),
+    );
 }
 
 /// Open an `hcdev` session (Zellij hobby-dev layout, Claude on the hobby account) in an
@@ -86,7 +83,8 @@ pub fn launch_hcdev(dir: &Path, spec: &LaunchSpec) {
     launch_nu(
         &dir.to_string_lossy(),
         &spec.session_title(),
-        &spec.hcdev_cmd(),
+        HCDEV_SCRIPT,
+        spec,
     );
 }
 
@@ -98,7 +96,8 @@ pub fn launch_restore(spec: &LaunchSpec) {
     launch_nu(
         &worktrees_root().to_string_lossy(),
         &spec.session_title(),
-        &spec.restore_cmd(),
+        RESTORE_SCRIPT,
+        spec,
     );
 }
 
@@ -110,7 +109,8 @@ pub fn launch_coordinator(spec: &LaunchSpec) {
     launch_nu(
         &dir.to_string_lossy(),
         &spec.session_title(),
-        &spec.coordinator_cmd(),
+        COORDINATOR_SCRIPT,
+        spec,
     );
 }
 
@@ -144,42 +144,31 @@ pub fn open_notes(task: &Task) {
 mod tests {
     use super::*;
 
-    // Pins the exact nu command lines a card click runs, since none can be clicked in a test.
+    // Pins that a task name reaches nu only as an environment variable, so a quote in it cannot
+    // end a string literal and run what follows.
     #[test]
-    fn launch_commands_are_explicit() {
+    fn launch_scripts_read_the_task_from_the_environment() {
         let spec = LaunchSpec {
             project: "wusel".into(),
             topic: "perf".into(),
-            task: "gh-7-chunk-loading".into(),
+            task: "it's-'; rm -rf ~".into(),
         };
-        assert_eq!(
-            spec.hcdev_cmd(),
-            "hcdev wt 'gh-7-chunk-loading' --project 'wusel' --topic 'perf'"
+        for script in [HCDEV_SCRIPT, RESTORE_SCRIPT, COORDINATOR_SCRIPT] {
+            assert!(!script.contains('\''), "no literal in {script}");
+            assert!(script.contains("$env.HDASH_TASK"));
+        }
+        assert!(
+            RESTORE_SCRIPT.starts_with("hwt restore $env.HDASH_TASK --no-cd | ignore; hcdev wt")
         );
-        // Restore is a two-step command: re-creating the worktree without opening the
-        // session leaves the click with nothing running.
         assert_eq!(
-            spec.restore_cmd(),
-            "hwt restore 'gh-7-chunk-loading' --no-cd | ignore; \
-             hcdev wt 'gh-7-chunk-loading' --project 'wusel' --topic 'perf'"
+            spec.env(),
+            [
+                ("HDASH_PROJECT", "wusel"),
+                ("HDASH_TOPIC", "perf"),
+                ("HDASH_TASK", "it's-'; rm -rf ~"),
+            ]
         );
-        assert_eq!(spec.session_title(), "hcdev-wusel-perf-gh-7-chunk-loading");
-    }
-
-    // A coordinator is addressed by project and blurb only: the topic is the reserved
-    // `coordinator`, which `hcdev coordinator` supplies itself.
-    #[test]
-    fn coordinator_command_takes_blurb_and_project() {
-        let spec = LaunchSpec {
-            project: "wusel".into(),
-            topic: "coordinator".into(),
-            task: "food-economy".into(),
-        };
-        assert_eq!(
-            spec.coordinator_cmd(),
-            "hcdev coordinator 'food-economy' --project 'wusel'"
-        );
-        assert_eq!(spec.session_title(), "hcdev-wusel-coordinator-food-economy");
+        assert_eq!(spec.session_title(), "hcdev-wusel-perf-it's-'; rm -rf ~");
     }
 
     // Pins the wrapper every nu launch goes through: without the `catch`, a failing

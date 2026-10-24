@@ -234,11 +234,9 @@ failing the call.
 
 ## Not part of the hdash workspace
 
-`hdash` is a Bevy build; this is a few hundred lines over ratatui. Sharing a
-workspace would put the Bevy dependency graph and its optimised-dependency
-profile in front of a tool that builds in ten seconds on its own. `hdash` reads
-the `status` field of `tasks.json` with `serde_json::Value` rather than
-depending on this crate, for the same reason — it reads `merge` the same way.
+`hcoord` is its own workspace, and `hdash` reads the `status` field of
+`tasks.json` with `serde_json::Value` rather than depending on this crate — it
+reads `merge` the same way.
 
 ## `goal` reads the UX spec a run is judged against
 

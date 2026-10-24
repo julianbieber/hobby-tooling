@@ -160,7 +160,10 @@ def hcdev-session-name-budget [] {
 # would otherwise collapse onto one session, and `hcdev wt A` would drop you into
 # B's editor and Claude pane. Every name handed to `hcdev-launch` goes through here.
 export def hcdev-clamp-session-name [name: string] {
-    let budget = (hcdev-session-name-budget)
+    hcdev-clamp-to $name (hcdev-session-name-budget)
+}
+
+def hcdev-clamp-to [name: string, budget: int] {
     if ($name | str length) <= $budget { return $name }
     let hash = ($name | hash sha256 | str substring 0..<6)
     let head = ($name | str substring 0..<($budget - 7) | str trim --right --char '-')
@@ -171,6 +174,13 @@ export def hcdev-clamp-session-name [name: string] {
 # Exported so `hwt sessions` derives the same name rather than a second guess.
 export def hcdev-session-name [project: string, topic: string, task: string] {
     hcdev-clamp-session-name $"hcdev-($project)-($topic)-($task)"
+}
+
+# Session names for many tasks at once, in input order, from records of `project`, `topic` and
+# `task` — what `hdash` asks for. Equal to `hcdev-session-name` on each record.
+export def hcdev-session-names []: list<record> -> list<string> {
+    let budget = (hcdev-session-name-budget)
+    $in | each {|t| hcdev-clamp-to $"hcdev-($t.project)-($t.topic)-($t.task)" $budget }
 }
 
 # Resolve the notes directory for a working directory, or null.

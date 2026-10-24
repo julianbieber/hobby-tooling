@@ -305,12 +305,6 @@ install-mcps:
     echo ""
     CLAUDE_CONFIG_DIR="{{CONFIG_DIR}}" claude mcp list
 
-# One workspace, one binary. `hwt-overview` and `hgh-issues` were two windows over two
-# halves of one list — issues that have no worktree yet, and the worktrees that exist —
-# and each had to reason about the other's half to draw its own cards. `hdash` joins them
-# on the issue number a task name carries, so a piece of work is one card from the issue
-# to the day it is done.
-
 # Build + install the hdash dashboard
 install-dash:
     cd tools/hdash && cargo install --path crates/hdash_app

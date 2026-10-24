@@ -3,7 +3,9 @@ name = "hwt_core"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
-description = "Shared non-UI helpers for the hobby worktree dashboard (paths, process spawning, time formatting)."
+description = "Shared non-UI helpers for the hobby worktree dashboard (paths, process spawning, a job pool, file logging, text cleaning, time formatting, fuzzy ranking)."
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 log = "0.4"
+nucleo-matcher = "0.3"
