@@ -59,6 +59,11 @@ if [ -e "$CFG/hooks/claude-conversation.sh" ]; then
 else
     bad "conversation dump hook missing" "just install-hooks"
 fi
+if [ -e "$CFG/hooks/session-state.sh" ] && grep -q 'hooks/session-state.sh' "$CFG/settings.json" 2>/dev/null; then
+    ok "session-state hook linked and registered (hdash busy/idle badges)"
+else
+    bad "session-state hook not linked or not in settings.json" "just install-hooks bootstrap-config"
+fi
 if command -v hx-claude >/dev/null 2>&1; then
     # Resolving to a copy outside this checkout is how this broke in the first
     # place: ~/.local/bin pointed into a work *worktree*, one `wt rm` from gone.

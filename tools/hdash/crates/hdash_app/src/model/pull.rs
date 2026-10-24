@@ -9,7 +9,7 @@
 //! - **No prompting.** `GIT_TERMINAL_PROMPT=0` and ssh's `BatchMode` turn a credential
 //!   prompt into an error. `hdash` is usually launched from a terminal, so it *has* a tty:
 //!   without these, an ssh passphrase prompt would write into that terminal invisibly and
-//!   hang an [`IoTaskPool`](bevy::tasks::IoTaskPool) thread for the rest of the session.
+//!   hang a background job thread for the rest of the session.
 //! - **HEAD is compared, not parsed.** `git pull`'s human output differs across versions and
 //!   configurations; the before/after SHA and a `rev-list --count` between them do not.
 

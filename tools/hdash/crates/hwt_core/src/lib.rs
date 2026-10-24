@@ -1,16 +1,24 @@
-//! `hwt_core` — shared non-UI helpers for the hobby worktree dashboard.
-//!
-//! Holds everything that is not Bevy-specific: well-known paths (`~/fun_worktrees`,
-//! the hobby notes repo, XDG config/cache files),
-//! detached process spawning (terminals, browsers), and human-friendly time
-//! formatting. Logging goes through the `log` facade, which Bevy's `LogPlugin` bridges into
-//! its tracing output.
+//! `hwt_core` — the non-UI groundwork the hobby dashboard stands on.
+
+pub mod fuzzy;
+mod interval;
+mod jobs;
+mod logfile;
+
+pub use fuzzy::rank_by;
+pub use interval::Interval;
+pub use jobs::{Reply, spawn_job};
+pub use logfile::log_to_file;
 
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use log::warn;
+
+/// Set on the Alacritty window `hdash` re-runs itself in when it was started without a terminal.
+/// [`spawn_detached`] removes it, so nothing the dashboard launches inherits it.
+pub const SPAWNED_ENV: &str = "HDASH_SPAWNED";
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -64,6 +72,7 @@ pub fn git_capture(path: &std::path::Path, args: &[&str]) -> Option<String> {
         .arg("-C")
         .arg(path)
         .args(args)
+        .stdin(Stdio::null())
         .output()
         .ok()?;
     if !out.status.success() {
@@ -115,26 +124,71 @@ pub fn first_stderr_line(stderr: &str) -> String {
 const ZELLIJ_PANE_ENV: [&str; 3] = ["ZELLIJ", "ZELLIJ_SESSION_NAME", "ZELLIJ_PANE_ID"];
 
 /// Spawn a command detached from this process (via `setsid`), so terminals/browsers opened from
-/// the dashboard outlive it. Failures are logged, never fatal.
+/// the dashboard outlive it. Its standard streams are `/dev/null`, so nothing it prints reaches the
+/// dashboard's terminal. `envs` are set on the child only. Failures are logged, never fatal.
 ///
-/// The child does not inherit [`ZELLIJ_PANE_ENV`]. Detaching from the process is not enough when
-/// the process is itself running in a zellij pane: the terminal would start believing it is
-/// already inside that session, and `hcdev` would then ask zellij to attach a session to itself —
-/// which zellij answers with a panic, so the new terminal vanished the moment it appeared.
-pub fn spawn_detached(args: &[&str]) {
+/// The child does not inherit [`ZELLIJ_PANE_ENV`] or [`SPAWNED_ENV`]. Detaching from the process is
+/// not enough when the process is itself running in a zellij pane: the terminal would start
+/// believing it is already inside that session, and `hcdev` would then ask zellij to attach a
+/// session to itself — which zellij answers with a panic, so the new terminal vanished the moment
+/// it appeared.
+pub fn spawn_detached_with(args: &[&str], envs: &[(&str, &str)]) {
     let mut cmd = Command::new("setsid");
-    cmd.args(args);
-    for var in ZELLIJ_PANE_ENV {
+    cmd.args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    for var in ZELLIJ_PANE_ENV.iter().chain([&SPAWNED_ENV]) {
         cmd.env_remove(var);
     }
+    cmd.envs(envs.iter().copied());
     if let Err(e) = cmd.spawn() {
         warn!("failed to spawn `{}`: {e}", args.join(" "));
     }
 }
 
+/// [`spawn_detached_with`] and no extra environment.
+pub fn spawn_detached(args: &[&str]) {
+    spawn_detached_with(args, &[]);
+}
+
 /// Open a URL (e.g. a PR) in Firefox, detached.
 pub fn open_url(url: &str) {
     spawn_detached(&["-f", "firefox", url]);
+}
+
+/// `s` without control characters and without the invisible characters (bidi overrides,
+/// zero-width marks, tag characters, line and paragraph separators) that would make it read or
+/// lay out differently than it is — so a title or branch name cannot drive the terminal.
+pub fn clean(s: &str) -> String {
+    s.chars().filter(|c| !is_hidden(*c)).collect()
+}
+
+/// Whether `c` is a control character or one of the invisible characters [`clean`] drops.
+pub fn is_hidden(c: char) -> bool {
+    c.is_control()
+        || matches!(c,
+            '\u{00AD}'
+            | '\u{0600}'..='\u{0605}'
+            | '\u{061C}'
+            | '\u{06DD}'
+            | '\u{070F}'
+            | '\u{0890}'..='\u{0891}'
+            | '\u{08E2}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{2028}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206F}'
+            | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{110BD}'
+            | '\u{110CD}'
+            | '\u{13430}'..='\u{1343F}'
+            | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}'
+            | '\u{E0001}'
+            | '\u{E0020}'..='\u{E007F}')
 }
 
 // ---------------------------------------------------------------------------
@@ -207,6 +261,16 @@ pub fn rel_time(t: SystemTime) -> String {
         d if d < 30 => format!("{d}d ago"),
         d if d < 365 => format!("{}mo ago", d / 30),
         d => format!("{}y ago", d / 365),
+    }
+}
+
+/// Compact elapsed-time string for a running duration: `45s`, `12m`, `3h 5m`, `2d`.
+pub fn fmt_duration(secs: u64) -> String {
+    match secs {
+        s if s < 60 => format!("{s}s"),
+        s if s < 3_600 => format!("{}m", s / 60),
+        s if s < 86_400 => format!("{}h {}m", s / 3_600, s % 3_600 / 60),
+        s => format!("{}d", s / 86_400),
     }
 }
 
@@ -290,6 +354,23 @@ mod tests {
         assert_eq!(rel_time(ago(800)), "2y ago");
         // A future timestamp degrades to "today", never panics.
         assert_eq!(rel_time(now + Duration::from_secs(3600)), "today");
+    }
+
+    // Pins the badge durations: seconds, minutes, hours with minutes, then whole days.
+    #[test]
+    fn fmt_duration_buckets() {
+        assert_eq!(fmt_duration(0), "0s");
+        assert_eq!(fmt_duration(45), "45s");
+        assert_eq!(fmt_duration(12 * 60 + 59), "12m");
+        assert_eq!(fmt_duration(3 * 3_600 + 5 * 60), "3h 5m");
+        assert_eq!(fmt_duration(2 * 86_400 + 7), "2d");
+    }
+
+    // Pins that a crafted title loses the escape and bidi characters that could drive the terminal.
+    #[test]
+    fn clean_drops_control_and_invisible_characters() {
+        assert_eq!(clean("a\u{1b}[31mb\u{202E}c\nd"), "a[31mbcd");
+        assert_eq!(clean("plain · ±3 ü"), "plain · ±3 ü");
     }
 
     #[test]

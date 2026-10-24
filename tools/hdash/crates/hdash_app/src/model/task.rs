@@ -1,5 +1,5 @@
 //! The tasks: the notes filesystem scan, git status reads, PR status via `gh`, and the
-//! `task.json` marks. No Bevy UI here.
+//! `task.json` marks. No UI here.
 //!
 //! A task is a notes directory carrying a `task.json`. The worktree under
 //! `~/fun_worktrees/PROJECT/TOPIC/TASK` is not consulted for existence — only for
@@ -10,13 +10,14 @@
 //! question only — *is it checked out* — and is never enumerated to find out what work there
 //! is. `hwt` reads the same file by the same rule, so its task count and the dashboard's agree.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use bevy::prelude::*;
-use hwt_core::{days_from_civil, git_capture, parse_ymd, projects_root};
+use hwt_core::{clean, days_from_civil, git_capture, parse_ymd, projects_root};
+use log::warn;
 use serde::{Deserialize, Serialize};
 
 pub use hwt_core::{notes_root, worktrees_root};
@@ -30,8 +31,8 @@ pub const COORDINATOR_TOPIC: &str = "coordinator";
 pub struct GitMsg {
     /// The task the repo belongs to.
     pub id: TaskId,
-    /// Index of the repo within the task's `repos`.
-    pub repo: usize,
+    /// Path of the repo the status was read from.
+    pub path: PathBuf,
     /// The freshly-read git status.
     pub info: GitInfo,
 }
@@ -66,7 +67,7 @@ impl PrStatus {
 
 /// A pull request associated with a task. `url` and the optional metadata come from the task's
 /// `prs.json`; `status`/`number`/`live_title` are populated asynchronously by `gh`.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct Pr {
     /// PR URL (the only guaranteed field; used as the `gh pr view` argument and the display fallback).
     pub url: String,
@@ -104,7 +105,7 @@ impl Pr {
 
 /// A subtask owned by a task: a sibling worktree the task spun off (via `/spawn`). Declared in the
 /// owning task's `subtasks.json`. `task` is the only required field; the rest is display metadata.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct SubtaskRef {
     /// The child task's directory/branch name (third path level, under its topic).
     pub task: String,
@@ -154,8 +155,8 @@ impl SubtaskRef {
 pub struct PrMsg {
     /// The task the PR belongs to.
     pub id: TaskId,
-    /// Index of the PR within the task's `prs`.
-    pub pr: usize,
+    /// URL of the PR the status belongs to.
+    pub url: String,
     /// Mapped live state.
     pub status: PrStatus,
     /// PR number from `gh`, if read.
@@ -184,7 +185,7 @@ impl TaskId {
 }
 
 /// Per-repo git status. `loaded` is false until the async scan fills it in.
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct GitInfo {
     /// Whether the async git scan has populated this entry.
     pub loaded: bool,
@@ -202,7 +203,7 @@ pub struct GitInfo {
 /// more than one entry. It stays a struct in a vector rather than collapsing into `Task`
 /// because the async git-status plumbing addresses repos by index. There is no `name`:
 /// a hobby repo is its project, and the merged card already prints the project.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Repo {
     /// Absolute path to the repo.
     pub path: PathBuf,
@@ -212,7 +213,7 @@ pub struct Repo {
 
 /// A block: the task is waiting on an action and/or until a day. Deserialized from the `blocked`
 /// object in `task.json` (`null`/absent means not blocked).
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Block {
     /// `YYYY-MM-DD` the block lifts, if set (`None` = indefinite, waiting on an action).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -295,7 +296,7 @@ impl CoordinatorCounts {
 }
 
 /// A task: a directory under a topic, possibly holding several repos.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Task {
     /// Stable id.
     pub id: TaskId,
@@ -333,9 +334,19 @@ pub struct Task {
     /// The list counts when this task is a coordinator (topic [`COORDINATOR_TOPIC`]) whose
     /// `tasks.json` could be read; `None` for every other task.
     pub coordinator: Option<CoordinatorCounts>,
+    /// The `phase` recorded in the task's `build-task.json` by `/task:build` or `/task:auto`, if
+    /// there is one.
+    pub phase: Option<String>,
+    /// The zellij session name `hcdev` gives this task, as `hcdev.nu` spells it.
+    pub session_name: String,
 }
 
 impl Task {
+    /// The task's window title as `hdash` launches it: the unclamped `hcdev-PROJECT-TOPIC-TASK`.
+    pub fn window_title(&self) -> String {
+        unclamped_session_name(&self.id)
+    }
+
     /// Whether this task is a coordinator: it lives under the reserved topic, so it has
     /// no worktree and is opened with `hcdev coordinator`.
     pub fn is_coordinator(&self) -> bool {
@@ -562,7 +573,68 @@ pub fn scan_tasks() -> Vec<Task> {
     }
     mark_unstarted(&mut tasks);
     tasks.extend(scan_orphan_worktrees());
+    name_sessions(&mut tasks);
     tasks
+}
+
+fn unclamped_session_name(id: &TaskId) -> String {
+    format!("hcdev-{}-{}-{}", id.project, id.topic, id.name)
+}
+
+fn name_cache() -> &'static Mutex<HashMap<TaskId, String>> {
+    static CACHE: OnceLock<Mutex<HashMap<TaskId, String>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn name_sessions(tasks: &mut [Task]) {
+    let Ok(mut cache) = name_cache().lock() else {
+        return;
+    };
+    let unknown: Vec<TaskId> = tasks
+        .iter()
+        .map(|t| t.id.clone())
+        .filter(|id| !cache.contains_key(id))
+        .collect();
+    if !unknown.is_empty() {
+        match session_names_from_nu(&unknown) {
+            Some(names) => cache.extend(unknown.into_iter().zip(names)),
+            None => {
+                static WARNED: OnceLock<()> = OnceLock::new();
+                if WARNED.set(()).is_ok() {
+                    warn!(
+                        "hcdev.nu did not name the sessions; using unclamped hcdev-P-T-TASK names"
+                    );
+                }
+            }
+        }
+    }
+    for task in tasks {
+        task.session_name = cache
+            .get(&task.id)
+            .cloned()
+            .unwrap_or_else(|| unclamped_session_name(&task.id));
+    }
+}
+
+fn session_names_from_nu(ids: &[TaskId]) -> Option<Vec<String>> {
+    let module = hwt_core::xdg_config_path("nushell", "hcdev.nu");
+    let module = module.to_str().filter(|m| !m.contains('\''))?;
+    let input: Vec<serde_json::Value> = ids
+        .iter()
+        .map(|id| serde_json::json!({ "project": id.project, "topic": id.topic, "task": id.name }))
+        .collect();
+    let script = format!(
+        "use '{module}' *; $env.HDASH_IDS | from json | hcdev-session-names | to json --raw"
+    );
+    let out = Command::new("nu")
+        .args(["-c", &script])
+        .env("HDASH_IDS", serde_json::to_string(&input).ok()?)
+        .stdin(Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    let names: Vec<String> = serde_json::from_slice(&out.stdout).ok()?;
+    (names.len() == ids.len()).then_some(names)
 }
 
 fn mark_unstarted(tasks: &mut [Task]) {
@@ -594,6 +666,7 @@ fn branch_names(checkout: &Path) -> Option<HashSet<String>> {
             "refs/heads",
             "refs/remotes",
         ])
+        .stdin(Stdio::null())
         .output()
         .ok()
         .filter(|o| o.status.success())?;
@@ -651,12 +724,14 @@ fn build_task(id: TaskId, adopted: bool, done: bool, block: Option<Block>) -> Ta
         git: GitInfo::default(),
     }];
     let prs = read_prs(&id);
+    let phase = read_phase(&id);
     let subtasks = read_subtasks(&id);
     let last_active =
         notes_path(&id).and_then(|p| std::fs::metadata(&p).ok().and_then(|m| m.modified().ok()));
     let title = std::fs::read_to_string(issue_path(&id))
         .ok()
-        .and_then(|text| frontmatter_title(&text));
+        .and_then(|text| frontmatter_title(&text))
+        .map(|t| clean(&t));
     let coordinator = (id.topic == COORDINATOR_TOPIC)
         .then(|| std::fs::read_to_string(coordinator_tasks_path(&id)).ok())
         .flatten()
@@ -677,7 +752,21 @@ fn build_task(id: TaskId, adopted: bool, done: bool, block: Option<Block>) -> Ta
         subtasks,
         last_active,
         coordinator,
+        phase,
+        session_name: String::new(),
     }
+}
+
+/// Path to a task's `build-task.json` in the notes tree, the `/task:build` and `/task:auto` state.
+pub fn build_state_path(id: &TaskId) -> PathBuf {
+    notes_root().join(id.rel()).join("build-task.json")
+}
+
+fn read_phase(id: &TaskId) -> Option<String> {
+    let text = std::fs::read_to_string(build_state_path(id)).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let phase = clean(value.get("phase")?.as_str()?);
+    (!phase.is_empty()).then_some(phase)
 }
 
 /// Path to a task's `issue.md` in the notes tree: `notes/PROJECT/TOPIC/TASK/issue.md`.
@@ -764,7 +853,15 @@ fn read_prs(id: &TaskId) -> Vec<Pr> {
         return Vec::new();
     }
     match serde_json::from_str::<Vec<Pr>>(&content) {
-        Ok(prs) => prs,
+        Ok(prs) => prs
+            .into_iter()
+            .map(|mut pr| {
+                pr.repo = pr.repo.map(|r| clean(&r));
+                pr.title = pr.title.map(|t| clean(&t));
+                pr.opened = pr.opened.map(|o| clean(&o));
+                pr
+            })
+            .collect(),
         Err(e) => {
             warn!("ignoring malformed {}: {e}", path.display());
             Vec::new()
@@ -786,7 +883,15 @@ fn read_subtasks(id: &TaskId) -> Vec<SubtaskRef> {
         return Vec::new();
     }
     match serde_json::from_str::<Vec<SubtaskRef>>(&content) {
-        Ok(subs) => subs,
+        Ok(subs) => subs
+            .into_iter()
+            .map(|mut sub| {
+                sub.blurb = sub.blurb.map(|b| clean(&b));
+                sub.goal = sub.goal.map(|g| clean(&g));
+                sub.created = sub.created.map(|c| clean(&c));
+                sub
+            })
+            .collect(),
         Err(e) => {
             warn!("ignoring malformed {}: {e}", path.display());
             Vec::new()
@@ -800,12 +905,13 @@ fn read_subtasks(id: &TaskId) -> Vec<SubtaskRef> {
 
 /// Read branch, short SHA, and dirty count for a single repo. Blocking; run off the main thread.
 pub fn read_git(path: &Path) -> GitInfo {
-    let branch = git_capture(path, &["symbolic-ref", "--short", "HEAD"]);
+    let branch = git_capture(path, &["symbolic-ref", "--short", "HEAD"]).map(|b| clean(&b));
     let head = git_capture(path, &["rev-parse", "--short", "HEAD"]);
     let dirty = Command::new("git")
         .arg("-C")
         .arg(path)
         .args(["status", "--porcelain"])
+        .stdin(Stdio::null())
         .output()
         .ok()
         .map(|o| {
@@ -829,6 +935,7 @@ pub fn read_git(path: &Path) -> GitInfo {
 pub fn read_pr_status(url: &str) -> (PrStatus, Option<u64>, Option<String>) {
     let out = Command::new("gh")
         .args(["pr", "view", url, "--json", "state,isDraft,number,title"])
+        .stdin(Stdio::null())
         .output();
     let out = match out {
         Ok(o) if o.status.success() => o,
@@ -844,7 +951,7 @@ pub fn read_pr_status(url: &str) -> (PrStatus, Option<u64>, Option<String>) {
     let title = v
         .get("title")
         .and_then(serde_json::Value::as_str)
-        .map(str::to_owned);
+        .map(clean);
     let is_draft = v
         .get("isDraft")
         .and_then(serde_json::Value::as_bool)

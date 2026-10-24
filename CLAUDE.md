@@ -40,7 +40,7 @@ scripts/                              # install logic too involved for a justfil
 lsps/hobby-mml-lsp/                   # forked HMML language server + grammar.md
 lsps/{claude,claude-skills,treesitter-class,path}-lsp/   # vendored from the work checkout
 mcps/{just-mcp, lsp-mcp, tree-extract}/   # vendored from the work checkout
-tools/hdash/                          # the work dashboard (Bevy)
+tools/hdash/                          # the work dashboard (ratatui, in the terminal)
 tools/hcoord/                         # the coordinator's task-list pane + `hcoord wait` (ratatui)
 ```
 
@@ -281,8 +281,9 @@ card's title is `issue.md`'s `title:` when there is one, else the task name.
 
 Three consequences worth knowing:
 
-- **An orphan outranks everything.** A worktree the notes repo has never heard of sorts
-  above even a lifted block, and no content toggle can hide it.
+- **An orphan outranks everything but a session waiting on you.** A worktree the notes
+  repo has never heard of sorts above even a lifted block — only an open task whose Claude
+  session is idle sorts higher — and no toggle can hide it; a filter chip that is on can.
 - **Topic is not a grouping level.** The list is flat and globally sorted by how much
   attention an item wants; project and topic are printed on the card.
 - **`show_done` off is a load-bearing default** — there are ~25× more done tasks than
@@ -293,10 +294,33 @@ The sidebar lists the projects that have a notes directory. It used to list ever
 holds upstream clones too (`bevy`, `helix`), and with no issues to reach a row for them
 would be empty.
 
-`feathers_kit` stays a deliberate fork of the work copy so the *work* dashboard
-cannot regress, and this is the repo's only copy. With one workspace there is no
-longer a cross-workspace path dependency, so `cargo fmt`/`clippy` no longer reach
-sideways and editing `hwt_core` needs one workspace's tests, not two.
+With one workspace there is no cross-workspace path dependency, so `cargo fmt`/`clippy`
+do not reach sideways and editing `hwt_core` needs one workspace's tests, not two.
+
+### It runs in the terminal, and it watches the sessions
+
+`hdash` is a ratatui app ported from the work `wt-overview`, which made the same move
+first. Started without a terminal it re-runs itself in a fullscreen Alacritty titled and
+classed `hdash`; warnings go to `~/.cache/hdash/hdash.log`, never to the screen. With the
+port came what the work version had grown and this one had not: the list rescans by
+itself when the notes or worktree trees move, a fuzzy filter narrows the project sidebar,
+filter chips narrow the list (including by the `/task:build` / `/task:auto` phase in
+`build-task.json`), and the primary button reads **Focus** when a window already shows the
+task's session — it activates that window, so leftwm switches to its tag — or **Attach**
+when the session runs without one.
+
+Cards carry an `idle 12m` / `busy 3m` badge from `hooks/session-state`, which writes one
+file per hobby-account Claude session under `$XDG_RUNTIME_DIR/hobby-session-state`. **Every
+Claude process counts** — a plain hcdev pane, both `/task:auto` stages, a coordinator's
+pane — and a record belongs to the task whose zellij session it ran in, falling back to the
+worktree its directory lies in; the newest live record per task decides the badge. The
+directory is not the work hook's `claude-session-state`, so neither dashboard reads or
+deletes the other's records. An idle session on an open task sorts first.
+
+Task names never reach a nu command line as text: a launch passes them as
+`HDASH_PROJECT`/`HDASH_TOPIC`/`HDASH_TASK` to a fixed script, and the zellij session names
+come from one batched `hcdev-session-names` call into `hcdev.nu` — still the only place a
+session name is spelled.
 
 **Installing never needs tests** — the committed code is already tested, so
 `install-dash` builds and replaces the binary and nothing more.
@@ -475,11 +499,9 @@ survives unattended: a done-when that cannot be written as commands stops at
 fails is worse than no check. `auto` is set only by a coordinator, so a
 hand-typed `hcdev auto` keeps the play gate and the running application.
 
-`hcoord` is its own workspace rather than a member of `tools/hdash`'s: `hdash`
-is a Bevy build, and a few hundred lines over ratatui should not sit behind that
-dependency graph and its optimised-dependency profile. `hdash` reads the one
-field it needs from `tasks.json` with `serde_json::Value` rather than depending
-on the crate, for the same reason.
+`hcoord` is its own workspace rather than a member of `tools/hdash`'s, and `hdash`
+reads the one field it needs from `tasks.json` with `serde_json::Value` rather than
+depending on the crate.
 
 ## Opening a session from a dashboard: two things that kill the terminal
 
@@ -542,7 +564,7 @@ list) and refuses the session you are currently in — ending your own session o
 from under yourself is `#48`'s problem, not this verb's.
 
 `Restore` also runs `hcdev wt` after `hwt restore`, as `Start task` does after `hwt new`.
-The card is only rescanned by the **Refresh** button, so a restore that stopped at the
+When the card was only rescanned by the **Refresh** button, a restore that stopped at the
 worktree left the card reading `Removed` and a second click could report nothing but
 "already present".
 

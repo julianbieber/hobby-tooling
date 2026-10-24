@@ -1,10 +1,10 @@
-# hdash — Bevy dashboard of hobby work items (tasks, worktrees, PRs)
+# hdash — terminal dashboard of hobby work items (tasks, worktrees, PRs, Claude sessions)
 
 # List all recipes
 default:
     @just --list
 
-# Build the dashboard (dev profile; dependencies are optimized so the app is usable)
+# Build the dashboard (dev profile)
 build:
     cargo build -p hdash_app
 
@@ -12,7 +12,7 @@ build:
 release:
     cargo build -p hdash_app --release
 
-# Run the dashboard (dev build)
+# Run the dashboard in this terminal (dev build)
 run:
     cargo run -p hdash_app
 
@@ -48,6 +48,6 @@ test:
 clean:
     cargo clean
 
-# Launch the app and screenshot its window (dev helper; needs xdotool + imagemagick)
+# Launch the app in an Alacritty window and screenshot it (dev helper; needs xdotool + imagemagick)
 shot out="/tmp/hdash-shot.png": release
     ./shot.sh {{out}}
