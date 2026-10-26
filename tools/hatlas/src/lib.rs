@@ -4,6 +4,7 @@
 pub mod atlas;
 pub mod bevy;
 pub mod cargo;
+pub mod events;
 pub mod rustdoc;
 pub mod scip;
 pub mod site;
@@ -32,6 +33,7 @@ pub struct Summary {
     pub resources: usize,
     pub systems: usize,
     pub observers: usize,
+    pub events: usize,
     pub unresolved: usize,
     pub pages: usize,
 }
@@ -118,9 +120,13 @@ pub fn run(options: &Options) -> Result<Summary, Error> {
     let (calls, notes) = source::read(&workspace.workspace_root, &workspace.source_files());
     let mut registry = systems::Registry::build(&mut atlas, &docs, &scip, &calls)?;
     registry.unresolved.extend(notes);
+    let flows = events::build(&mut atlas, &docs, &scip, &calls, &mut registry)?;
+    registry.unresolved.extend(flows.unresolved.iter().cloned());
+    registry.unresolved.sort();
+    registry.unresolved.dedup();
 
     let tmp = site::swap::tmp_dir(&out);
-    let result = site::render(&atlas, &registry, &tmp)
+    let result = site::render(&atlas, &registry, &flows, &tmp)
         .and_then(|pages| site::check::check(&tmp).map(|()| pages))
         .and_then(|pages| site::swap::swap(&tmp, &out).map(|()| pages));
     if result.is_err() {
@@ -138,6 +144,7 @@ pub fn run(options: &Options) -> Result<Summary, Error> {
         resources: count(bevy::Role::Resource),
         systems: count(bevy::Role::System),
         observers: count(bevy::Role::Observer),
+        events: flows.flows.len(),
         unresolved: registry.unresolved.len(),
         pages,
     })

@@ -9,6 +9,7 @@ pub mod swap;
 use crate::Error;
 use crate::atlas::{Atlas, Item, Module};
 use crate::bevy::Role;
+use crate::events::{Endpoint, EventFlow, EventKey, Flows, Party};
 use crate::rustdoc::Id;
 use crate::systems::{Param, Registered, Registrant, Registration, Registry};
 use markdown::{escape, render_docs, summary};
@@ -22,24 +23,28 @@ code,pre{font-family:ui-monospace,monospace}pre{background:#f4f4f4;padding:.6rem
 @media(prefers-color-scheme:dark){body{background:#181818;color:#ddd}a{color:#8ab4f8}pre{background:#252525}.summary,.where,.vis,.crumbs{color:#999}}";
 
 fn has_page(role: Role) -> bool {
-    matches!(role, Role::Plugin | Role::Component | Role::Resource | Role::System | Role::Observer)
+    matches!(role, Role::Plugin | Role::Component | Role::Resource | Role::Event | Role::System | Role::Observer)
 }
 
 struct Site<'a> {
     atlas: &'a Atlas,
     registry: &'a Registry,
+    flows: &'a Flows,
+    event_pages: HashMap<EventKey, String>,
     module_pages: HashMap<Vec<String>, String>,
     item_pages: HashMap<(usize, Id), String>,
     anchors: HashMap<(usize, Id), (Vec<String>, String)>,
 }
 
 /// Writes the whole site into `root`, marker first, and returns how many pages it holds.
-pub fn render(atlas: &Atlas, registry: &Registry, root: &Path) -> Result<usize, Error> {
+pub fn render(atlas: &Atlas, registry: &Registry, flows: &Flows, root: &Path) -> Result<usize, Error> {
     let _ = std::fs::remove_dir_all(root);
     write(root, swap::MARKER, "")?;
     let mut site = Site {
         atlas,
         registry,
+        flows,
+        event_pages: HashMap::new(),
         module_pages: HashMap::new(),
         item_pages: HashMap::new(),
         anchors: HashMap::new(),
@@ -48,11 +53,21 @@ pub fn render(atlas: &Atlas, registry: &Registry, root: &Path) -> Result<usize, 
     for (ci, krate) in atlas.crates.iter().enumerate() {
         site.register(ci, &krate.root, &mut names);
     }
+    for flow in &flows.flows {
+        if flow.item.is_none() {
+            let page = names.item(&["events".to_string(), flow.key.crate_name.clone()], "event", &flow.key.name);
+            site.event_pages.insert(flow.key.clone(), page);
+        }
+    }
     let mut pages = 0;
     write(root, "index.html", &site.index())?;
     pages += 1;
     for (ci, krate) in atlas.crates.iter().enumerate() {
         pages += site.write_module(root, ci, &krate.root)?;
+    }
+    for flow in flows.flows.iter().filter(|f| f.item.is_none()) {
+        site.write_event(root, flow)?;
+        pages += 1;
     }
     Ok(pages)
 }
@@ -146,7 +161,7 @@ impl<'a> Site<'a> {
                 ));
             }
             body.push_str("</ul>\n");
-            for role in [Role::Plugin, Role::Component, Role::Resource, Role::System, Role::Observer] {
+            for role in [Role::Plugin, Role::Component, Role::Resource, Role::Event, Role::System, Role::Observer] {
                 let mut items = Vec::new();
                 collect_public_items(&krate.root, role, &mut items);
                 if items.is_empty() {
@@ -165,6 +180,19 @@ impl<'a> Site<'a> {
                 }
                 body.push_str("</ul>\n");
             }
+        }
+        let external: Vec<_> = self.flows.flows.iter().filter(|f| f.item.is_none()).collect();
+        if !external.is_empty() {
+            body.push_str("<h2>Events from dependencies</h2>\n<ul>\n");
+            for flow in external {
+                body.push_str(&format!(
+                    "<li><a href=\"{}\">{}</a> <span class=\"where\">{}</span></li>\n",
+                    escape(&relative(from, &self.event_pages[&flow.key])),
+                    escape(&flow.key.name),
+                    escape(flow.defined_in())
+                ));
+            }
+            body.push_str("</ul>\n");
         }
         if !self.registry.unresolved.is_empty() {
             body.push_str("<h2>Unresolved registrations</h2>\n<ul>\n");
@@ -261,8 +289,18 @@ impl<'a> Site<'a> {
             body.push_str(&format!("<p>Implements: {}</p>\n", escape(&item.traits.join(", "))));
         }
         body.push_str(&self.docs_html(ci, from, item.docs.as_deref(), &item.links));
+        if let Some(flow) = self.flows.flows.iter().find(|f| f.item == Some((ci, item.id))) {
+            body.push_str(&self.flow_html(from, flow));
+        }
         if let Some(view) = self.registry.systems.get(&(ci, item.id)) {
             body.push_str(&self.system_html(from, view));
+        }
+        for flow in self.flows.listened_by((ci, item.id)) {
+            body.push_str(&format!("\n<h2>Listens to {}</h2>", self.event_link(from, flow)));
+            body.push_str(&self.producers_html(from, flow));
+        }
+        for flow in self.flows.produced_by((ci, item.id)) {
+            body.push_str(&format!("\n<h2>Produces {}</h2>", self.event_link(from, flow)));
         }
         if let Some(registered) = self.registry.registers.get(&(ci, item.id)) {
             body.push_str(&self.registers_html(from, registered));
@@ -275,6 +313,77 @@ impl<'a> Site<'a> {
             body.push_str("</ul>");
         }
         write(root, from, &page(&format!("{} {}", item.role.label(), item.name), &body))
+    }
+
+    fn event_page(&self, flow: &EventFlow) -> &str {
+        match flow.item {
+            Some(r) => &self.item_pages[&r],
+            None => &self.event_pages[&flow.key],
+        }
+    }
+
+    fn event_link(&self, from: &str, flow: &EventFlow) -> String {
+        format!("<a href=\"{}\">{}</a>", escape(&relative(from, self.event_page(flow))), escape(&flow.key.name))
+    }
+
+    fn endpoint_html(&self, from: &str, e: &Endpoint) -> String {
+        let mut out = match &e.party {
+            Party::Item(r) => {
+                let name = self.atlas.item(*r).map_or("", |i| i.name.as_str());
+                match self.href(r.0, r.1, from) {
+                    Some(h) => format!("<a href=\"{}\">{}</a>", escape(&h), escape(name)),
+                    None => format!("<code>{}</code>", escape(name)),
+                }
+            }
+            Party::Anonymous { module, anchor, .. } => format!(
+                "<a href=\"{}#{}\">closure</a>",
+                escape(&relative(from, &self.module_pages[module])),
+                escape(anchor)
+            ),
+            Party::Text(t) => format!("<code>{}</code>", escape(t)),
+        };
+        out.push_str(&format!(" · <code>{}</code>", escape(&e.via)));
+        if let Some((file, line)) = &e.site {
+            out.push_str(&format!(" · <span class=\"where\">{}:{line}</span>", escape(file)));
+        }
+        out
+    }
+
+    fn endpoints_html(&self, from: &str, heading: &str, none: &str, endpoints: &[Endpoint]) -> String {
+        let mut out = format!("\n<h2>{heading}</h2>\n");
+        if endpoints.is_empty() {
+            out.push_str(&format!("<p class=\"no-docs\">{none}</p>"));
+            return out;
+        }
+        out.push_str("<ul>\n");
+        for e in endpoints {
+            out.push_str(&format!("<li>{}</li>\n", self.endpoint_html(from, e)));
+        }
+        out.push_str("</ul>");
+        out
+    }
+
+    fn producers_html(&self, from: &str, flow: &EventFlow) -> String {
+        self.endpoints_html(from, "Produced by", "no producer found in the workspace", &flow.producers)
+    }
+
+    fn flow_html(&self, from: &str, flow: &EventFlow) -> String {
+        let mut out = format!("\n<p>Defined in <code>{}</code></p>", escape(flow.defined_in()));
+        out.push_str(&self.producers_html(from, flow));
+        out.push_str(&self.endpoints_html(from, "Listened to by", "no listener found in the workspace", &flow.listeners));
+        out
+    }
+
+    fn write_event(&self, root: &Path, flow: &EventFlow) -> Result<(), Error> {
+        let from = self.event_page(flow);
+        let mut body = format!(
+            "<p class=\"crumbs\"><a href=\"{}\">Atlas</a> :: events :: {}</p>\n<h1>Event {}</h1>",
+            escape(&relative(from, "index.html")),
+            escape(flow.defined_in()),
+            escape(&flow.key.name)
+        );
+        body.push_str(&self.flow_html(from, flow));
+        write(root, from, &page(&format!("Event {}", flow.key.name), &body))
     }
 
     fn registrant_html(&self, from: &str, by: &Registrant) -> String {
@@ -335,7 +444,12 @@ impl<'a> Site<'a> {
         } else {
             out.push_str(&params_html(&view.params));
         }
-        out.push_str("\n<h2>Registrations</h2>\n<ul>\n");
+        out.push_str("\n<h2>Registrations</h2>\n");
+        if view.registrations.is_empty() {
+            out.push_str("<p class=\"no-docs\">no registration found in source (one inside a macro is not read)</p>");
+            return out;
+        }
+        out.push_str("<ul>\n");
         for reg in &view.registrations {
             out.push_str(&format!("<li>{}</li>\n", self.registration_html(from, reg)));
         }

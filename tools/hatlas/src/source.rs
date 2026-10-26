@@ -24,7 +24,8 @@ pub struct Ident {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Target {
     Named(Ident),
-    Closure { file: String, line: usize, col: usize },
+    /// `observes` is the event type of an observer closure's `On<E>` first parameter, as written.
+    Closure { file: String, line: usize, col: usize, observes: Option<Ident> },
     Unparsed(String),
 }
 
@@ -54,6 +55,8 @@ pub enum CallKind {
     Observer(Vec<Entry>),
     Plugins(Vec<Entry>),
     Resource(Entry),
+    /// A call that raises an event; `segments` is every path segment of the event expression, empty when it is not a path, struct literal or call.
+    Produce { method: String, segments: Vec<Ident>, text: String },
 }
 
 /// One registration call and where it was made.
@@ -174,7 +177,11 @@ impl Reader {
             },
             Expr::Closure(c) => {
                 let start = c.span().start();
-                vec![entry(Target::Closure { file: self.file.clone(), line: start.line, col: start.column })]
+                let observes = match c.inputs.first() {
+                    Some(syn::Pat::Type(pt)) => self.observed_event(&pt.ty),
+                    _ => None,
+                };
+                vec![entry(Target::Closure { file: self.file.clone(), line: start.line, col: start.column, observes })]
             }
             Expr::Call(c) => match strip(&c.func) {
                 Expr::Path(p) => {
@@ -190,6 +197,32 @@ impl Reader {
             Expr::MethodCall(m) => self.method_entries(m),
             _ => vec![entry(Target::Unparsed(self.text(expr)))],
         }
+    }
+
+    fn observed_event(&self, ty: &Type) -> Option<Ident> {
+        let Type::Path(p) = ty else { return None };
+        let last = p.path.segments.last()?;
+        if !BevyNames::OBSERVER_PARAMS.contains(&last.ident.to_string().as_str()) {
+            return None;
+        }
+        let syn::PathArguments::AngleBracketed(args) = &last.arguments else { return None };
+        match args.args.first()? {
+            syn::GenericArgument::Type(Type::Path(inner)) => self.ident_of_path(&inner.path),
+            _ => None,
+        }
+    }
+
+    fn event_segments(&self, arg: &Expr) -> Vec<Ident> {
+        let path = match strip(arg) {
+            Expr::Path(p) => &p.path,
+            Expr::Struct(s) => &s.path,
+            Expr::Call(c) => match strip(&c.func) {
+                Expr::Path(p) => &p.path,
+                _ => return Vec::new(),
+            },
+            _ => return Vec::new(),
+        };
+        path.segments.iter().map(|s| self.ident_of_ident(&s.ident, s.ident.to_string())).collect()
     }
 
     fn method_entries(&self, m: &syn::ExprMethodCall) -> Vec<Entry> {
@@ -350,8 +383,26 @@ impl<'ast> Visit<'ast> for Reader {
             if let Some(target) = target {
                 self.push(&m.method, CallKind::Resource(entry(target)));
             }
+        } else if BevyNames::PRODUCING_CALLS.contains(&name.as_str())
+            && let Some(arg) = args.first()
+        {
+            let segments = self.event_segments(arg);
+            let text = self.text(*arg);
+            self.push(&m.method, CallKind::Produce { method: name.clone(), segments, text });
         }
         syn::visit::visit_expr_method_call(self, m);
+    }
+
+    fn visit_expr_call(&mut self, c: &'ast syn::ExprCall) {
+        if let Expr::Path(p) = strip(&c.func)
+            && let Some(last) = p.path.segments.last()
+            && BevyNames::ADD_OBSERVER.contains(&last.ident.to_string().as_str())
+            && let Some(arg) = c.args.first()
+        {
+            let entries = self.entries(arg);
+            self.push(&last.ident, CallKind::Observer(entries));
+        }
+        syn::visit::visit_expr_call(self, c);
     }
 }
 
@@ -404,6 +455,36 @@ mod tests {
     fn closure_is_an_anonymous_target() {
         let c = calls("fn f() { app.add_systems(Update, |x: Res<R>| {}); }");
         assert!(matches!(systems(&c[0])[0].target, Target::Closure { line: 1, .. }));
+    }
+
+    // Pins that a trigger call keeps every segment of its event expression, so the resolver can find the type before a variant.
+    #[test]
+    fn produce_calls_keep_event_segments() {
+        let names = |src: &str| match &calls(src)[0].kind {
+            CallKind::Produce { segments, .. } => segments.iter().map(|s| s.name.clone()).collect::<Vec<_>>(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(names("fn f() { commands.trigger(Foo { a: 1 }); }"), ["Foo"]);
+        assert_eq!(names("fn f() { world.write_message(AppExit::Success); }"), ["AppExit", "Success"]);
+        assert!(names("fn f() { w.send(x_y()); }").len() == 1);
+        assert!(names("fn f() { w.send(1 + 2); }").is_empty());
+    }
+
+    // Pins the free-function `observe(closure)` form and that the closure records the event its `On<E>` parameter names.
+    #[test]
+    fn observe_call_names_its_event() {
+        let c = calls("fn f() { row.spawn(observe(|_: On<Click>, q: Res<R>| {})); }");
+        let CallKind::Observer(e) = &c[0].kind else { panic!("{:?}", c[0].kind) };
+        let Target::Closure { observes, .. } = &e[0].target else { panic!() };
+        assert_eq!(observes.as_ref().map(|i| i.name.as_str()), Some("Click"));
+    }
+
+    // Pins that a closure whose first parameter is not an observer parameter observes nothing.
+    #[test]
+    fn plain_closure_observes_nothing() {
+        let c = calls("fn f() { app.add_observer(|x: Res<R>| {}); }");
+        let CallKind::Observer(e) = &c[0].kind else { panic!() };
+        assert!(matches!(&e[0].target, Target::Closure { observes: None, .. }));
     }
 
     // Pins that run_if on one tuple member does not leak onto its siblings.

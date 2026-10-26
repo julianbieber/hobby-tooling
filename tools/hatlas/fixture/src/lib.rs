@@ -34,6 +34,7 @@ impl Plugin for ScorePlugin {
             let _ = score.0;
         });
         app.add_systems(Update, score_macro!());
+        app.add_systems(Update, (announce, hear, fire));
         app.add_observer(on_scored);
         app.add_plugins(extra_plugin);
     }
@@ -79,6 +80,26 @@ fn macro_made() {}
 fn on_scored(event: On<Scored>) {
     let _ = event;
 }
+
+/// Counted once per report.
+#[derive(Message)]
+pub struct Tallied(pub u32);
+
+/// Announces the tally.
+pub fn announce(mut out: MessageWriter<Tallied>) {
+    out.write(Tallied(1));
+}
+
+/// Hears the tally.
+pub fn hear(mut input: MessageReader<Tallied>) {
+    let _ = input.read().count();
+}
+
+fn fire(mut commands: Commands) {
+    commands.trigger(Scored);
+}
+
+fn heard_elsewhere(_: On<Scored>) {}
 
 /// A plugin written as a function.
 pub fn extra_plugin(app: &mut App) {
