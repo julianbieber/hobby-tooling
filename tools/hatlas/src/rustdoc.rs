@@ -3,6 +3,7 @@
 
 use crate::Error;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// The `format_version`s a committed fixture covers.
@@ -184,6 +185,58 @@ impl Crate {
             .get("name")?
             .as_str()
             .map(str::to_string)
+    }
+
+    /// Every item this crate defines that `paths` knows: id, full path (the crate name
+    /// first) and kind. Sorted by path.
+    pub fn local_paths(&self) -> Vec<(Id, Vec<String>, String)> {
+        let mut out: Vec<(Id, Vec<String>, String)> = self.json["paths"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(_, v)| v.get("crate_id").and_then(Value::as_u64) == Some(0))
+            .filter_map(|(k, v)| {
+                let path = v.get("path")?.as_array()?.iter().map(|s| s.as_str().map(str::to_string)).collect::<Option<Vec<_>>>()?;
+                Some((k.parse().ok()?, path, v.get("kind")?.as_str()?.to_string()))
+            })
+            .collect();
+        out.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
+        out
+    }
+
+    /// For every type with inherent `impl` blocks, the members of those blocks.
+    pub fn inherent_impl_items(&self) -> HashMap<Id, Vec<Id>> {
+        let mut out: HashMap<Id, Vec<Id>> = HashMap::new();
+        let impls = self.json["index"]
+            .as_object()
+            .into_iter()
+            .flat_map(|index| index.values())
+            .filter_map(|item| item.get("inner")?.get("impl"))
+            .filter(|imp| imp.get("trait").is_none_or(Value::is_null));
+        for imp in impls {
+            let Some(type_id) = imp.get("for").and_then(|f| f.get("resolved_path")?.get("id")?.as_u64()) else { continue };
+            let members = imp.get("items").and_then(Value::as_array).into_iter().flatten().filter_map(id_of);
+            out.entry(type_id).or_default().extend(members);
+        }
+        out
+    }
+
+    /// The associated items a trait declares.
+    pub fn trait_items(&self, trait_id: Id) -> Vec<Id> {
+        self.item(trait_id)
+            .ok()
+            .and_then(|t| t["inner"]["trait"]["items"].as_array())
+            .map(|a| a.iter().filter_map(id_of).collect())
+            .unwrap_or_default()
+    }
+
+    /// The defining crate's name and the full path of any id `paths` knows, whichever
+    /// crate defines it. Used to point an intra-doc link at another page.
+    pub fn path_of(&self, id: Id) -> Option<(String, Vec<String>)> {
+        let entry = self.json["paths"].get(id.to_string())?;
+        let path: Vec<String> = entry.get("path")?.as_array()?.iter().filter_map(|s| s.as_str().map(str::to_string)).collect();
+        let krate = self.defining_crate(id)?;
+        Some((krate, path))
     }
 
     /// The error for a type the type printer has no rule for.

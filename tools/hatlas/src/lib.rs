@@ -4,6 +4,7 @@
 pub mod atlas;
 pub mod bevy;
 pub mod cargo;
+pub mod deps;
 pub mod events;
 pub mod rustdoc;
 pub mod scip;
@@ -34,6 +35,10 @@ pub struct Summary {
     pub systems: usize,
     pub observers: usize,
     pub events: usize,
+    pub dependencies: usize,
+    pub dependency_items: usize,
+    pub undocumented: usize,
+    pub unmapped: usize,
     pub unresolved: usize,
     pub pages: usize,
 }
@@ -86,6 +91,7 @@ impl std::error::Error for Error {}
 /// Documents the workspace, renders the site, checks every link, and replaces the
 /// previous site only once the new one has passed.
 ///
+/// A dependency that fails to document is listed on the index and the run goes on.
 /// Fails with `NotASite` before any compiling when the output directory exists
 /// without the marker file. Runs `cargo`, which executes the workspace's build
 /// scripts and proc macros. On any error the previous site is left as it was.
@@ -125,8 +131,12 @@ pub fn run(options: &Options) -> Result<Summary, Error> {
     registry.unresolved.sort();
     registry.unresolved.dedup();
 
+    let referenced = deps::referenced(&scip, &workspace.members);
+    let dep_docs = workspace.document_dependencies(&repo, &referenced.wanted)?;
+    let dependencies = deps::build(&scip, dep_docs, referenced)?;
+
     let tmp = site::swap::tmp_dir(&out);
-    let result = site::render(&atlas, &registry, &flows, &tmp)
+    let result = site::render(&atlas, &registry, &flows, &dependencies, &tmp)
         .and_then(|pages| site::check::check(&tmp).map(|()| pages))
         .and_then(|pages| site::swap::swap(&tmp, &out).map(|()| pages));
     if result.is_err() {
@@ -145,6 +155,10 @@ pub fn run(options: &Options) -> Result<Summary, Error> {
         systems: count(bevy::Role::System),
         observers: count(bevy::Role::Observer),
         events: flows.flows.len(),
+        dependencies: dependencies.crates.len(),
+        dependency_items: dependencies.crates.iter().map(|c| c.items.len()).sum(),
+        undocumented: dependencies.undocumented.len(),
+        unmapped: dependencies.crates.iter().map(|c| c.unmapped.len()).sum(),
         unresolved: registry.unresolved.len(),
         pages,
     })

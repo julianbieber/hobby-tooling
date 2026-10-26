@@ -13,6 +13,10 @@ pub struct Symbol {
     pub package: String,
     pub version: String,
     pub path: Vec<String>,
+    /// For a member of an `impl` block: the implemented type's name, without generics or path.
+    pub impl_type: Option<String>,
+    /// For a member of a trait `impl`: the trait's name, without generics or path.
+    pub impl_trait: Option<String>,
 }
 
 struct Occurrence {
@@ -31,6 +35,11 @@ impl ScipIndex {
     pub fn load(path: &Path) -> Result<ScipIndex, Error> {
         let bytes = std::fs::read(path).map_err(|source| Error::Io { path: path.to_path_buf(), source })?;
         let index = Index::parse_from_bytes(&bytes).map_err(|e| Error::Scip(format!("{}: {e}", path.display())))?;
+        Ok(ScipIndex::from_index(&index))
+    }
+
+    /// Builds the lookup from an already decoded index. Local symbols are dropped.
+    pub fn from_index(index: &Index) -> ScipIndex {
         let mut lines: HashMap<(String, usize), Vec<Occurrence>> = HashMap::new();
         for doc in &index.documents {
             for occ in &doc.occurrences {
@@ -44,7 +53,14 @@ impl ScipIndex {
                     .push(Occurrence { start, symbol: occ.symbol.clone() });
             }
         }
-        Ok(ScipIndex { lines })
+        ScipIndex { lines }
+    }
+
+    /// Every kept occurrence as `(file, zero-based line, symbol)`, in no particular order.
+    pub fn occurrences(&self) -> impl Iterator<Item = (&str, usize, &str)> {
+        self.lines
+            .iter()
+            .flat_map(|((file, line), occs)| occs.iter().map(move |o| (file.as_str(), *line, o.symbol.as_str())))
     }
 
     /// The symbol whose occurrence starts at exactly this zero-based line and column.
@@ -80,6 +96,8 @@ pub fn parse_symbol(symbol: &str) -> Option<Symbol> {
     let version = parts.next()?;
     let descriptors = parts.next()?;
     let mut path = Vec::new();
+    let mut after_impl = false;
+    let mut impl_parts: Vec<String> = Vec::new();
     let mut chars = descriptors.chars().peekable();
     while chars.peek().is_some() {
         let mut name = String::new();
@@ -93,10 +111,19 @@ pub fn parse_symbol(symbol: &str) -> Option<Symbol> {
             }
         } else if chars.peek() == Some(&'[') || chars.peek() == Some(&'(') {
             let close = if chars.next() == Some('[') { ']' } else { ')' };
+            let mut inner = String::new();
+            let mut quoted = false;
             for c in chars.by_ref() {
-                if c == close {
+                if c == '`' {
+                    quoted = !quoted;
+                } else if c == close && !quoted {
                     break;
+                } else {
+                    inner.push(c);
                 }
+            }
+            if after_impl && close == ']' {
+                impl_parts.push(bare_type_name(&inner));
             }
             continue;
         } else {
@@ -124,11 +151,24 @@ pub fn parse_symbol(symbol: &str) -> Option<Symbol> {
             ':' => continue,
             _ => return None,
         }
+        after_impl = name == "impl" && suffix == '#';
         if !name.is_empty() {
             path.push(name);
         }
     }
-    Some(Symbol { package: package.to_string(), version: version.to_string(), path })
+    let mut parts = impl_parts.into_iter();
+    Some(Symbol {
+        package: package.to_string(),
+        version: version.to_string(),
+        path,
+        impl_type: parts.next(),
+        impl_trait: parts.next(),
+    })
+}
+
+fn bare_type_name(text: &str) -> String {
+    let head = text.split('<').next().unwrap_or(text).trim();
+    head.rsplit("::").next().unwrap_or(head).to_string()
 }
 
 #[cfg(test)]
@@ -165,6 +205,16 @@ mod tests {
         let s = parse_symbol("rust-analyzer cargo bevy_state 0.19.0 condition/in_state().").unwrap();
         assert_eq!(s.package, "bevy_state");
         assert_eq!(s.path, ["condition", "in_state"]);
+    }
+
+    // Pins that the type and trait of an impl block's member are kept bare, because the dependency join looks them up by name.
+    #[test]
+    fn impl_members_carry_type_and_trait() {
+        let s = parse_symbol("rust-analyzer cargo bevy_ecs 0.19.0 lib/system/commands/impl#[`Commands<'w, 's>`]spawn().").unwrap();
+        assert_eq!((s.impl_type.as_deref(), s.impl_trait), (Some("Commands"), None));
+        let s = parse_symbol("rust-analyzer cargo bevy_ecs 0.19.0 lib/entity/impl#[Entity][`PartialEq<Self>`]eq().").unwrap();
+        assert_eq!((s.impl_type.as_deref(), s.impl_trait.as_deref()), (Some("Entity"), Some("PartialEq")));
+        assert_eq!(s.path, ["lib", "entity", "impl", "eq"]);
     }
 
     // Pins that a generic parameter and a backtick-quoted name do not corrupt the path.
