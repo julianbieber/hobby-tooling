@@ -1,7 +1,8 @@
-//! Writing the site: one index, one page per module, and one per plugin, component,
-//! resource, system and observer, all as static HTML that links by relative path.
+//! Writing the site: an index with an overview graph, one page per module, and one per plugin,
+//! component, resource, system and observer, all as static HTML that links by relative path.
 
 mod deps;
+mod graph;
 pub mod check;
 pub mod markdown;
 pub mod names;
@@ -21,8 +22,8 @@ use std::path::Path;
 
 const CSS: &str = "body{font:15px/1.5 system-ui,sans-serif;max-width:56rem;margin:2rem auto;padding:0 1rem}\
 code,pre{font-family:ui-monospace,monospace}pre{background:#f4f4f4;padding:.6rem;overflow:auto}\
-.summary,.where,.vis,.crumbs{color:#666}.no-docs{color:#888;font-style:italic}ul{padding-left:1.2rem}\
-@media(prefers-color-scheme:dark){body{background:#181818;color:#ddd}a{color:#8ab4f8}pre{background:#252525}.summary,.where,.vis,.crumbs{color:#999}}";
+.summary,.where,.vis,.crumbs{color:#666}.no-docs{color:#888;font-style:italic}ul{padding-left:1.2rem}#graph{height:70vh;border:1px solid #ccc;margin:1rem 0}\
+@media(prefers-color-scheme:dark){body{background:#181818;color:#ddd}a{color:#8ab4f8}pre{background:#252525}#graph{border-color:#444}.summary,.where,.vis,.crumbs{color:#999}}";
 
 fn has_page(role: Role) -> bool {
     matches!(role, Role::Plugin | Role::Component | Role::Resource | Role::Event | Role::System | Role::Observer)
@@ -70,6 +71,7 @@ pub fn render(atlas: &Atlas, registry: &Registry, flows: &Flows, deps: &Dependen
         }
     }
     site.register_deps(&mut names);
+    site.write_graph(root)?;
     let mut pages = 0;
     write(root, "index.html", &site.index())?;
     pages += 1;
@@ -158,6 +160,7 @@ impl<'a> Site<'a> {
     fn index(&self) -> String {
         let from = "index.html";
         let mut body = String::from("<h1>Atlas</h1>\n");
+        body.push_str(&self.graph_html());
         for (ci, krate) in self.atlas.crates.iter().enumerate() {
             body.push_str(&format!("<h2>{}</h2>\n", escape(&krate.name)));
             let mut modules = Vec::new();
