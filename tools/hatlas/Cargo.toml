@@ -1,0 +1,15 @@
+[package]
+name = "hatlas"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "A Bevy workspace's plugins, components and resources as linked local HTML pages, built from rustdoc JSON."
+exclude = ["fixture"]
+
+[[bin]]
+name = "hatlas"
+path = "src/main.rs"
+
+[dependencies]
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+serde_json = "1"

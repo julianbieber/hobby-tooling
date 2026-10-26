@@ -58,6 +58,7 @@ bootstrap: preflight clone-notes git-identity bootstrap-config install-chobby in
     @echo "    just install-mcps      the general-purpose MCP servers (Rust build)"
     @echo "    just install-dash      the hdash work dashboard (Rust build)"
     @echo "    just install-coord     the coordinator task-list TUI (Rust build)"
+    @echo "    just install-atlas     the Bevy app atlas (Rust build)"
     @echo "    just install-mml       forked HMML language server (Rust build)"
     @echo "    just install-struct    HSTRUCT structure checker + server (Rust build)"
     @echo "    just install-research  .hresearch link-opening language server (Rust build)"
@@ -70,7 +71,7 @@ bootstrap: preflight clone-notes git-identity bootstrap-config install-chobby in
     @echo "════════════════════════════════════════════════════════════════"
 
 # Bootstrap plus every optional Rust build and the MCP servers.
-bootstrap-full: bootstrap install-mcps install-dash install-coord install-mml install-struct install-research install-lsps
+bootstrap-full: bootstrap install-mcps install-dash install-coord install-atlas install-mml install-struct install-research install-lsps
     @echo "Full install done. Still need: chobby, then /login."
 
 # Say so when invoked from a worktree — the install still targets the main checkout,
@@ -315,6 +316,10 @@ install-dash:
 install-coord:
     cd tools/hcoord && cargo install --path .
 
+# A Bevy workspace's plugins, components and resources as linked HTML, from rustdoc JSON
+install-atlas:
+    cd tools/hatlas && cargo install --path .
+
 # `lsps/` vendors four servers that used to be buildable only from the work checkout,
 # which left a hobby-only machine unable to install them at all. They keep their
 # original binary names on purpose: there is one Helix and one languages.toml across
@@ -403,6 +408,7 @@ test:
     cd mcps/tree-extract && cargo test
     cd tools/hdash && cargo test --workspace
     cd tools/hcoord && cargo test
+    cd tools/hatlas && cargo test
 
 # ---------------------------------------------------------------------------
 # Uninstall

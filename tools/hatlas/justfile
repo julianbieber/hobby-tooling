@@ -1,0 +1,39 @@
+# hatlas — a Bevy app's linked HTML atlas
+
+# List all recipes
+default:
+    @just --list
+
+# Build
+build:
+    cargo build
+
+# Install the `hatlas` binary to ~/.cargo/bin
+install:
+    cargo install --path .
+
+# Lint with clippy
+lint:
+    cargo clippy --all-targets
+
+# Run the tests
+test:
+    cargo test
+
+# Regenerate the committed rustdoc JSON the tests read, one per supported format version
+fixtures:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for tc in nightly-2026-04-15 nightly; do
+        rm -rf fixture/target
+        cargo +$tc -Zunstable-options rustdoc --manifest-path fixture/Cargo.toml --lib --locked \
+            --output-format json --target-dir fixture/target -- --document-private-items
+        v=$(jaq '.format_version' fixture/target/doc/hatlas_fixture.json)
+        jaq -c '
+          . as $r
+          | ([.index[] | select(.inner.impl != null) | .inner.impl.trait.id // empty | tostring]) as $traits
+          | .paths |= with_entries(select(.value.crate_id == 0 or (.key as $k | $traits | index($k) != null))) | .external_crates |= with_entries(.value.path = null)' \
+            fixture/target/doc/hatlas_fixture.json > tests/data/fixture-v$v.json
+        echo "$tc -> format $v"
+    done
+    rm -rf fixture/target
