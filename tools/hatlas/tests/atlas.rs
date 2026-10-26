@@ -2,6 +2,7 @@
 //! per supported format version.
 
 use hatlas::Error;
+use hatlas::events::{EventKey, Flows};
 use hatlas::atlas::{Atlas, CrateAtlas, Item, Module};
 use hatlas::scip::ScipIndex;
 use hatlas::source;
@@ -21,13 +22,19 @@ fn atlas(file: &str) -> CrateAtlas {
 }
 
 fn registry(file: &str) -> (Atlas, Registry) {
+    let (atlas, registry, _) = flows(file);
+    (atlas, registry)
+}
+
+fn flows(file: &str) -> (Atlas, Registry, Flows) {
     let mut atlas = Atlas { crates: vec![atlas(file)] };
     let docs = [load(file)];
     let scip = ScipIndex::load(Path::new("tests/data/fixture.scip")).unwrap();
     let (calls, notes) = source::read(Path::new("fixture"), &["src/lib.rs".to_string()]);
     assert!(notes.is_empty(), "{notes:?}");
-    let registry = Registry::build(&mut atlas, &docs, &scip, &calls).unwrap();
-    (atlas, registry)
+    let mut registry = Registry::build(&mut atlas, &docs, &scip, &calls).unwrap();
+    let flows = hatlas::events::build(&mut atlas, &docs, &scip, &calls, &mut registry).unwrap();
+    (atlas, registry, flows)
 }
 
 fn system<'a>(atlas: &'a Atlas, registry: &'a Registry, name: &str) -> &'a SystemView {
@@ -44,9 +51,9 @@ fn find<'a>(module: &'a Module, name: &str) -> Option<&'a Item> {
 }
 
 fn site(file: &str, tag: &str) -> PathBuf {
-    let (atlas, registry) = registry(file);
+    let (atlas, registry, flows) = flows(file);
     let dir = std::env::temp_dir().join(format!("hatlas-it-{tag}-{}", std::process::id()));
-    hatlas::site::render(&atlas, &registry, &dir).unwrap();
+    hatlas::site::render(&atlas, &registry, &flows, &dir).unwrap();
     dir
 }
 
@@ -239,5 +246,77 @@ fn plugin_and_resource_pages_cross_reference() {
         assert!(score.contains("Registered by") && score.contains("struct.ScorePlugin.html"), "{file}");
         let page = std::fs::read_to_string(dir.join("hatlas_fixture/function.report_score.html")).unwrap();
         assert!(page.contains("resource_exists::&lt;Score&gt;") && page.contains("ScoreSystems::Report"), "{file}");
+    }
+}
+
+fn key(name: &str) -> EventKey {
+    EventKey { crate_name: "hatlas_fixture".into(), name: name.into() }
+}
+
+fn name_of(atlas: &Atlas, party: &hatlas::events::Party) -> String {
+    match party {
+        hatlas::events::Party::Item(r) => atlas.item(*r).unwrap().name.clone(),
+        other => format!("{other:?}"),
+    }
+}
+
+// Pins the trigger half and the observer half of an event: a `trigger` call in a body is a producer with its line, and both a registered and an unregistered `On<E>` function are listeners.
+#[test]
+fn trigger_and_observers_make_a_flow() {
+    for file in FIXTURES {
+        let (atlas, _, flows) = flows(file);
+        let flow = flows.get(&key("Scored")).unwrap_or_else(|| panic!("{file}: no Scored flow"));
+        assert_eq!(flow.defined_in(), "hatlas_fixture", "{file}");
+        let listeners: Vec<_> = flow.listeners.iter().map(|e| name_of(&atlas, &e.party)).collect();
+        assert!(listeners.contains(&"on_scored".to_string()) && listeners.contains(&"heard_elsewhere".to_string()), "{file}: {listeners:?}");
+        let fire = flow.producers.iter().find(|e| name_of(&atlas, &e.party) == "fire").unwrap_or_else(|| panic!("{file}: no producer"));
+        assert_eq!(fire.via, "trigger", "{file}");
+        assert!(fire.site.as_ref().is_some_and(|(f, _)| f == "src/lib.rs"), "{file}");
+    }
+}
+
+// Pins that a message writer parameter is a producer and a reader parameter a listener, and that the `write` call in the writer's body is listed beside it, by its call site, because the type is already a known event.
+#[test]
+fn writer_and_reader_parameters_make_a_flow() {
+    for file in FIXTURES {
+        let (atlas, _, flows) = flows(file);
+        let flow = flows.get(&key("Tallied")).unwrap_or_else(|| panic!("{file}: no Tallied flow"));
+        let producers: Vec<_> = flow.producers.iter().map(|e| (name_of(&atlas, &e.party), e.via.clone())).collect();
+        assert_eq!(
+            producers,
+            [("announce".to_string(), "write".to_string()), ("announce".to_string(), "writer MessageWriter<Tallied>".to_string())],
+            "{file}"
+        );
+        let listeners: Vec<_> = flow.listeners.iter().map(|e| name_of(&atlas, &e.party)).collect();
+        assert_eq!(listeners, ["hear"], "{file}");
+    }
+}
+
+// Pins that an `On<E>` function registered nowhere is still an observer with a page that says no registration was found.
+#[test]
+fn unregistered_observer_is_found_by_signature() {
+    for (n, file) in FIXTURES.iter().enumerate() {
+        let (atlas, registry, _) = flows(file);
+        let item = find(&atlas.crates[0].root, "heard_elsewhere").unwrap();
+        assert_eq!(item.role, Role::Observer, "{file}");
+        assert!(registry.systems[&(0, item.id)].registrations.is_empty(), "{file}");
+        let dir = site(file, &format!("unreg{n}"));
+        let page = std::fs::read_to_string(dir.join("hatlas_fixture/function.heard_elsewhere.html")).unwrap();
+        assert!(page.contains("no registration found"), "{file}");
+    }
+}
+
+// Pins the cross-links: the event's page lists its producer and listeners, and a listener's page links back to the event and the producers.
+#[test]
+fn event_and_listener_pages_link_each_other() {
+    for (n, file) in FIXTURES.iter().enumerate() {
+        let dir = site(file, &format!("flow{n}"));
+        let read = |p: &str| std::fs::read_to_string(dir.join("hatlas_fixture").join(p)).unwrap();
+        let event = read("struct.Scored.html");
+        assert!(event.contains("function.fire.html") && event.contains("function.on_scored.html"), "{file}");
+        assert!(event.contains("Defined in <code>hatlas_fixture</code>"), "{file}");
+        let listener = read("function.on_scored.html");
+        assert!(listener.contains("Listens to") && listener.contains("struct.Scored.html") && listener.contains("function.fire.html"), "{file}");
+        assert!(read("function.fire.html").contains("Produces"), "{file}");
     }
 }

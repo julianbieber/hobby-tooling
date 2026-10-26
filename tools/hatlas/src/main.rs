@@ -48,7 +48,7 @@ fn main() -> ExitCode {
     match hatlas::run(&options) {
         Ok(s) => {
             println!(
-                "{} ({} crates, {} modules, {} plugins, {} components, {} resources, {} systems, {} observers, {} unresolved, {} pages)",
+                "{} ({} crates, {} modules, {} plugins, {} components, {} resources, {} systems, {} observers, {} events, {} unresolved, {} pages)",
                 s.index.display(),
                 s.crates,
                 s.modules,
@@ -57,6 +57,7 @@ fn main() -> ExitCode {
                 s.resources,
                 s.systems,
                 s.observers,
+                s.events,
                 s.unresolved,
                 s.pages
             );

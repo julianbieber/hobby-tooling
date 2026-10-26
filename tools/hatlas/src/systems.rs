@@ -60,6 +60,8 @@ pub struct AnonymousSystem {
     pub crate_index: usize,
     pub module: Vec<String>,
     pub anchor: String,
+    /// For an observer closure, the event type as written in its `On<E>` parameter.
+    pub observes: Option<Ident>,
     pub registration: Registration,
 }
 
@@ -84,7 +86,7 @@ pub struct Registry {
     pub unresolved: Vec<String>,
 }
 
-enum Res {
+pub(crate) enum Res {
     Item(ItemRef),
     Workspace,
     External,
@@ -112,7 +114,7 @@ impl Registry {
         let mut pending: Vec<(ItemRef, Role, Registration, &Entry)> = Vec::new();
         let mut anon_keys: Vec<Vec<String>> = Vec::new();
         let packages: HashSet<String> = atlas.crates.iter().map(|c| c.package.clone()).collect();
-        let resolver = Resolver { atlas: &*atlas, scip, packages: &packages };
+        let resolver = Resolver::new(&*atlas, scip, &packages);
 
         for call in calls {
             let owner = call.owner.as_ref().map(|o| resolver.owner(o));
@@ -157,6 +159,7 @@ impl Registry {
                                         crate_index: o.0,
                                         module: item.path[..item.path.len() - 1].to_vec(),
                                         anchor: format!("closure.L{line}C{col}"),
+                                        observes: None,
                                         registration,
                                     })
                                 }
@@ -196,13 +199,14 @@ impl Registry {
                                 Res::External => record(&mut registry, owner_item, "observer", &id.text, None, "", &site),
                                 Res::Workspace | Res::Unknown => note(&mut registry, &id.text),
                             },
-                            Target::Closure { line, col, .. } => match owner_item.and_then(|o| resolver.atlas.item(o).map(|i| (o, i))) {
+                            Target::Closure { line, col, observes, .. } => match owner_item.and_then(|o| resolver.atlas.item(o).map(|i| (o, i))) {
                                 Some((o, item)) => {
                                     anon_keys.push(e.sets.iter().map(|s| resolver.set_key(s)).collect());
                                     registry.anonymous.push(AnonymousSystem {
                                         crate_index: o.0,
                                         module: item.path[..item.path.len() - 1].to_vec(),
                                         anchor: format!("closure.L{line}C{col}"),
+                                        observes: observes.clone(),
                                         registration,
                                     })
                                 }
@@ -230,6 +234,7 @@ impl Registry {
                         }
                     }
                 }
+                CallKind::Produce { .. } => {}
                 CallKind::Resource(e) => {
                     if let Target::Named(id) = &e.target {
                         let found = match resolver.resolve(id) {
@@ -314,21 +319,25 @@ fn record(
     });
 }
 
-struct Resolver<'a> {
+pub(crate) struct Resolver<'a> {
     atlas: &'a Atlas,
     scip: &'a ScipIndex,
     packages: &'a HashSet<String>,
 }
 
-impl Resolver<'_> {
-    fn symbol(&self, id: &Ident) -> Option<&str> {
+impl<'a> Resolver<'a> {
+    pub(crate) fn new(atlas: &'a Atlas, scip: &'a ScipIndex, packages: &'a HashSet<String>) -> Resolver<'a> {
+        Resolver { atlas, scip, packages }
+    }
+
+    pub(crate) fn symbol(&self, id: &Ident) -> Option<&str> {
         let line = id.line.checked_sub(1)?;
         self.scip
             .symbol_at(&id.file, line, id.col)
             .or_else(|| self.scip.symbol_named(&id.file, line, &id.name))
     }
 
-    fn resolve(&self, id: &Ident) -> Res {
+    pub(crate) fn resolve(&self, id: &Ident) -> Res {
         let Some(symbol) = self.symbol(id).and_then(parse_symbol) else {
             return Res::Unknown;
         };
@@ -350,7 +359,7 @@ impl Resolver<'_> {
         }
     }
 
-    fn owner(&self, owner: &Owner) -> Registrant {
+    pub(crate) fn owner(&self, owner: &Owner) -> Registrant {
         match owner {
             Owner::Plugin(id) | Owner::Function(id) => match self.resolve(id) {
                 Res::Item(r) => Registrant::Item(r),
@@ -392,7 +401,7 @@ fn inherit(sets: &[SetConfig], keys: &[String], schedule: &str) -> Vec<(String, 
     out
 }
 
-fn params_of(atlas: &Atlas, docs: &[Crate], r: ItemRef) -> Result<(Vec<Param>, Option<String>), Error> {
+pub(crate) fn params_of(atlas: &Atlas, docs: &[Crate], r: ItemRef) -> Result<(Vec<Param>, Option<String>), Error> {
     let krate = &docs[r.0];
     let item = krate.item(r.1)?;
     let inputs = krate.fn_inputs(item)?;
