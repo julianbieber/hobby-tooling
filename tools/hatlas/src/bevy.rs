@@ -19,10 +19,25 @@ impl BevyNames {
     pub const PRODUCING_CALLS: &'static [&'static str] =
         &["trigger", "write_message", "send_event", "send", "write"];
 
+    pub const SYSTEM_PARAM: &'static str = "SystemParam";
+    pub const QUERIES: &'static [&'static str] = &["Query", "Single", "Populated"];
+    pub const PARAM_SETS: &'static [&'static str] = &["ParamSet"];
+    pub const ADD_SYSTEMS: &'static str = "add_systems";
+    pub const CONFIGURE_SETS: &'static [&'static str] = &["configure_sets", "configure_set"];
+    pub const ADD_OBSERVER: &'static [&'static str] = &["add_observer", "observe"];
+    pub const ADD_PLUGINS: &'static [&'static str] = &["add_plugins", "add_plugin"];
+    pub const RESOURCE_CALLS: &'static [&'static str] = &["init_resource", "insert_resource"];
+    pub const CONDITIONS: &'static [&'static str] = &["run_if", "distributive_run_if"];
+    pub const IN_SET: &'static str = "in_set";
+    pub const CHAINS: &'static [&'static str] = &["chain", "chain_ignore_deferred"];
+    pub const AFTER: &'static [&'static str] = &["after", "after_ignore_deferred"];
+    pub const BEFORE: &'static [&'static str] = &["before", "before_ignore_deferred"];
+
     /// The trait names that count at all, in precedence order.
     pub fn traits() -> Vec<&'static str> {
         let mut all = vec![Self::PLUGIN, Self::RESOURCE, Self::COMPONENT];
         all.extend(Self::EVENT_TRAITS);
+        all.push(Self::SYSTEM_PARAM);
         all
     }
 }
@@ -95,6 +110,11 @@ impl BevyClassifier {
         } else {
             Role::Other
         }
+    }
+
+    /// Whether the item implements Bevy's `SystemParam`, which is a capability and not a role.
+    pub fn is_system_param(&self, id: Id) -> bool {
+        self.traits_of(id).contains(&BevyNames::SYSTEM_PARAM)
     }
 
     /// The matching Bevy trait names an item implements, in the order they were found.

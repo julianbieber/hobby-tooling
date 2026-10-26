@@ -9,7 +9,10 @@ usage:
 
 Builds the repo's rustdoc JSON (nightly; the repo's own toolchain when it is one, else
 `+nightly` into <target>/hatlas-nightly) and writes linked HTML pages to
-<target>/hatlas, or to --out. A run executes the repo's build scripts and proc macros.";
+<target>/hatlas, or to --out. Systems, observers and registrations come from
+`rust-analyzer scip` (needs rust-analyzer on that toolchain; roughly 3.5 GB of memory
+on a large game) joined with the workspace source. A run executes the repo's build
+scripts and proc macros.";
 
 fn parse(args: &[String]) -> Result<hatlas::Options, String> {
     let mut repo = None;
@@ -45,13 +48,16 @@ fn main() -> ExitCode {
     match hatlas::run(&options) {
         Ok(s) => {
             println!(
-                "{} ({} crates, {} modules, {} plugins, {} components, {} resources, {} pages)",
+                "{} ({} crates, {} modules, {} plugins, {} components, {} resources, {} systems, {} observers, {} unresolved, {} pages)",
                 s.index.display(),
                 s.crates,
                 s.modules,
                 s.plugins,
                 s.components,
                 s.resources,
+                s.systems,
+                s.observers,
+                s.unresolved,
                 s.pages
             );
             ExitCode::SUCCESS
