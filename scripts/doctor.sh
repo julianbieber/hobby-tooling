@@ -152,6 +152,7 @@ echo ""
 echo "Optional extras"
 if command -v hdash >/dev/null 2>&1; then ok "hdash built"; else warn "hdash not built" "just install-dash"; fi
 if command -v hcoord >/dev/null 2>&1; then ok "hcoord built"; else warn "hcoord not built (hcdev coordinator needs it)" "just install-coord"; fi
+if command -v hatlas >/dev/null 2>&1; then ok "hatlas built"; else warn "hatlas not built" "just install-atlas"; fi
 # The two dashboards hdash replaces. Reported so a machine that installed them before the
 # merge is told to reclaim the names, rather than silently keeping two stale binaries.
 for b in hwt-overview hgh-issues; do

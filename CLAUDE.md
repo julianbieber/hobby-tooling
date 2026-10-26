@@ -42,6 +42,7 @@ lsps/{claude,claude-skills,treesitter-class,path}-lsp/   # vendored from the wor
 mcps/{just-mcp, lsp-mcp, tree-extract}/   # vendored from the work checkout
 tools/hdash/                          # the work dashboard (ratatui, in the terminal)
 tools/hcoord/                         # the coordinator's task-list pane + `hcoord wait` (ratatui)
+tools/hatlas/                         # a Bevy app's linked HTML atlas, from rustdoc JSON
 ```
 
 ## An issue is a notes file, because these repos have one author
