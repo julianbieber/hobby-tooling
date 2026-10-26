@@ -100,7 +100,7 @@ impl Module {
         module.items.iter().find(|i| &i.name == name)
     }
 
-    fn module_of_file(&self, file: &str) -> Option<&Module> {
+    pub(crate) fn module_of_file(&self, file: &str) -> Option<&Module> {
         if self.file.as_deref() == Some(file) {
             return Some(self);
         }

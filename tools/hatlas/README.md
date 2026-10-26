@@ -62,5 +62,12 @@ hatlas <repo dir> [--out <dir>]
 - **Supported `format_version`s:** 57 and 61. Any other fails naming the version. To add one, add a
   toolchain to the `fixtures` recipe in `justfile`, run `just fixtures`, and add the version to
   `SUPPORTED` in `src/rustdoc.rs`.
-
-Not yet: the graph overview.
+- **Vendored.** `assets/cytoscape.min.js` is cytoscape.js 3.30.4 (MIT, `assets/LICENSE`) from
+  `https://registry.npmjs.org/cytoscape/-/cytoscape-3.30.4.tgz`, sha256
+  `1bb5340e549511e111b31e5684872c949ad33d40ea5dba0ad8e7d90c62c7b3b9`; `just vendor-check` verifies it.
+- **Graph.** The index opens with a pan-and-zoom graph: nodes are the public plugins, components,
+  resources, events, systems and observers plus one per documented dependency crate; edges are
+  registrations, event producers and listeners, and file-level uses of a crate. The `breadthfirst`
+  layout is rooted at the plugins and computed in the browser. The data is `graph-data.js`, a script,
+  because `fetch` of a sibling file is blocked under `file://`. A click opens the node's page, and every
+  node's link is part of the hard check.

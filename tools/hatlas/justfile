@@ -20,6 +20,10 @@ lint:
 test:
     cargo test
 
+# Check the vendored cytoscape.js against its recorded sha256
+vendor-check:
+    cd assets && sha256sum -c cytoscape.min.js.sha256
+
 # Regenerate the committed rustdoc JSON and SCIP index the tests read, one JSON per supported format version
 fixtures:
     #!/usr/bin/env bash

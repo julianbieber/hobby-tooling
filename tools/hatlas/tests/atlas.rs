@@ -436,3 +436,66 @@ fn dependency_pages_link_files_back_and_index_lists_failures() {
     assert!(index.contains("<h2>Undocumented crates</h2>") && index.contains("<code>broken@0.1.0</code> — error: boom"), "{index}");
     assert!(index.contains("lib/odd/thing#") && index.contains("<code>core</code>"), "{index}");
 }
+
+fn graph_of(dir: &Path) -> serde_json::Value {
+    let text = std::fs::read_to_string(dir.join("graph-data.js")).unwrap();
+    let json = text.trim().strip_prefix("window.HATLAS_GRAPH = ").unwrap().trim_end_matches(';');
+    serde_json::from_str(json).unwrap()
+}
+
+fn public_plugins(module: &Module, out: &mut Vec<String>) {
+    out.extend(module.items.iter().filter(|i| i.public && i.role == Role::Plugin).map(|i| i.name.clone()));
+    for child in &module.children {
+        public_plugins(child, out);
+    }
+}
+
+// Pins the overview graph: a node per public plugin, none for private items, every node linking to a page that exists, and the index loading the vendored script.
+#[test]
+fn graph_holds_public_plugins_and_links_to_pages() {
+    for (n, file) in FIXTURES.iter().enumerate() {
+        let dir = site(file, &format!("graph{n}"));
+        let graph = graph_of(&dir);
+        let nodes = graph["nodes"].as_array().unwrap();
+        let labels = |kind: &str| -> Vec<String> {
+            nodes.iter().filter(|n| n["data"]["kind"] == kind).map(|n| n["data"]["label"].as_str().unwrap().to_string()).collect()
+        };
+        let mut expected = Vec::new();
+        public_plugins(&flows(file).0.crates[0].root, &mut expected);
+        let mut plugins = labels("plugin");
+        plugins.sort();
+        expected.sort();
+        assert!(!plugins.is_empty(), "{file}");
+        assert_eq!(plugins, expected, "{file}");
+        assert!(!nodes.iter().any(|n| ["Ledger", "HiddenPlugin"].contains(&n["data"]["label"].as_str().unwrap())), "{file}");
+        for node in nodes {
+            let href = node["data"]["href"].as_str().unwrap();
+            assert!(dir.join(href.split('#').next().unwrap()).is_file(), "{file}: {href}");
+        }
+        let index = std::fs::read_to_string(dir.join("index.html")).unwrap();
+        assert!(index.contains("<script src=\"assets/cytoscape.min.js\"></script>"), "{file}");
+        assert_eq!(
+            std::fs::read(dir.join("assets/cytoscape.min.js")).unwrap(),
+            std::fs::read("assets/cytoscape.min.js").unwrap(),
+            "{file}"
+        );
+    }
+}
+
+// Pins that a dependency crate is a graph node linking to its page, and that a file using it gives an edge into it.
+#[test]
+fn graph_has_a_crate_node_with_use_edges() {
+    let (dir, _) = rendered_deps();
+    let graph = graph_of(&dir);
+    let krate = graph["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["data"]["label"] == "dep@1.0.0")
+        .expect("no crate node");
+    assert_eq!(krate["data"]["kind"], "crate");
+    assert!(krate["data"]["href"].as_str().unwrap().starts_with("deps/dep-1.0.0/"));
+    let id = &krate["data"]["id"];
+    assert!(graph["edges"].as_array().unwrap().iter().any(|e| e["data"]["target"] == *id && e["data"]["kind"] == "uses"));
+    hatlas::site::check::check(&dir).unwrap();
+}
