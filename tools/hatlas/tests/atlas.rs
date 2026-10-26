@@ -2,6 +2,9 @@
 //! per supported format version.
 
 use hatlas::Error;
+use hatlas::deps::{DepCrate, Dependencies, DependencyUse, Resolved, Resolver, UseSite, Undocumented, referenced};
+use hatlas::scip::parse_symbol;
+use std::collections::BTreeMap;
 use hatlas::events::{EventKey, Flows};
 use hatlas::atlas::{Atlas, CrateAtlas, Item, Module};
 use hatlas::scip::ScipIndex;
@@ -53,7 +56,7 @@ fn find<'a>(module: &'a Module, name: &str) -> Option<&'a Item> {
 fn site(file: &str, tag: &str) -> PathBuf {
     let (atlas, registry, flows) = flows(file);
     let dir = std::env::temp_dir().join(format!("hatlas-it-{tag}-{}", std::process::id()));
-    hatlas::site::render(&atlas, &registry, &flows, &dir).unwrap();
+    hatlas::site::render(&atlas, &registry, &flows, &Dependencies::default(), &dir).unwrap();
     dir
 }
 
@@ -319,4 +322,117 @@ fn event_and_listener_pages_link_each_other() {
         assert!(listener.contains("Listens to") && listener.contains("struct.Scored.html") && listener.contains("function.fire.html"), "{file}");
         assert!(read("function.fire.html").contains("Produces"), "{file}");
     }
+}
+
+fn occurrence(symbol: &str) -> scip::types::Occurrence {
+    scip::types::Occurrence { range: vec![0, 0, 1], symbol: symbol.to_string(), ..Default::default() }
+}
+
+fn scip_of(symbols: &[&str]) -> ScipIndex {
+    let doc = scip::types::Document {
+        relative_path: "src/lib.rs".into(),
+        occurrences: symbols.iter().map(|s| occurrence(s)).collect(),
+        ..Default::default()
+    };
+    ScipIndex::from_index(&scip::types::Index { documents: vec![doc], ..Default::default() })
+}
+
+// Pins which packages get documented: members and std are left out, and of two versions the more-referenced wins and the other is named.
+#[test]
+fn referenced_picks_the_most_used_version() {
+    let scip = scip_of(&[
+        "rust-analyzer cargo dep 1.0.0 a#",
+        "rust-analyzer cargo dep 2.0.0 a#",
+        "rust-analyzer cargo dep 2.0.0 b#",
+        "rust-analyzer cargo mine 0.1.0 c#",
+        "rust-analyzer cargo core https://github.com/rust-lang/rust/library/core d#",
+    ]);
+    let r = referenced(&scip, &["mine".to_string()]);
+    assert_eq!(r.wanted, [("dep".to_string(), "2.0.0".to_string())]);
+    assert_eq!(r.std, ["core"]);
+    assert_eq!(
+        r.undocumented,
+        [Undocumented { name: "dep".into(), version: "1.0.0".into(), reason: "another version (2.0.0) is documented".into() }]
+    );
+}
+
+fn small_crate() -> Crate {
+    let json = serde_json::json!({
+        "format_version": 61, "root": 0, "external_crates": {},
+        "index": {
+            "0": {"name": "dep", "inner": {"module": {"items": []}}},
+            "1": {"name": "Query", "docs": "A query.", "links": {}, "inner": {"struct": {"kind": {"plain": {"fields": []}}}}},
+            "2": {"name": "iter", "docs": "Iterates.", "inner": {"function": {}}},
+            "3": {"name": "impl", "inner": {"impl": {"trait": null, "for": {"resolved_path": {"id": 1}}, "items": [2]}}},
+            "4": {"name": "Tr", "inner": {"trait": {"items": [5]}}},
+            "5": {"name": "run", "inner": {"function": {}}}
+        },
+        "paths": {
+            "1": {"crate_id": 0, "path": ["dep", "sys", "Query"], "kind": "struct"},
+            "4": {"crate_id": 0, "path": ["dep", "sys", "Tr"], "kind": "trait"},
+            "6": {"crate_id": 0, "path": ["dep", "sys"], "kind": "module"}
+        }
+    });
+    Crate::from_value(PathBuf::from("small.json"), json).unwrap()
+}
+
+fn resolved(krate: &Crate, symbol: &str) -> Resolved {
+    Resolver::new(krate).resolve(&parse_symbol(&format!("rust-analyzer cargo dep 1.0.0 {symbol}")).unwrap())
+}
+
+fn item(id: u64, module: &[&str], name: &str, kind: &str, member: Option<&str>) -> Resolved {
+    Resolved::Item { id, module: module.iter().map(|s| s.to_string()).collect(), name: name.into(), kind: kind.into(), member: member.map(String::from) }
+}
+
+// Pins the symbol-to-rustdoc join: exact path, inherent method through a generic impl, trait method, field falling back to its parent, and the miss.
+#[test]
+fn symbols_resolve_to_rustdoc_items() {
+    let krate = small_crate();
+    assert_eq!(resolved(&krate, "lib/sys/Query#"), item(1, &["sys"], "Query", "struct", None));
+    assert_eq!(resolved(&krate, "lib/sys/impl#[`Query<'w, 's, D>`]iter()."), item(2, &["sys"], "Query::iter", "method", None));
+    assert_eq!(resolved(&krate, "lib/sys/Tr#run()."), item(5, &["sys"], "Tr::run", "method", None));
+    assert_eq!(resolved(&krate, "lib/sys/Query#state."), item(1, &["sys"], "Query", "struct", Some("state")));
+    assert_eq!(resolved(&krate, "lib/sys/impl#[Query][`PartialEq<Self>`]eq()."), item(1, &["sys"], "Query", "struct", Some("eq")));
+    assert_eq!(resolved(&krate, "lib/sys/"), Resolved::Skipped);
+    assert_eq!(resolved(&krate, "lib/other/Gone#"), Resolved::Unmapped);
+}
+
+fn rendered_deps() -> (PathBuf, String) {
+    let (atlas, registry, flows) = flows(FIXTURES[1]);
+    let mut uses = BTreeMap::new();
+    uses.insert("src/lib.rs".to_string(), vec![UseSite { line: 3, member: None }, UseSite { line: 9, member: Some("state".into()) }]);
+    let deps = Dependencies {
+        crates: vec![DepCrate {
+            name: "dep".into(),
+            version: "1.0.0".into(),
+            crate_name: "dep".into(),
+            items: vec![DependencyUse {
+                kind: "struct".into(),
+                module: vec!["sys".into()],
+                name: "Query".into(),
+                docs: Some("A <query>.".into()),
+                links: vec![],
+                uses,
+            }],
+            unmapped: vec!["lib/odd/thing#".into()],
+        }],
+        undocumented: vec![Undocumented { name: "broken".into(), version: "0.1.0".into(), reason: "error: boom".into() }],
+        std: vec!["core".into()],
+    };
+    let dir = std::env::temp_dir().join(format!("hatlas-it-deps-{}", std::process::id()));
+    hatlas::site::render(&atlas, &registry, &flows, &deps, &dir).unwrap();
+    let index = std::fs::read_to_string(dir.join("index.html")).unwrap();
+    (dir, index)
+}
+
+// Pins the dependency pages: the use page links each file back to its module page, the index names an undocumented crate as plain text, and every link still resolves.
+#[test]
+fn dependency_pages_link_files_back_and_index_lists_failures() {
+    let (dir, index) = rendered_deps();
+    hatlas::site::check::check(&dir).unwrap();
+    let page = std::fs::read_to_string(dir.join("deps/dep-1.0.0/sys/struct.Query.html")).unwrap();
+    assert!(page.contains("<h1>Struct Query</h1>") && page.contains("A &lt;query&gt;."), "{page}");
+    assert!(page.contains("\">src/lib.rs</a>") && page.contains("line 9 · <code>state</code>"), "{page}");
+    assert!(index.contains("<h2>Undocumented crates</h2>") && index.contains("<code>broken@0.1.0</code> — error: boom"), "{index}");
+    assert!(index.contains("lib/odd/thing#") && index.contains("<code>core</code>"), "{index}");
 }

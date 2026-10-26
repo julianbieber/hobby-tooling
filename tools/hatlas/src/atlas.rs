@@ -22,6 +22,8 @@ pub struct CrateAtlas {
 pub struct Module {
     pub path: Vec<String>,
     pub public: bool,
+    /// The workspace-relative source file the module lives in, as rustdoc spans it.
+    pub file: Option<String>,
     pub docs: Option<String>,
     pub links: Vec<(String, Id)>,
     pub items: Vec<Item>,
@@ -65,6 +67,11 @@ impl Atlas {
         self.crates[ci].root.find_id_mut(id)
     }
 
+    /// The shallowest module whose source file is `file`; the first crate wins a tie.
+    pub fn module_of_file(&self, file: &str) -> Option<&Module> {
+        self.crates.iter().filter_map(|c| c.root.module_of_file(file)).next()
+    }
+
     /// How many items in the whole atlas play this role.
     pub fn count_role(&self, role: Role) -> usize {
         self.crates.iter().map(|c| c.root.count_role(role)).sum()
@@ -91,6 +98,13 @@ impl Module {
             module = module.children.iter().find(|c| c.path.last() == Some(dir))?;
         }
         module.items.iter().find(|i| &i.name == name)
+    }
+
+    fn module_of_file(&self, file: &str) -> Option<&Module> {
+        if self.file.as_deref() == Some(file) {
+            return Some(self);
+        }
+        self.children.iter().find_map(|c| c.module_of_file(file))
     }
 
     fn find_id(&self, id: Id) -> Option<&Item> {
@@ -127,6 +141,7 @@ fn build_module(
     let mut module = Module {
         path: path.clone(),
         public,
+        file: Crate::span(item).map(|(file, _)| file),
         docs: Crate::docs(item).map(str::to_string),
         links: Crate::links(item),
         items: Vec::new(),

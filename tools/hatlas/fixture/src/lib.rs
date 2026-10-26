@@ -136,3 +136,8 @@ pub mod fake {
     pub struct NotBevy;
     impl Component for NotBevy {}
 }
+
+/// Calls into the dependency that cannot be documented.
+pub fn answer() -> u32 {
+    hatlas_brokendoc::answer()
+}

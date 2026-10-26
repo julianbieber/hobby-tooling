@@ -1,6 +1,7 @@
 //! Writing the site: one index, one page per module, and one per plugin, component,
 //! resource, system and observer, all as static HTML that links by relative path.
 
+mod deps;
 pub mod check;
 pub mod markdown;
 pub mod names;
@@ -9,6 +10,7 @@ pub mod swap;
 use crate::Error;
 use crate::atlas::{Atlas, Item, Module};
 use crate::bevy::Role;
+use crate::deps::Dependencies;
 use crate::events::{Endpoint, EventFlow, EventKey, Flows, Party};
 use crate::rustdoc::Id;
 use crate::systems::{Param, Registered, Registrant, Registration, Registry};
@@ -30,6 +32,10 @@ struct Site<'a> {
     atlas: &'a Atlas,
     registry: &'a Registry,
     flows: &'a Flows,
+    deps: &'a Dependencies,
+    dep_crate_pages: Vec<String>,
+    dep_item_pages: HashMap<(usize, usize), String>,
+    dep_lookup: HashMap<(String, Vec<String>), (usize, usize)>,
     event_pages: HashMap<EventKey, String>,
     module_pages: HashMap<Vec<String>, String>,
     item_pages: HashMap<(usize, Id), String>,
@@ -37,13 +43,17 @@ struct Site<'a> {
 }
 
 /// Writes the whole site into `root`, marker first, and returns how many pages it holds.
-pub fn render(atlas: &Atlas, registry: &Registry, flows: &Flows, root: &Path) -> Result<usize, Error> {
+pub fn render(atlas: &Atlas, registry: &Registry, flows: &Flows, deps: &Dependencies, root: &Path) -> Result<usize, Error> {
     let _ = std::fs::remove_dir_all(root);
     write(root, swap::MARKER, "")?;
     let mut site = Site {
         atlas,
         registry,
         flows,
+        deps,
+        dep_crate_pages: Vec::new(),
+        dep_item_pages: HashMap::new(),
+        dep_lookup: HashMap::new(),
         event_pages: HashMap::new(),
         module_pages: HashMap::new(),
         item_pages: HashMap::new(),
@@ -59,6 +69,7 @@ pub fn render(atlas: &Atlas, registry: &Registry, flows: &Flows, root: &Path) ->
             site.event_pages.insert(flow.key.clone(), page);
         }
     }
+    site.register_deps(&mut names);
     let mut pages = 0;
     write(root, "index.html", &site.index())?;
     pages += 1;
@@ -69,6 +80,7 @@ pub fn render(atlas: &Atlas, registry: &Registry, flows: &Flows, root: &Path) ->
         site.write_event(root, flow)?;
         pages += 1;
     }
+    pages += site.write_deps(root)?;
     Ok(pages)
 }
 
@@ -201,6 +213,7 @@ impl<'a> Site<'a> {
             }
             body.push_str("</ul>\n");
         }
+        body.push_str(&self.deps_index_html(from));
         page("Atlas", &body)
     }
 
