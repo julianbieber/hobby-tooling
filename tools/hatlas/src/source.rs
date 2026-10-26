@@ -1,0 +1,434 @@
+//! Reading a workspace's Rust source for the Bevy registration calls in it, by syntax
+//! alone: which calls exist, what they name, and what is chained onto each name.
+
+use crate::bevy::BevyNames;
+use proc_macro2::LineColumn;
+use std::path::Path;
+use syn::spanned::Spanned;
+use syn::visit::Visit;
+use syn::{Expr, Type};
+
+/// A name written in source, with where to look it up and how it was written.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Ident {
+    pub file: String,
+    /// One-based.
+    pub line: usize,
+    /// Zero-based, in characters.
+    pub col: usize,
+    pub name: String,
+    pub text: String,
+}
+
+/// What a registration names.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Target {
+    Named(Ident),
+    Closure { file: String, line: usize, col: usize },
+    Unparsed(String),
+}
+
+/// One thing a call registers, with everything chained onto it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Entry {
+    pub target: Target,
+    pub conditions: Vec<String>,
+    pub sets: Vec<Ident>,
+    pub ordering: Vec<String>,
+}
+
+/// What a call sits inside.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Owner {
+    /// `impl Plugin for X`, named by `X`.
+    Plugin(Ident),
+    Function(Ident),
+    Other(String),
+}
+
+/// What a call registers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CallKind {
+    Systems { schedule: String, entries: Vec<Entry> },
+    Sets { schedule: String, entries: Vec<Entry> },
+    Observer(Vec<Entry>),
+    Plugins(Vec<Entry>),
+    Resource(Entry),
+}
+
+/// One registration call and where it was made.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Call {
+    pub owner: Option<Owner>,
+    pub file: String,
+    pub line: usize,
+    pub kind: CallKind,
+}
+
+/// Parses `files` (relative to `root`) and returns every registration call in them,
+/// plus one note for each file that could not be read or parsed.
+///
+/// Matches by method name only, whatever the receiver is.
+pub fn read(root: &Path, files: &[String]) -> (Vec<Call>, Vec<String>) {
+    let mut calls = Vec::new();
+    let mut notes = Vec::new();
+    for file in files {
+        let text = match std::fs::read_to_string(root.join(file)) {
+            Ok(t) => t,
+            Err(e) => {
+                notes.push(format!("{file} — unreadable: {e}"));
+                continue;
+            }
+        };
+        match read_source(file, &text) {
+            Ok(found) => calls.extend(found),
+            Err(e) => notes.push(format!("{file} — not parsed: {e}")),
+        }
+    }
+    (calls, notes)
+}
+
+/// The calls in one file's text; `file` is only the name they are recorded under.
+pub fn read_source(file: &str, text: &str) -> Result<Vec<Call>, syn::Error> {
+    let parsed = syn::parse_file(text)?;
+    let mut reader = Reader {
+        file: file.to_string(),
+        lines: text.lines().map(|l| l.chars().collect()).collect(),
+        owners: Vec::new(),
+        calls: Vec::new(),
+    };
+    reader.visit_file(&parsed);
+    Ok(reader.calls)
+}
+
+struct Reader {
+    file: String,
+    lines: Vec<Vec<char>>,
+    owners: Vec<Owner>,
+    calls: Vec<Call>,
+}
+
+impl Reader {
+    fn slice(&self, start: LineColumn, end: LineColumn) -> String {
+        let mut out = String::new();
+        for line in start.line..=end.line {
+            let Some(chars) = self.lines.get(line - 1) else { break };
+            let from = if line == start.line { start.column } else { 0 };
+            let to = if line == end.line { end.column } else { chars.len() };
+            out.extend(chars.iter().skip(from).take(to.saturating_sub(from)));
+            out.push(' ');
+        }
+        out.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    fn text(&self, node: &impl Spanned) -> String {
+        let span = node.span();
+        self.slice(span.start(), span.end())
+    }
+
+    fn ident_of_ident(&self, ident: &syn::Ident, text: String) -> Ident {
+        let start = ident.span().start();
+        Ident { file: self.file.clone(), line: start.line, col: start.column, name: ident.to_string(), text }
+    }
+
+    fn ident_of_path(&self, path: &syn::Path) -> Option<Ident> {
+        let last = path.segments.last()?;
+        Some(self.ident_of_ident(&last.ident, self.text(path)))
+    }
+
+    fn ident_of_expr(&self, expr: &Expr) -> Ident {
+        match strip(expr) {
+            Expr::Path(p) => self.ident_of_path(&p.path).unwrap_or_else(|| self.opaque(expr)),
+            _ => self.opaque(expr),
+        }
+    }
+
+    fn opaque(&self, expr: &Expr) -> Ident {
+        let start = expr.span().start();
+        let text = self.text(expr);
+        Ident { file: self.file.clone(), line: start.line, col: start.column, name: text.clone(), text }
+    }
+
+    fn schedule_of(&self, expr: &Expr) -> String {
+        match strip(expr) {
+            Expr::Path(p) if p.qself.is_none() => {
+                p.path.segments.last().map_or_else(|| self.text(expr), |s| s.ident.to_string())
+            }
+            _ => self.text(expr),
+        }
+    }
+
+    fn entries(&self, expr: &Expr) -> Vec<Entry> {
+        match expr {
+            Expr::Paren(p) => self.entries(&p.expr),
+            Expr::Group(g) => self.entries(&g.expr),
+            Expr::Reference(r) => self.entries(&r.expr),
+            Expr::Tuple(t) => t.elems.iter().flat_map(|e| self.entries(e)).collect(),
+            Expr::Path(p) => match self.ident_of_path(&p.path) {
+                Some(id) => vec![entry(Target::Named(id))],
+                None => vec![entry(Target::Unparsed(self.text(expr)))],
+            },
+            Expr::Struct(s) => match self.ident_of_path(&s.path) {
+                Some(id) => vec![entry(Target::Named(id))],
+                None => vec![entry(Target::Unparsed(self.text(expr)))],
+            },
+            Expr::Closure(c) => {
+                let start = c.span().start();
+                vec![entry(Target::Closure { file: self.file.clone(), line: start.line, col: start.column })]
+            }
+            Expr::Call(c) => match strip(&c.func) {
+                Expr::Path(p) => {
+                    let segments: Vec<_> = p.path.segments.iter().collect();
+                    let pick = segments.iter().rev().find(|s| s.ident != "default" && s.ident != "new");
+                    match pick {
+                        Some(seg) => vec![entry(Target::Named(self.ident_of_ident(&seg.ident, self.text(expr))))],
+                        None => vec![entry(Target::Unparsed(self.text(expr)))],
+                    }
+                }
+                _ => vec![entry(Target::Unparsed(self.text(expr)))],
+            },
+            Expr::MethodCall(m) => self.method_entries(m),
+            _ => vec![entry(Target::Unparsed(self.text(expr)))],
+        }
+    }
+
+    fn method_entries(&self, m: &syn::ExprMethodCall) -> Vec<Entry> {
+        let name = m.method.to_string();
+        let arg = m.args.first();
+        if BevyNames::CONDITIONS.contains(&name.as_str()) {
+            let mut found = self.entries(&m.receiver);
+            if let Some(arg) = arg {
+                let text = self.text(arg);
+                found.iter_mut().for_each(|e| e.conditions.push(text.clone()));
+            }
+            return found;
+        }
+        if name == BevyNames::IN_SET {
+            let mut found = self.entries(&m.receiver);
+            if let Some(arg) = arg {
+                let set = self.ident_of_expr(arg);
+                found.iter_mut().for_each(|e| e.sets.push(set.clone()));
+            }
+            return found;
+        }
+        let relation = if BevyNames::AFTER.contains(&name.as_str()) {
+            Some("after")
+        } else if BevyNames::BEFORE.contains(&name.as_str()) {
+            Some("before")
+        } else {
+            None
+        };
+        if let (Some(relation), Some(arg)) = (relation, arg) {
+            let mut found = self.entries(&m.receiver);
+            let text = format!("{relation} {}", self.text(arg));
+            found.iter_mut().for_each(|e| e.ordering.push(text.clone()));
+            return found;
+        }
+        if BevyNames::CHAINS.contains(&name.as_str())
+            && let Expr::Tuple(t) = strip(&m.receiver)
+        {
+            return self.chained(t);
+        }
+        self.entries(&m.receiver)
+    }
+
+    fn chained(&self, tuple: &syn::ExprTuple) -> Vec<Entry> {
+        let members: Vec<(String, Vec<Entry>)> =
+            tuple.elems.iter().map(|e| (self.text(e), self.entries(e))).collect();
+        let mut out = Vec::new();
+        for (i, (_, found)) in members.iter().enumerate() {
+            for e in found {
+                let mut e = e.clone();
+                if i > 0 {
+                    e.ordering.push(format!("after {}", members[i - 1].0));
+                }
+                if let Some((next, _)) = members.get(i + 1) {
+                    e.ordering.push(format!("before {next}"));
+                }
+                out.push(e);
+            }
+        }
+        out
+    }
+
+    fn push(&mut self, site: &syn::Ident, kind: CallKind) {
+        self.calls.push(Call {
+            owner: self.owners.last().cloned(),
+            file: self.file.clone(),
+            line: site.span().start().line,
+            kind,
+        });
+    }
+}
+
+fn entry(target: Target) -> Entry {
+    Entry { target, conditions: Vec::new(), sets: Vec::new(), ordering: Vec::new() }
+}
+
+fn strip(expr: &Expr) -> &Expr {
+    match expr {
+        Expr::Paren(p) => strip(&p.expr),
+        Expr::Group(g) => strip(&g.expr),
+        other => other,
+    }
+}
+
+fn self_type_ident(ty: &Type) -> Option<&syn::Ident> {
+    match ty {
+        Type::Path(p) => p.path.segments.last().map(|s| &s.ident),
+        _ => None,
+    }
+}
+
+impl<'ast> Visit<'ast> for Reader {
+    fn visit_item_fn(&mut self, f: &'ast syn::ItemFn) {
+        let owner = Owner::Function(self.ident_of_ident(&f.sig.ident, f.sig.ident.to_string()));
+        self.owners.push(owner);
+        syn::visit::visit_item_fn(self, f);
+        self.owners.pop();
+    }
+
+    fn visit_item_impl(&mut self, imp: &'ast syn::ItemImpl) {
+        let is_plugin = imp
+            .trait_
+            .as_ref()
+            .and_then(|(_, p, _)| p.segments.last())
+            .is_some_and(|s| s.ident == BevyNames::PLUGIN);
+        let ty = self_type_ident(&imp.self_ty);
+        for item in &imp.items {
+            let syn::ImplItem::Fn(f) = item else { continue };
+            let owner = match (is_plugin, ty) {
+                (true, Some(ty)) => Owner::Plugin(self.ident_of_ident(ty, ty.to_string())),
+                (_, Some(ty)) => Owner::Other(format!("{ty}::{}", f.sig.ident)),
+                _ => Owner::Other(f.sig.ident.to_string()),
+            };
+            self.owners.push(owner);
+            syn::visit::visit_impl_item_fn(self, f);
+            self.owners.pop();
+        }
+    }
+
+    fn visit_expr_method_call(&mut self, m: &'ast syn::ExprMethodCall) {
+        let name = m.method.to_string();
+        let args: Vec<&Expr> = m.args.iter().collect();
+        if name == BevyNames::ADD_SYSTEMS || BevyNames::CONFIGURE_SETS.contains(&name.as_str()) {
+            let (schedule, cfg) = match args.as_slice() {
+                [schedule, cfg] => (self.schedule_of(schedule), Some(*cfg)),
+                [cfg] => (String::new(), Some(*cfg)),
+                _ => (String::new(), None),
+            };
+            if let Some(cfg) = cfg {
+                let entries = self.entries(cfg);
+                let kind = if name == BevyNames::ADD_SYSTEMS {
+                    CallKind::Systems { schedule, entries }
+                } else {
+                    CallKind::Sets { schedule, entries }
+                };
+                self.push(&m.method, kind);
+            }
+        } else if BevyNames::ADD_OBSERVER.contains(&name.as_str()) {
+            if let Some(arg) = args.first() {
+                let entries = self.entries(arg);
+                self.push(&m.method, CallKind::Observer(entries));
+            }
+        } else if BevyNames::ADD_PLUGINS.contains(&name.as_str()) {
+            if let Some(arg) = args.first() {
+                let entries = self.entries(arg);
+                self.push(&m.method, CallKind::Plugins(entries));
+            }
+        } else if BevyNames::RESOURCE_CALLS.contains(&name.as_str()) {
+            let target = m
+                .turbofish
+                .as_ref()
+                .and_then(|t| t.args.first())
+                .and_then(|a| match a {
+                    syn::GenericArgument::Type(Type::Path(p)) => self.ident_of_path(&p.path),
+                    _ => None,
+                })
+                .map(Target::Named)
+                .or_else(|| args.first().and_then(|a| self.entries(a).into_iter().next()).map(|e| e.target));
+            if let Some(target) = target {
+                self.push(&m.method, CallKind::Resource(entry(target)));
+            }
+        }
+        syn::visit::visit_expr_method_call(self, m);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn calls(src: &str) -> Vec<Call> {
+        read_source("a.rs", src).unwrap()
+    }
+
+    fn systems(c: &Call) -> &[Entry] {
+        match &c.kind {
+            CallKind::Systems { entries, .. } | CallKind::Sets { entries, .. } => entries,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    fn name(e: &Entry) -> &str {
+        match &e.target {
+            Target::Named(i) => &i.name,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    // Pins the wusel shape: a chained tuple of sets with one run condition gives every member the condition and its neighbours as ordering.
+    #[test]
+    fn chained_sets_spread_condition_and_ordering() {
+        let c = calls("fn build(app: &mut App) { app.configure_sets(Update, (A::One, A::Two, A::Three).chain().run_if(in_state(S::G))); }");
+        let CallKind::Sets { schedule, entries } = &c[0].kind else { panic!() };
+        assert_eq!(schedule, "Update");
+        assert_eq!(entries.iter().map(name).collect::<Vec<_>>(), ["One", "Two", "Three"]);
+        assert!(entries.iter().all(|e| e.conditions == ["in_state(S::G)"]));
+        assert_eq!(entries[1].ordering, ["after A::One", "before A::Three"]);
+        assert_eq!(entries[0].ordering, ["before A::Two"]);
+    }
+
+    // Pins that in_set on a chained tuple reaches each member, as the fixture's registration relies on.
+    #[test]
+    fn in_set_applies_to_every_member() {
+        let c = calls("fn f() { app.add_systems(Update, (a, b).chain().in_set(Sys::Run)); }");
+        let e = systems(&c[0]);
+        assert_eq!(e.len(), 2);
+        assert!(e.iter().all(|e| e.sets.len() == 1 && e.sets[0].name == "Run"));
+        assert_eq!(e[1].ordering, ["after a"]);
+    }
+
+    // Pins that a closure is kept as an anonymous system with its position, not dropped or confused with a path.
+    #[test]
+    fn closure_is_an_anonymous_target() {
+        let c = calls("fn f() { app.add_systems(Update, |x: Res<R>| {}); }");
+        assert!(matches!(systems(&c[0])[0].target, Target::Closure { line: 1, .. }));
+    }
+
+    // Pins that run_if on one tuple member does not leak onto its siblings.
+    #[test]
+    fn condition_stays_on_its_member() {
+        let c = calls("fn f() { app.add_systems(Update, (a.run_if(x), b)); }");
+        let e = systems(&c[0]);
+        assert_eq!(e[0].conditions, ["x"]);
+        assert!(e[1].conditions.is_empty());
+    }
+
+    // Pins that a macro in a registration is reported as unparsed rather than guessed at.
+    #[test]
+    fn macro_target_is_unparsed() {
+        let c = calls("fn f() { app.add_systems(Update, gen!()); }");
+        assert!(matches!(systems(&c[0])[0].target, Target::Unparsed(_)));
+    }
+
+    // Pins that calls inside `impl Plugin` are owned by the implementing type, and that a factory call resolves to the factory's name.
+    #[test]
+    fn plugin_impl_owns_its_calls() {
+        let c = calls("impl Plugin for P { fn build(&self, app: &mut App) { app.add_plugins(Other::default()); app.init_resource::<R>(); } }");
+        assert!(matches!(&c[0].owner, Some(Owner::Plugin(i)) if i.name == "P"));
+        let CallKind::Plugins(e) = &c[0].kind else { panic!() };
+        assert_eq!(name(&e[0]), "Other");
+        assert!(matches!(&c[1].kind, CallKind::Resource(r) if name(r) == "R"));
+    }
+}

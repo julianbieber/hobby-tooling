@@ -13,6 +13,7 @@ pub struct Atlas {
 /// One library or binary target; `name` is unique within the atlas.
 pub struct CrateAtlas {
     pub name: String,
+    pub package: String,
     pub root: Module,
 }
 
@@ -41,9 +42,29 @@ pub struct Item {
     pub location: Option<(String, u64)>,
     pub links: Vec<(String, Id)>,
     pub traits: Vec<&'static str>,
+    pub system_param: bool,
 }
 
 impl Atlas {
+    /// The item at this path in a crate of this package. A package with a library and
+    /// binaries has one crate each, so every one is tried and the first match wins.
+    /// `path` is module names then the item name, without the crate.
+    pub fn find(&self, package: &str, path: &[String]) -> Option<(usize, Id)> {
+        self.crates.iter().enumerate().filter(|(_, c)| c.package == package).find_map(|(ci, c)| {
+            c.root.find(path).map(|i| (ci, i.id))
+        })
+    }
+
+    /// The item behind an id from [`Atlas::find`].
+    pub fn item(&self, (ci, id): (usize, Id)) -> Option<&Item> {
+        self.crates[ci].root.find_id(id)
+    }
+
+    /// Mutable access to an item, for assigning a role found after classification.
+    pub fn item_mut(&mut self, (ci, id): (usize, Id)) -> Option<&mut Item> {
+        self.crates[ci].root.find_id_mut(id)
+    }
+
     /// How many items in the whole atlas play this role.
     pub fn count_role(&self, role: Role) -> usize {
         self.crates.iter().map(|c| c.root.count_role(role)).sum()
@@ -54,15 +75,35 @@ impl CrateAtlas {
     /// Walks the module tree from the crate root, so only reachable items appear.
     /// `name` is the display name, which differs from the crate's when a library and
     /// a binary share one.
-    pub fn build(krate: &Crate, name: String) -> Result<CrateAtlas, Error> {
+    pub fn build(krate: &Crate, name: String, package: String) -> Result<CrateAtlas, Error> {
         let classifier = BevyClassifier::new(krate);
         let root = krate.item(krate.root())?;
         let module = build_module(krate, &classifier, &name, root, vec![name.clone()], true)?;
-        Ok(CrateAtlas { name, root: module })
+        Ok(CrateAtlas { name, package, root: module })
     }
 }
 
 impl Module {
+    fn find(&self, path: &[String]) -> Option<&Item> {
+        let (name, dirs) = path.split_last()?;
+        let mut module = self;
+        for dir in dirs {
+            module = module.children.iter().find(|c| c.path.last() == Some(dir))?;
+        }
+        module.items.iter().find(|i| &i.name == name)
+    }
+
+    fn find_id(&self, id: Id) -> Option<&Item> {
+        self.items.iter().find(|i| i.id == id).or_else(|| self.children.iter().find_map(|c| c.find_id(id)))
+    }
+
+    fn find_id_mut(&mut self, id: Id) -> Option<&mut Item> {
+        if let Some(pos) = self.items.iter().position(|i| i.id == id) {
+            return self.items.get_mut(pos);
+        }
+        self.children.iter_mut().find_map(|c| c.find_id_mut(id))
+    }
+
     pub fn count_modules(&self) -> usize {
         1 + self.children.iter().map(Module::count_modules).sum::<usize>()
     }
@@ -131,6 +172,7 @@ fn build_module(
             location: Crate::span(child),
             links: Crate::links(child),
             traits: classifier.traits_of(id).to_vec(),
+            system_param: classifier.is_system_param(id),
         });
     }
     Ok(module)

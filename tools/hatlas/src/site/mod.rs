@@ -1,5 +1,5 @@
-//! Writing the site: one index, one page per module, and one per plugin, component
-//! and resource, all as static HTML that links by relative path.
+//! Writing the site: one index, one page per module, and one per plugin, component,
+//! resource, system and observer, all as static HTML that links by relative path.
 
 pub mod check;
 pub mod markdown;
@@ -10,6 +10,7 @@ use crate::Error;
 use crate::atlas::{Atlas, Item, Module};
 use crate::bevy::Role;
 use crate::rustdoc::Id;
+use crate::systems::{Param, Registered, Registrant, Registration, Registry};
 use markdown::{escape, render_docs, summary};
 use names::{PageNames, relative};
 use std::collections::HashMap;
@@ -21,22 +22,24 @@ code,pre{font-family:ui-monospace,monospace}pre{background:#f4f4f4;padding:.6rem
 @media(prefers-color-scheme:dark){body{background:#181818;color:#ddd}a{color:#8ab4f8}pre{background:#252525}.summary,.where,.vis,.crumbs{color:#999}}";
 
 fn has_page(role: Role) -> bool {
-    matches!(role, Role::Plugin | Role::Component | Role::Resource)
+    matches!(role, Role::Plugin | Role::Component | Role::Resource | Role::System | Role::Observer)
 }
 
 struct Site<'a> {
     atlas: &'a Atlas,
+    registry: &'a Registry,
     module_pages: HashMap<Vec<String>, String>,
     item_pages: HashMap<(usize, Id), String>,
     anchors: HashMap<(usize, Id), (Vec<String>, String)>,
 }
 
 /// Writes the whole site into `root`, marker first, and returns how many pages it holds.
-pub fn render(atlas: &Atlas, root: &Path) -> Result<usize, Error> {
+pub fn render(atlas: &Atlas, registry: &Registry, root: &Path) -> Result<usize, Error> {
     let _ = std::fs::remove_dir_all(root);
     write(root, swap::MARKER, "")?;
     let mut site = Site {
         atlas,
+        registry,
         module_pages: HashMap::new(),
         item_pages: HashMap::new(),
         anchors: HashMap::new(),
@@ -143,7 +146,7 @@ impl<'a> Site<'a> {
                 ));
             }
             body.push_str("</ul>\n");
-            for role in [Role::Plugin, Role::Component, Role::Resource] {
+            for role in [Role::Plugin, Role::Component, Role::Resource, Role::System, Role::Observer] {
                 let mut items = Vec::new();
                 collect_public_items(&krate.root, role, &mut items);
                 if items.is_empty() {
@@ -162,6 +165,13 @@ impl<'a> Site<'a> {
                 }
                 body.push_str("</ul>\n");
             }
+        }
+        if !self.registry.unresolved.is_empty() {
+            body.push_str("<h2>Unresolved registrations</h2>\n<ul>\n");
+            for note in &self.registry.unresolved {
+                body.push_str(&format!("<li><code>{}</code></li>\n", escape(note)));
+            }
+            body.push_str("</ul>\n");
         }
         page("Atlas", &body)
     }
@@ -204,6 +214,23 @@ impl<'a> Site<'a> {
             }
             body.push_str("</ul>");
         }
+        let anonymous: Vec<_> = self
+            .registry
+            .anonymous
+            .iter()
+            .filter(|a| a.crate_index == ci && a.module == module.path)
+            .collect();
+        if !anonymous.is_empty() {
+            body.push_str("\n<h2>Anonymous systems</h2>\n<ul>\n");
+            for a in anonymous {
+                body.push_str(&format!(
+                    "<li id=\"{}\">closure · {}</li>\n",
+                    escape(&a.anchor),
+                    self.registration_html(from, &a.registration)
+                ));
+            }
+            body.push_str("</ul>");
+        }
         write(root, from, &page(&module.path.join("::"), &body))?;
         let mut pages = 1;
         for item in module.items.iter().filter(|i| has_page(i.role)) {
@@ -234,8 +261,134 @@ impl<'a> Site<'a> {
             body.push_str(&format!("<p>Implements: {}</p>\n", escape(&item.traits.join(", "))));
         }
         body.push_str(&self.docs_html(ci, from, item.docs.as_deref(), &item.links));
+        if let Some(view) = self.registry.systems.get(&(ci, item.id)) {
+            body.push_str(&self.system_html(from, view));
+        }
+        if let Some(registered) = self.registry.registers.get(&(ci, item.id)) {
+            body.push_str(&self.registers_html(from, registered));
+        }
+        if let Some(by) = self.registry.resource_by.get(&(ci, item.id)) {
+            body.push_str("\n<h2>Registered by</h2>\n<ul>\n");
+            for r in by {
+                body.push_str(&format!("<li>{}</li>\n", self.registrant_html(from, r)));
+            }
+            body.push_str("</ul>");
+        }
         write(root, from, &page(&format!("{} {}", item.role.label(), item.name), &body))
     }
+
+    fn registrant_html(&self, from: &str, by: &Registrant) -> String {
+        match by {
+            Registrant::Item(r) => {
+                let name = self.atlas.item(*r).map_or("", |i| i.name.as_str());
+                match self.href(r.0, r.1, from) {
+                    Some(h) => format!("<a href=\"{}\">{}</a>", escape(&h), escape(name)),
+                    None => format!("<code>{}</code>", escape(name)),
+                }
+            }
+            Registrant::Text(t) => {
+                format!("<code>{}</code>", escape(t))
+            }
+        }
+    }
+
+    fn registration_html(&self, from: &str, reg: &Registration) -> String {
+        let mut out = String::new();
+        if !reg.schedule.is_empty() {
+            out.push_str(&format!("schedule <code>{}</code>", escape(&reg.schedule)));
+        }
+        if let Some(by) = &reg.registered_by {
+            out.push_str(&format!(" · registered by {}", self.registrant_html(from, by)));
+        }
+        out.push_str(&format!(" · <span class=\"where\">{}:{}</span>", escape(&reg.site.0), reg.site.1));
+        let mut lines = Vec::new();
+        for c in &reg.conditions {
+            lines.push(format!("run if <code>{}</code>", escape(c)));
+        }
+        for (c, via) in &reg.inherited {
+            lines.push(format!("run if <code>{}</code> via set <code>{}</code>", escape(c), escape(via)));
+        }
+        for s in &reg.sets {
+            lines.push(format!("in set <code>{}</code>", escape(s)));
+        }
+        for o in &reg.ordering {
+            lines.push(format!("ordered <code>{}</code>", escape(o)));
+        }
+        if !lines.is_empty() {
+            out.push_str("<ul>");
+            for l in lines {
+                out.push_str(&format!("<li>{l}</li>"));
+            }
+            out.push_str("</ul>");
+        }
+        out
+    }
+
+    fn system_html(&self, from: &str, view: &crate::systems::SystemView) -> String {
+        let mut out = String::new();
+        if let Some(observes) = &view.observes {
+            out.push_str(&format!("\n<h2>Observes</h2>\n<p><code>{}</code></p>", escape(observes)));
+        }
+        out.push_str("\n<h2>Parameters</h2>\n");
+        if view.params.is_empty() {
+            out.push_str("<p class=\"no-docs\">none</p>");
+        } else {
+            out.push_str(&params_html(&view.params));
+        }
+        out.push_str("\n<h2>Registrations</h2>\n<ul>\n");
+        for reg in &view.registrations {
+            out.push_str(&format!("<li>{}</li>\n", self.registration_html(from, reg)));
+        }
+        out.push_str("</ul>");
+        out
+    }
+
+    fn registers_html(&self, from: &str, registered: &[Registered]) -> String {
+        let mut out = String::from("\n<h2>Registers</h2>\n<ul>\n");
+        for r in registered {
+            let label = match r.target.and_then(|t| self.href(t.0, t.1, from)) {
+                Some(h) => format!("<a href=\"{}\">{}</a>", escape(&h), escape(&r.text)),
+                None => format!("<code>{}</code>", escape(&r.text)),
+            };
+            let schedule = if r.schedule.is_empty() {
+                String::new()
+            } else {
+                format!(" in <code>{}</code>", escape(&r.schedule))
+            };
+            out.push_str(&format!(
+                "<li>{} {label}{schedule} · <span class=\"where\">{}:{}</span></li>\n",
+                r.what,
+                escape(&r.site.0),
+                r.site.1
+            ));
+        }
+        out.push_str("</ul>");
+        out
+    }
+}
+
+fn params_html(params: &[Param]) -> String {
+    let mut out = String::from("<ul>");
+    for p in params {
+        out.push_str(&format!(
+            "<li><code>{}: {}</code>{}",
+            escape(&p.name),
+            escape(&p.ty),
+            if p.optional { " <span class=\"vis\">optional</span>" } else { "" }
+        ));
+        if !p.data.is_empty() {
+            out.push_str(&format!("<br>data: <code>{}</code>", escape(&p.data.join(", "))));
+        }
+        if !p.filters.is_empty() {
+            out.push_str(&format!("<br>filters: <code>{}</code>", escape(&p.filters.join(", "))));
+        }
+        if !p.nested.is_empty() {
+            out.push_str(&params_html(&p.nested));
+        }
+        out.push_str("</li>");
+    }
+    out.push_str("</ul>");
+    out
 }
 
 fn vis_tag(public: bool) -> &'static str {

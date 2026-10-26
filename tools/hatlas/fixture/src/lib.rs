@@ -1,5 +1,13 @@
-use bevy_app::{App, Plugin};
+use bevy_app::{App, Plugin, Update};
 use bevy_ecs::prelude::*;
+use bevy_ecs::schedule::IntoScheduleConfigs;
+use bevy_ecs::system::SystemParam;
+
+macro_rules! score_macro {
+    () => {
+        macro_made
+    };
+}
 
 /// Wires the fixture's resource up.
 ///
@@ -10,7 +18,71 @@ pub struct ScorePlugin;
 impl Plugin for ScorePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Score>();
+        app.configure_sets(
+            Update,
+            (ScoreSystems::Count, ScoreSystems::Report)
+                .chain()
+                .run_if(resource_exists::<Score>),
+        );
+        app.add_systems(
+            Update,
+            (count_progress, report_score)
+                .chain()
+                .in_set(ScoreSystems::Report),
+        );
+        app.add_systems(Update, |score: Res<Score>| {
+            let _ = score.0;
+        });
+        app.add_systems(Update, score_macro!());
+        app.add_observer(on_scored);
+        app.add_plugins(extra_plugin);
     }
+}
+
+/// Ordering of the score systems.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ScoreSystems {
+    Count,
+    Report,
+}
+
+/// Marks progress that is not counted.
+#[derive(Component)]
+pub struct Marker;
+
+/// Reads the progress of everything.
+#[derive(SystemParam)]
+pub struct Tally<'w, 's> {
+    scores: Res<'w, Score>,
+    progress: Query<'w, 's, &'static Progress>,
+}
+
+/// Adds up the progress.
+pub fn count_progress(
+    progress: Query<(&Progress, Option<&Name>), (With<Progress>, Without<Marker>)>,
+    mut score: ResMut<Score>,
+) {
+    score.0 = progress.iter().map(|(p, _)| p.0).sum();
+}
+
+/// Reports the score.
+pub fn report_score(latest: Single<&Progress, Changed<Progress>>, maybe: Option<Res<Score>>, tally: Tally) {
+    let _ = (latest.0, maybe, tally.scores.0, tally.progress.iter().count());
+}
+
+fn mixed(params: ParamSet<(Query<&Progress>, Res<Score>)>) {
+    let _ = params;
+}
+
+fn macro_made() {}
+
+fn on_scored(event: On<Scored>) {
+    let _ = event;
+}
+
+/// A plugin written as a function.
+pub fn extra_plugin(app: &mut App) {
+    app.add_systems(Update, mixed);
 }
 
 struct HiddenPlugin;

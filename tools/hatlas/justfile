@@ -20,7 +20,7 @@ lint:
 test:
     cargo test
 
-# Regenerate the committed rustdoc JSON the tests read, one per supported format version
+# Regenerate the committed rustdoc JSON and SCIP index the tests read, one JSON per supported format version
 fixtures:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -36,4 +36,6 @@ fixtures:
             fixture/target/doc/hatlas_fixture.json > tests/data/fixture-v$v.json
         echo "$tc -> format $v"
     done
+    rm -rf fixture/target
+    (cd fixture && rust-analyzer scip . --output ../tests/data/fixture.scip)
     rm -rf fixture/target

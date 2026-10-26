@@ -35,11 +35,13 @@ pub struct Target {
     pub package: String,
     pub name: String,
     pub kind: TargetKind,
+    pub src_path: PathBuf,
 }
 
 /// A cargo workspace: its documentable targets and where its build output goes.
 pub struct Workspace {
     pub target_directory: PathBuf,
+    pub workspace_root: PathBuf,
     pub targets: Vec<Target>,
     toolchain: Toolchain,
 }
@@ -54,8 +56,8 @@ impl Workspace {
             .current_dir(repo);
         let text = run_capture(&mut cmd, "cargo metadata")?;
         let json: Value = serde_json::from_str(&text).map_err(|e| Error::Metadata(e.to_string()))?;
-        let (target_directory, targets) = parse_metadata(&json)?;
-        Ok(Workspace { target_directory, targets, toolchain })
+        let (target_directory, workspace_root, targets) = parse_metadata(&json)?;
+        Ok(Workspace { target_directory, workspace_root, targets, toolchain })
     }
 
     /// Builds one target's rustdoc JSON, including private items, and loads it at once:
@@ -85,10 +87,70 @@ impl Workspace {
         Crate::load(&file)
     }
 
+    /// Indexes the workspace with `rust-analyzer scip` and returns the index file.
+    ///
+    /// Needs `rust-analyzer` on the toolchain that applies, and builds the workspace's
+    /// build scripts and proc macros; memory use is in the gigabytes for a large game.
+    /// On a stable repo it runs under `+nightly` with its own target directory.
+    pub fn scip(&self, repo: &Path) -> Result<PathBuf, Error> {
+        let out = self.doc_target_dir().join("hatlas.scip");
+        let mut cmd = Command::new("rust-analyzer");
+        if self.toolchain == Toolchain::Nightly {
+            cmd.arg("+nightly");
+            cmd.env("CARGO_TARGET_DIR", self.target_directory.join("hatlas-nightly"));
+        }
+        cmd.arg("scip").arg(repo).arg("--output").arg(&out);
+        let step = "rust-analyzer scip".to_string();
+        let status = cmd
+            .stdout(std::process::Stdio::null())
+            .status()
+            .map_err(|e| Error::Cargo { step: step.clone(), status: e.to_string() })?;
+        if !status.success() {
+            return Err(Error::Cargo { step, status: status.to_string() });
+        }
+        Ok(out)
+    }
+
+    /// Every `.rs` file under the directory of each target's entry point, deduplicated and
+    /// sorted, as paths relative to the workspace root. These are the paths SCIP uses.
+    pub fn source_files(&self) -> Vec<String> {
+        let mut files = Vec::new();
+        let mut dirs: Vec<PathBuf> = self
+            .targets
+            .iter()
+            .filter_map(|t| t.src_path.parent().map(Path::to_path_buf))
+            .collect();
+        dirs.sort();
+        dirs.dedup();
+        for dir in &dirs {
+            collect_rs(dir, &mut files);
+        }
+        let mut rel: Vec<String> = files
+            .iter()
+            .filter_map(|f| f.strip_prefix(&self.workspace_root).ok())
+            .map(|f| f.to_string_lossy().into_owned())
+            .collect();
+        rel.sort();
+        rel.dedup();
+        rel
+    }
+
     fn doc_target_dir(&self) -> PathBuf {
         match self.toolchain {
             Toolchain::Repo => self.target_directory.clone(),
             Toolchain::Nightly => self.target_directory.join("hatlas-nightly"),
+        }
+    }
+}
+
+fn collect_rs(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(read) = std::fs::read_dir(dir) else { return };
+    for entry in read.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_rs(&path, out);
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            out.push(path);
         }
     }
 }
@@ -112,10 +174,11 @@ fn run_capture(cmd: &mut Command, step: &str) -> Result<String, Error> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Members' lib, proc-macro and bin targets, and the target directory.
-pub fn parse_metadata(json: &Value) -> Result<(PathBuf, Vec<Target>), Error> {
+/// The target directory, the workspace root, and the members' lib, proc-macro and bin targets.
+pub fn parse_metadata(json: &Value) -> Result<(PathBuf, PathBuf, Vec<Target>), Error> {
     let bad = |what: &str| Error::Metadata(format!("no `{what}`"));
     let target_directory = json["target_directory"].as_str().ok_or_else(|| bad("target_directory"))?;
+    let workspace_root = json["workspace_root"].as_str().ok_or_else(|| bad("workspace_root"))?;
     let members: Vec<&str> = json["workspace_members"]
         .as_array()
         .ok_or_else(|| bad("workspace_members"))?
@@ -141,10 +204,11 @@ pub fn parse_metadata(json: &Value) -> Result<(PathBuf, Vec<Target>), Error> {
                 package: package.to_string(),
                 name: t["name"].as_str().ok_or_else(|| bad("targets[].name"))?.to_string(),
                 kind,
+                src_path: PathBuf::from(t["src_path"].as_str().ok_or_else(|| bad("targets[].src_path"))?),
             });
         }
     }
-    Ok((PathBuf::from(target_directory), targets))
+    Ok((PathBuf::from(target_directory), PathBuf::from(workspace_root), targets))
 }
 
 #[cfg(test)]
@@ -168,18 +232,19 @@ mod tests {
     fn metadata_keeps_lib_and_bin_targets_only() {
         let json: Value = serde_json::json!({
             "target_directory": "/t",
+            "workspace_root": "/w",
             "workspace_members": ["p 0.1.0"],
             "packages": [
                 {"id": "p 0.1.0", "name": "p", "targets": [
-                    {"name": "p", "kind": ["lib"]},
-                    {"name": "p", "kind": ["bin"]},
-                    {"name": "ex", "kind": ["example"]},
-                    {"name": "build-script-build", "kind": ["custom-build"]}]},
-                {"id": "dep 1.0.0", "name": "dep", "targets": [{"name": "dep", "kind": ["lib"]}]}
+                    {"name": "p", "kind": ["lib"], "src_path": "/w/src/lib.rs"},
+                    {"name": "p", "kind": ["bin"], "src_path": "/w/src/main.rs"},
+                    {"name": "ex", "kind": ["example"], "src_path": "/w/examples/ex.rs"},
+                    {"name": "build-script-build", "kind": ["custom-build"], "src_path": "/w/build.rs"}]},
+                {"id": "dep 1.0.0", "name": "dep", "targets": [{"name": "dep", "kind": ["lib"], "src_path": "/d/lib.rs"}]}
             ]
         });
-        let (dir, targets) = parse_metadata(&json).unwrap();
-        assert_eq!(dir, PathBuf::from("/t"));
+        let (dir, root, targets) = parse_metadata(&json).unwrap();
+        assert_eq!((dir, root), (PathBuf::from("/t"), PathBuf::from("/w")));
         assert_eq!(targets.len(), 2);
     }
 }

@@ -5,7 +5,11 @@ pub mod atlas;
 pub mod bevy;
 pub mod cargo;
 pub mod rustdoc;
+pub mod scip;
 pub mod site;
+pub mod source;
+pub mod systems;
+pub mod types;
 
 use std::fmt;
 use std::path::PathBuf;
@@ -26,6 +30,9 @@ pub struct Summary {
     pub plugins: usize,
     pub components: usize,
     pub resources: usize,
+    pub systems: usize,
+    pub observers: usize,
+    pub unresolved: usize,
     pub pages: usize,
 }
 
@@ -35,6 +42,7 @@ pub struct Summary {
 pub enum Error {
     Cargo { step: String, status: String },
     Metadata(String),
+    Scip(String),
     UnsupportedFormat { file: PathBuf, found: u32, supported: Vec<u32> },
     MissingField { file: PathBuf, version: Option<u32>, field: String },
     DanglingLink { page: PathBuf, link: String },
@@ -47,6 +55,7 @@ impl fmt::Display for Error {
         match self {
             Error::Cargo { step, status } => write!(f, "`{step}` failed ({status})"),
             Error::Metadata(why) => write!(f, "cargo metadata: {why}"),
+            Error::Scip(why) => write!(f, "SCIP index: {why}"),
             Error::UnsupportedFormat { file, found, supported } => write!(
                 f,
                 "{}: rustdoc JSON format_version {found} is not supported (supported: {supported:?})",
@@ -91,6 +100,7 @@ pub fn run(options: &Options) -> Result<Summary, Error> {
     site::swap::guard(&out)?;
 
     let mut crates = Vec::new();
+    let mut docs = Vec::new();
     let mut names: Vec<String> = Vec::new();
     for target in &workspace.targets {
         let doc = workspace.document(&repo, target)?;
@@ -99,12 +109,18 @@ pub fn run(options: &Options) -> Result<Summary, Error> {
             name = format!("{name}_bin");
         }
         names.push(name.clone());
-        crates.push(atlas::CrateAtlas::build(&doc, name)?);
+        crates.push(atlas::CrateAtlas::build(&doc, name, target.package.clone())?);
+        docs.push(doc);
     }
-    let atlas = atlas::Atlas { crates };
+    let mut atlas = atlas::Atlas { crates };
+
+    let scip = scip::ScipIndex::load(&workspace.scip(&repo)?)?;
+    let (calls, notes) = source::read(&workspace.workspace_root, &workspace.source_files());
+    let mut registry = systems::Registry::build(&mut atlas, &docs, &scip, &calls)?;
+    registry.unresolved.extend(notes);
 
     let tmp = site::swap::tmp_dir(&out);
-    let result = site::render(&atlas, &tmp)
+    let result = site::render(&atlas, &registry, &tmp)
         .and_then(|pages| site::check::check(&tmp).map(|()| pages))
         .and_then(|pages| site::swap::swap(&tmp, &out).map(|()| pages));
     if result.is_err() {
@@ -120,6 +136,9 @@ pub fn run(options: &Options) -> Result<Summary, Error> {
         plugins: count(bevy::Role::Plugin),
         components: count(bevy::Role::Component),
         resources: count(bevy::Role::Resource),
+        systems: count(bevy::Role::System),
+        observers: count(bevy::Role::Observer),
+        unresolved: registry.unresolved.len(),
         pages,
     })
 }

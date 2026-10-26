@@ -186,6 +186,56 @@ impl Crate {
             .map(str::to_string)
     }
 
+    /// The error for a type the type printer has no rule for.
+    pub fn unknown_type(&self, variant: &str) -> Error {
+        self.missing(format!("type.{variant}"))
+    }
+
+    /// A function's parameters as `(name, type)`, in order.
+    ///
+    /// Fails with `MissingField` when the item has no `inner.function.sig.inputs`.
+    pub fn fn_inputs<'a>(&self, item: &'a Value) -> Result<Vec<(String, &'a Value)>, Error> {
+        let inputs = item["inner"]["function"]["sig"]["inputs"]
+            .as_array()
+            .ok_or_else(|| self.missing("inner.function.sig.inputs"))?;
+        inputs
+            .iter()
+            .map(|pair| {
+                let name = pair.get(0).and_then(Value::as_str);
+                let ty = pair.get(1);
+                name.zip(ty)
+                    .map(|(n, t)| (n.to_string(), t))
+                    .ok_or_else(|| self.missing("inner.function.sig.inputs[]"))
+            })
+            .collect()
+    }
+
+    /// The fields of a struct as `(name, type)`; tuple fields are named `0`, `1`, ….
+    /// A hidden tuple field is skipped.
+    ///
+    /// Fails with `MissingField` when the item is not a struct with a plain or tuple kind.
+    pub fn struct_field_types(&self, id: Id) -> Result<Vec<(String, &Value)>, Error> {
+        let item = self.item(id)?;
+        let kind = &item["inner"]["struct"]["kind"];
+        let (ids, named) = if let Some(plain) = kind.get("plain") {
+            (plain["fields"].as_array(), true)
+        } else if let Some(tuple) = kind.get("tuple") {
+            (tuple.as_array(), false)
+        } else {
+            return Err(self.missing("inner.struct.kind"));
+        };
+        let ids = ids.ok_or_else(|| self.missing("inner.struct.kind.fields"))?;
+        let mut out = Vec::new();
+        for (n, field) in ids.iter().enumerate() {
+            let Some(field) = id_of(field) else { continue };
+            let item = self.item(field)?;
+            let ty = item["inner"].get("struct_field").ok_or_else(|| self.missing("inner.struct_field"))?;
+            let name = if named { Crate::item_name(item).unwrap_or("").to_string() } else { n.to_string() };
+            out.push((name, ty));
+        }
+        Ok(out)
+    }
+
     fn missing(&self, field: impl Into<String>) -> Error {
         Error::MissingField {
             file: self.file.clone(),
