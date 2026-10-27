@@ -54,10 +54,16 @@ pub fn run() -> ExitCode {
     // SAFETY: no other thread runs yet, so nothing reads the environment concurrently.
     unsafe { std::env::remove_var(SPAWNED_ENV) };
     let quit = Arc::new(AtomicBool::new(false));
-    for signal in [signal_hook::consts::SIGTERM, signal_hook::consts::SIGHUP] {
-        if let Err(e) = signal_hook::flag::register(signal, quit.clone()) {
-            warn!("cannot watch signal {signal}: {e}");
-        }
+    if let Err(e) = signal_hook::flag::register(signal_hook::consts::SIGTERM, quit.clone()) {
+        warn!("cannot watch SIGTERM: {e}");
+    }
+    let hangup = signal_hook::consts::SIGHUP;
+    if let Err(e) = signal_hook::flag::register_conditional_shutdown(
+        hangup,
+        128 + hangup,
+        Arc::new(AtomicBool::new(true)),
+    ) {
+        warn!("cannot watch SIGHUP: {e}");
     }
     install_panic_hook();
     let mut terminal = match enter_terminal() {
