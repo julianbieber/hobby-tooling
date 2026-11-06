@@ -132,7 +132,7 @@ oversized issue. `/task-split` is the pass for that.
 
    - Topic: on a refresh, the existing directory's. Otherwise, inside a worktree
      whose topic fits, the **second** component under `~/fun_worktrees/PROJECT/`;
-     else the one from `nu -c 'hwt topics -p <project>'` that fits; else propose a
+     else the one from `nu -l -c 'hwt topics -p <project>'` that fits; else propose a
      new one and say it is new. If the conversation gives no basis at all, **ask**.
    - Task: on a refresh, the existing name. Otherwise slug the title, then
      `ls ~/fun_repos/hobby-mimisbrunnr/notes/<project>/*/` to check it is unused.

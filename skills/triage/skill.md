@@ -36,7 +36,7 @@ one.
    - **done** — Already resolved. Mark as `- [x] DONE` with date
    - **delegate** — Someone else's responsibility. Note who.
 
-   The user can batch decisions (e.g. "drop 3,4,5" or "defer all jenkins
+   The user can batch decisions (e.g. "drop 3,4,5" or "defer all ci
    items").
 
 5. **Apply decisions**:

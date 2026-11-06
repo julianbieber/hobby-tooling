@@ -382,7 +382,7 @@ them.** `/task:coordinate` writes the file at every change; `hcoord tui`
 re-reads it whenever its mtime moves; `hdash` counts its `status` fields. A
 resumed coordinator picks up from it after an interrupt, and editing it by hand
 between tasks is expected. The tasks it creates sit under the blurb as their
-topic (`~/fun_worktrees/<project>/<blurb>/<blurb>-<slug>`), so a coordinator's
+topic (`~/fun_worktrees/<project>/<blurb>/<blurb>_<slug>`), so a coordinator's
 work groups itself.
 
 **The coordinator waits on an idle notice, and falls back to a shell call.** A
@@ -755,7 +755,7 @@ to be: `/task:build` annotated the intended change onto the baseline, reviewed
 it at GATE 1, and `/hmml-translate` implemented the markers. That was a double
 review — the plan, then the real diff — and the plan drifted from what was
 built, as it did at work. Now `/hmml-extract --against <ref>` writes the unit as
-the branch leaves it with what `git diff <ref>...HEAD` changed marked, after the
+the worktree leaves it with what `git diff --merge-base <ref>` changed marked, after the
 code exists, and `/hmml-translate` is gone. The HMML exists for me to understand
 what the code change is doing, so it represents the implemented change; the file
 is regenerated whenever the diff moves and never maintained by hand. `/hmml-new`

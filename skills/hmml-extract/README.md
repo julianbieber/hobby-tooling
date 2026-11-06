@@ -18,7 +18,7 @@ how the unit behaves at mental-model altitude. Plain extraction writes the
 **baseline** — the *current* version of the unit, unannotated.
 
 With `--against <ref>` it writes the **review delta** instead: the unit as the
-branch leaves it, with what `git diff <ref>...HEAD` changed marked `# -` / `# +`
+worktree leaves it, with what `git diff --merge-base <ref>` changed marked `# -` / `# +`
 (grammar §10), so a finished change can be read as a change to the mental model
 before merge. `/task:build` runs it after the code is implemented. The file is
 derived and regenerated whenever the diff moves, never maintained by hand.

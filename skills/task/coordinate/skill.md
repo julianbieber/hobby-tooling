@@ -93,8 +93,8 @@ ______________________________________________________________________
 2. Run `/task-split` with the description. It files nothing and hands back an
    ordered list with a `Done when`, `Depends on` and `Revert` per task, the
    decisions to make first, and the rejected cuts.
-3. **Turn the list into entries.** Per task: `task` is `<blurb>-<slug>` where
-   the slug is the title lowercased, `[a-z0-9-]` only, at most 40 characters;
+3. **Turn the list into entries.** Per task: `task` is `<blurb>_<slug>` where
+   the slug is the title lowercased, words joined by `_`, `[a-z0-9_]` only, at most 40 characters;
    `topic` is the blurb (so every task of this coordinator sits under
    `~/fun_worktrees/<project>/<blurb>/`); `title`, `done_when`, `depends_on`
    (by `task` name) from the split; `status: todo`. An `enabling` task keeps its

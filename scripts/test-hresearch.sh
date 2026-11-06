@@ -211,17 +211,18 @@ render_matrix() {
 
 OK_MATRIX='{
   "shape": "matrix",
+  "criteria": ["looks like", "cost", "effort"],
   "options": [
     {"name": "heightfield pipes", "cells": {
         "looks like": {"text": "rivers, pools"},
-        "cost per frame": {"text": "O(cells)"},
-        "jam-sized": {"text": "yes"},
-        "bevy precedent": {"src": 1}}},
+        "cost": {"text": "O(cells)"},
+        "effort": {"text": "yes"},
+        "precedent": {"src": 1}}},
     {"name": "SPH particles", "cells": {
         "looks like": {"text": "droplets"},
-        "cost per frame": {"text": "O(n log n)"},
-        "jam-sized": {"text": "small counts"},
-        "bevy precedent": {"none": true}}}
+        "cost": {"text": "O(n log n)"},
+        "effort": {"text": "small counts"},
+        "precedent": {"none": true}}}
   ],
   "verdict": {"option": "heightfield pipes", "text": "start here"}
 }'
@@ -230,7 +231,7 @@ OK_MATRIX='{
 if render_matrix "$OK_MATRIX" >/dev/null 2>&1 && [ -f "$MATRIX_MD" ]; then
     missing=""
     grep -qF "question: which techniques exist to simulate water flow" "$MATRIX_MD" || missing="$missing question-line"
-    for label in "looks like" "cost per frame" "jam-sized" "bevy precedent" "verdict"; do
+    for label in "looks like" "cost" "effort" "precedent" "verdict"; do
         grep -q "^$label" "$MATRIX_MD" || missing="$missing $label"
     done
     grep -qF "[1] $PAGE_URL" "$MATRIX_MD" || missing="$missing footnote"
@@ -249,17 +250,18 @@ esac
 rm -f "$MATRIX_MD"
 LONG_CELL_MATRIX='{
   "shape": "matrix",
+  "criteria": ["looks like", "cost", "effort"],
   "options": [
     {"name": "heightfield pipes", "cells": {
         "looks like": {"text": "one two three four five"},
-        "cost per frame": {"text": "O(cells)"},
-        "jam-sized": {"text": "yes"},
-        "bevy precedent": {"none": true}}},
+        "cost": {"text": "O(cells)"},
+        "effort": {"text": "yes"},
+        "precedent": {"none": true}}},
     {"name": "SPH particles", "cells": {
         "looks like": {"text": "droplets"},
-        "cost per frame": {"text": "O(n log n)"},
-        "jam-sized": {"text": "small counts"},
-        "bevy precedent": {"none": true}}}
+        "cost": {"text": "O(n log n)"},
+        "effort": {"text": "small counts"},
+        "precedent": {"none": true}}}
   ],
   "verdict": {"option": "heightfield pipes", "text": "start here"}
 }'
@@ -275,16 +277,17 @@ fi
 rm -f "$MATRIX_MD"
 MISSING_CRIT_MATRIX='{
   "shape": "matrix",
+  "criteria": ["looks like", "cost", "effort"],
   "options": [
     {"name": "heightfield pipes", "cells": {
         "looks like": {"text": "rivers, pools"},
-        "cost per frame": {"text": "O(cells)"},
-        "bevy precedent": {"none": true}}},
+        "cost": {"text": "O(cells)"},
+        "precedent": {"none": true}}},
     {"name": "SPH particles", "cells": {
         "looks like": {"text": "droplets"},
-        "cost per frame": {"text": "O(n log n)"},
-        "jam-sized": {"text": "small counts"},
-        "bevy precedent": {"none": true}}}
+        "cost": {"text": "O(n log n)"},
+        "effort": {"text": "small counts"},
+        "precedent": {"none": true}}}
   ],
   "verdict": {"option": "heightfield pipes", "text": "start here"}
 }'
@@ -300,17 +303,18 @@ fi
 rm -f "$MATRIX_MD"
 BAD_VERDICT_MATRIX='{
   "shape": "matrix",
+  "criteria": ["looks like", "cost", "effort"],
   "options": [
     {"name": "heightfield pipes", "cells": {
         "looks like": {"text": "rivers, pools"},
-        "cost per frame": {"text": "O(cells)"},
-        "jam-sized": {"text": "yes"},
-        "bevy precedent": {"none": true}}},
+        "cost": {"text": "O(cells)"},
+        "effort": {"text": "yes"},
+        "precedent": {"none": true}}},
     {"name": "SPH particles", "cells": {
         "looks like": {"text": "droplets"},
-        "cost per frame": {"text": "O(n log n)"},
-        "jam-sized": {"text": "small counts"},
-        "bevy precedent": {"none": true}}}
+        "cost": {"text": "O(n log n)"},
+        "effort": {"text": "small counts"},
+        "precedent": {"none": true}}}
   ],
   "verdict": {"option": "cellular automaton", "text": "start here"}
 }'
@@ -326,17 +330,18 @@ fi
 rm -f "$MATRIX_MD"
 PRECEDENT_TEXT_MATRIX='{
   "shape": "matrix",
+  "criteria": ["looks like", "cost", "effort"],
   "options": [
     {"name": "heightfield pipes", "cells": {
         "looks like": {"text": "rivers, pools"},
-        "cost per frame": {"text": "O(cells)"},
-        "jam-sized": {"text": "yes"},
-        "bevy precedent": {"text": "some crate"}}},
+        "cost": {"text": "O(cells)"},
+        "effort": {"text": "yes"},
+        "precedent": {"text": "some crate"}}},
     {"name": "SPH particles", "cells": {
         "looks like": {"text": "droplets"},
-        "cost per frame": {"text": "O(n log n)"},
-        "jam-sized": {"text": "small counts"},
-        "bevy precedent": {"none": true}}}
+        "cost": {"text": "O(n log n)"},
+        "effort": {"text": "small counts"},
+        "precedent": {"none": true}}}
   ],
   "verdict": {"option": "heightfield pipes", "text": "start here"}
 }'
@@ -347,6 +352,40 @@ elif [ -f "$MATRIX_MD" ]; then
 else
     pass matrix-rejects-precedent-without-src
 fi
+
+matrix_with_criteria() {
+    python3 -c '
+import json, sys
+crit = json.loads(sys.argv[1])
+cell = lambda c: {"none": True} if c == "precedent" else {"text": "x"}
+rows = [c for c in crit if isinstance(c, str)] + ["precedent"]
+opts = [{"name": n, "cells": {c: cell(c) for c in rows}} for n in ("a", "b")]
+card = {"shape": "matrix", "options": opts, "verdict": {"option": "a", "text": "pick a"}}
+if sys.argv[1] != "null":
+    card["criteria"] = crit
+print(json.dumps(card))
+' "$1"
+}
+
+# matrix-criteria-per-question: criteria the question chose, unrelated to games, render as rows
+rm -f "$MATRIX_MD"
+if render_matrix "$(matrix_with_criteria '["fits nushell", "maintenance"]')" >/dev/null 2>&1 \
+    && grep -q "^fits nushell" "$MATRIX_MD" && grep -q "^maintenance" "$MATRIX_MD" \
+    && ! grep -q "jam-sized\|bevy precedent" "$MATRIX_MD"; then
+    pass matrix-criteria-per-question
+else
+    fail matrix-criteria-per-question "render failed or rows missing"
+fi
+
+# matrix-rejects-bad-criteria: no criteria list, too many, a duplicate, or a fixed row name is refused
+for bad in 'null' '[]' '["a", "b", "c", "d", "e"]' '["a", "a"]' '["verdict"]' '["precedent"]' '["one two three four five"]'; do
+    rm -f "$MATRIX_MD"
+    if render_matrix "$(matrix_with_criteria "$bad")" >/dev/null 2>&1 || [ -f "$MATRIX_MD" ]; then
+        fail matrix-rejects-bad-criteria "accepted criteria $bad"
+        continue
+    fi
+    pass "matrix-rejects-bad-criteria $bad"
+done
 
 # matrix-verdict-one-column: the verdict row has exactly one non-blank cell
 rm -f "$MATRIX_MD"
