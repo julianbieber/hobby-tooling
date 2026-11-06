@@ -76,5 +76,5 @@ people optimise against rather than satisfy.
 
 - `/issue-create` — turns one accepted entry into an issue, and runs the shape
   check before writing it
-- `/subtask`, `/spawn` — splitting work already in progress; bound by the same
+- `/subtask` — splitting work already in progress; bound by the same
   rules

@@ -65,7 +65,8 @@ hcdev claude-pane <task> [-p] [-t]       resolve the Claude pane id of a running
 hcdev notes                              cd to this task's notes dir
 hwt aspect new <name> [-g <question>]    research aspect of this task: worktree + notes
 hwt aspect list | close <name>           a task's aspects / remove one's worktree, keep notes
-hcdev tab <name>                         open or focus an aspect as a tab in the task's session
+hwt subtask <name> [--take c…] [--tab]   split work out: a task off the default branch, owned by this one
+hcdev tab <name>                         open or focus an aspect or subtask as a tab in the task's session
 ```
 
 A task under the topic `coordinator` is a **coordinator**: notes, `task.json`

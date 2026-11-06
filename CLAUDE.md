@@ -528,8 +528,8 @@ card with its state, `open` → `active` → `reported` → `closed`.
 **An aspect is not a task**: no `task.json`, so `scan_tasks` and `known-tasks`
 never enumerate it and it has no card. Slices of implementation stay subtasks
 — the decision in `business-context.md` `## decisions` is that a subtask is
-the shape for work that may be postponed, and opening one as a tab is a later
-step of this design.
+the shape for work that may be postponed — and a subtask worked now opens as a
+tab too (below).
 
 **Its worktree lives under `~/fun_aspects`, not beside the task.** About a
 dozen consumers read the third component under `~/fun_worktrees` as the task —
@@ -552,17 +552,28 @@ through one `build-task.json`, and a tab it cannot see would hold a gate
 nobody answers.
 
 **Every tab shares the task's zellij session name**, so two things that keyed
-on it alone had to learn the tab. hdash credits a session-state record whose
-project dir lies in an aspect worktree to that aspect *before* trying the
-session name, and badges the aspect's line; a task's ordering counts its
+on it alone had to learn the tab. hdash credits a session-state record to
+what its project dir lies in — an aspect worktree, else a task worktree — and
+only falls back to the session name for a dir in neither (a coordinator's main
+checkout); it badges the aspect's line; a task's ordering counts its
 aspects, so an aspect waiting on you raises the card. The ctrl-g dump keys on
 the session name plus `$ZELLIJ_PANE_ID`. That the pane id is distinct per tab
 and reaches the hooks and the ctrl-g editor was established by the first
 research aspect run (`aspects/pane-id-reach/findings.md` in the task notes).
 
-Not yet done, and planned (`plan-2026-11-06-task-aspects.md` in the task
-notes): `hwt rm`/`done`/`restore` cascading to aspect worktrees, and subtasks
-opened as tabs.
+**A subtask worked now is a tab too.** `hwt subtask` is the one way to split
+work out — `/spawn` recorded ownership in `subtasks.json` but wrote no issue,
+`/subtask` wrote an issue but recorded no ownership, and both are now
+`/subtask` on top of it. The `subtasks.json` entry carries `tab`: `true` when
+the subtask is worked now, as a tab of the parent's session (`hcdev tab
+<name>`, which also sets it), `false` when it is postponed on its own card.
+The subtask is still a whole task — `task.json`, card, PR — so nothing that
+reads tasks changed; hdash adds `tab`/`postponed` and the child's badge to the
+parent's subtask line, and a click on a tab subtask opens its tab.
+
+Not yet done, and planned (`plan-2026-11-06-task-aspects.md` in the
+`task_aspects` notes): `hwt rm`/`done`/`restore` cascading to aspect
+worktrees.
 
 ## Opening a session from a dashboard: two things that kill the terminal
 
@@ -1344,11 +1355,12 @@ would make both of them mine to fix afterwards rather than mine to make.
 question of whether this task is really one task, asked before any planning and
 ending at a hard gate. The two tiers do not overlap: a **subtask** is a separate
 deliverable with its own worktree, branch, PR and session, and everything below
-that floor is one pass of the pipeline on one branch. The gate **refuses** on a
-branch that already has commits or a dirty tree, and that refusal is what makes
-the tier sound: `/subtask` cuts from the parent's branch, so at assessment time
-the two are the same thing and each subtask is genuinely independent, while
-later they would inherit unmerged work. Depth is bounded at one by `is_subtask`
+that floor is one pass of the pipeline on one branch. A subtask is cut from the
+default branch, never from the parent's, so its PR holds only its own work;
+what the parent already committed reaches it as whole commits (`hwt subtask
+--take`), with the parent rebased onto the subtask's branch so each commit lands
+in exactly one PR. That is what lets a split happen after work has started,
+where the gate used to refuse. Depth is bounded at one by `is_subtask`
 in the seeded state file rather than by asking the model to remember. Most tasks
 are one task, and the phase is expected to say so in a line.
 

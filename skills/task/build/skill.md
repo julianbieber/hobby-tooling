@@ -86,7 +86,7 @@ represents the implemented change, never a plan.
      "hmml_units": ["<unit>"],
      "no_hmml": false, "no_context": false, "no_split": false,
      "is_subtask": false,
-     "split": { "assessed": "<YYYY-MM-DD>", "outcome": "none|refused|split",
+     "split": { "assessed": "<YYYY-MM-DD>", "outcome": "none|split",
                 "reason": "<one line>" },
      "subtasks": [
        { "task": "<new task id>", "goal": "<one-line brief>",
@@ -121,9 +121,9 @@ represents the implemented change, never a plan.
    leftover `dev-flow.json` in the same directory is read once for its `phase`,
    then ignored — never written to again. A state file with no
    `split` record and a phase past `plan` gets
-   `split: {"outcome": "refused", "reason": "task already in flight"}` rather
-   than a back-filled assessment: the precondition below fails by construction
-   once there are commits.
+   `split: {"outcome": "none", "reason": "task already in flight"}` rather
+   than a back-filled assessment: work already under way is split, when it
+   needs to be, by `/subtask` taking its commits.
 
 4. **Starting phase**, in this precedence: `phase: assess-split` outranks
    everything below — the subtask question is answered before any planning, and
@@ -188,20 +188,23 @@ branch, PR and session. Then record the answer so it is never asked again.
 Skip the phase entirely — set `phase: plan` and continue — when `is_subtask` is
 true, `no_split` is set, or `split` is already recorded.
 
-**S1 — Check the precondition, before thinking about the cut at all.** A
-subtask's PR targets the default branch, which is only sound while this task has
-no unmerged work of its own for the subtask to miss. Both must hold:
+**S1 — See what the branch already holds.** A subtask is cut from the default
+branch, so work this task has already done reaches a subtask only by being
+moved into it, as whole commits:
 
 ```bash
-git status --short                              # must be empty
-git log --oneline "origin/$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)..HEAD"   # must be empty
+git status --short                              # uncommitted work
+git log --oneline "origin/$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)..HEAD"   # this branch's own commits
 ```
 
-If either fails the split is **refused** — not deferred, not worked around.
-Record `split: {"outcome": "refused", "reason": "<which check failed>"}`, say in
-one line that a mid-task split would make subtasks branch off unmerged work, set
-`phase: plan`, and carry on. Do not ask me to approve a split you already know
-is unsound.
+A dirty tree cannot be split: if the split goes ahead, its work has to be
+committed first, and that commit is mine to make or approve — say so at the
+gate rather than committing. Each commit the log lists either goes to exactly
+one subtask (`hwt subtask --take`) or stays here; this task ends at
+`handed-off` and implements nothing further, so a split leaves **no commit
+here** — one that belongs to no subtask means this task is one of the
+subtasks, and the cut has to say which. A commit that mixes two subtasks'
+work cannot be taken by either; name it.
 
 **S2 — Read the whole task.** Step 0 already resolved the brief; if it came from
 a bare description, also run `journal:resume` over the notes dir. This is the
@@ -231,9 +234,9 @@ work, and I want to see it at the gate. The re-cuts that fix nearly everything:
 **S5 — Check the set, not just the items.** Three properties the list as a whole
 must have, all three printed at the gate:
 
-- **Disjoint files** pairwise. Two subtasks that edit the same file cannot be
-  worked in parallel sessions; name the file, then fold them together or move
-  the boundary.
+- **Disjoint commits.** Every commit from S1 is taken by exactly one subtask.
+  Overlapping *files* are allowed — each subtask has its own worktree and
+  conflicts are resolved at PR time — but say which files two subtasks share.
 - **Every subtask stands alone** — if backing one out forces another out, they
   are one subtask cut on the wrong axis (rule 3).
 - **Nothing is left to remember** (rule 6) once every subtask has merged — no
@@ -251,8 +254,9 @@ set, then print:
 - the **end state** in one or two sentences: what is true once every subtask has
   landed;
 - a table of proposed subtasks — blurb, the user-visible behaviour, the
-  done-when observation (rule 2), the files it owns, and any `enabling` label
-  with the task it unlocks;
+  done-when observation (rule 2), the files it owns, the commits it takes,
+  whether it is worked **now** (a tab of this session) or **postponed**, and
+  any `enabling` label with the task it unlocks;
 - the **rejected candidates**, with the rule each failed and how it was re-cut;
 - the three set-level checks from S5, each `pass` or the specific pair that
   fails;
@@ -269,12 +273,17 @@ ______________________________________________________________________
 
 Only after I approve the decomposition. Per approved subtask, in order:
 
-1. **Create it** with `/subtask "<the full brief>"`. That skill owns the
-   worktree, the branch, the notes seed, the `subtasks.json` entry and the
-   issue decision — do not reimplement any of it. Pass the brief as a
-   complete, self-contained deliverable description: goal, file paths,
-   constraints, done-when. It is read by a session that has no memory of this
-   conversation.
+1. **Create it** — the decisions were made at the gate, so run the primitive
+   rather than the interactive `/subtask`:
+   ```
+   nu -c "use ~/.config/nushell/hwt.nu *; hwt subtask <name> --goal '<one line>' [--take [<hash> …]] [--tab]"
+   ```
+   `--tab` for a subtask worked now. That owns the worktree, the branch, the
+   moved commits, the rebase of this branch and the `subtasks.json` entry. A
+   conflict aborts and is reported; stop there and tell me. Then write the
+   subtask's `implementation.md` brief in the shape `/subtask` step 6 gives:
+   goal, file paths, constraints, done-when, commits taken — read by a session
+   that has no memory of this conversation.
 2. **Seed its pipeline state** at
    `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{new_task}/build-task.json`:
    ```json
@@ -293,13 +302,15 @@ Then, once per task:
 4. Run `journal:write` once, recording the decomposition and *why* each cut fell
    where it did. The rejected candidates belong here too — that reasoning is the
    part that would otherwise be lost, and the subtask journals will not have it.
-5. Print the handoff: each subtask with its worktree path and its
-   `hcdev wt <task>` command, a note that `hdash` lists them under this task's
-   card, and a reminder that each session runs its own `/task:build` and gates
-   independently.
+5. Open the subtasks worked now: `hcdev tab <name>` for each. Print the
+   handoff: each subtask with its worktree path, now (its tab is open) or
+   postponed (`hcdev tab <name>` or `hcdev wt <name>` opens it later), a note
+   that `hdash` lists them under this task's card, and a reminder that each
+   runs its own `/task:build` and gates independently. If this branch was
+   rebased and had been pushed, say it needs a force push.
 
-**Nothing is launched here.** `/subtask` sets up directories, as it says it
-does; opening a session is a click in `hdash` or an `hcdev wt` I run myself.
+**Only tabs are opened here** — for the subtasks worked now. A postponed one
+is opened later, by a click in `hdash` or an `hcdev tab` I run myself.
 **This task implements nothing** — it owns no code, opens no PR, and does
 not poll the subtasks. End your turn.
 

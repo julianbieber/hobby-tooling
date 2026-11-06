@@ -147,8 +147,8 @@ A card whose task has a live Claude session shows **`idle 12m`** in amber while 
 you, or **`busy 3m`** while it works; the header counts the open tasks waiting on you. The
 state comes from the [`session-state`](../../hooks/session-state/README.md) hook, re-read
 every second. Every Claude process of the hobby account counts — a plain hcdev pane, both
-`/task:auto` stages, a coordinator's pane — matched to a task by its zellij session name
-(from `hcdev.nu`'s `hcdev-session-names`), else by the worktree its directory lies in; the
+`/task:auto` stages, a coordinator's pane — matched to a task by the worktree its directory
+lies in, else by its zellij session name (from `hcdev.nu`'s `hcdev-session-names`); the
 newest live record per task decides. A session busy for 30 seconds whose `claude` process used
 under 60 CPU ticks over that window reads idle since its last hook event.
 
@@ -157,6 +157,11 @@ a record whose directory lies in an aspect worktree (`~/fun_aspects/…/<task>/<
 matched to that aspect first: its badge sits on the aspect's line, not on the card header. For
 ordering, the chips and the header count a task's aspects count with it — an aspect waiting on
 you makes the task idle.
+
+A subtask worked as a tab of its parent's session shares the parent's session name too, and is
+matched by its own worktree like any task: the badge is on its own card, and repeated on the
+parent's subtask line, which reads `· tab` or `· postponed`. Clicking a tab subtask's line opens
+its tab (`hcdev tab`); clicking a postponed one scopes the list to its project.
 
 The sidebar lists the projects with a `notes/<project>/` directory — an upstream clone
 under `~/fun_repos` with no notes gets no row — plus any project an orphan worktree sits

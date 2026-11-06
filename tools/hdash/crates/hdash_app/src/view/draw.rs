@@ -689,7 +689,16 @@ impl DashView {
                 2,
             ));
             for sub in &task.subtasks {
-                lines.extend(flow(vec![subtask_line(&task.id, sub)], width, 2));
+                let child = sub.resolved_id(&task.id.project, &task.id.topic);
+                let mut items = vec![subtask_line(&task.id, sub)];
+                if let Some(session) = self.sessions.tasks.get(&child) {
+                    let bg = match session.state {
+                        SessionState::Idle => AMBER,
+                        SessionState::Busy => DIM,
+                    };
+                    items.push(badge(&session_label(session, now_secs()), bg));
+                }
+                lines.extend(flow(items, width, 2));
             }
         }
 
@@ -898,6 +907,7 @@ fn aspect_line(owner: &TaskId, aspect: &AspectRef) -> Item_ {
 
 fn subtask_line(owner: &TaskId, sub: &SubtaskRef) -> Item_ {
     let mut label = sub.task.clone();
+    label.push_str(if sub.tab { " · tab" } else { " · postponed" });
     let detail = sub.display_label();
     if detail != sub.task {
         label.push_str(&format!(" · {detail}"));

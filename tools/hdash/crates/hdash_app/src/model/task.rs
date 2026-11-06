@@ -103,7 +103,7 @@ impl Pr {
     }
 }
 
-/// A subtask owned by a task: a sibling worktree the task spun off (via `/spawn`). Declared in the
+/// A subtask owned by a task: a sibling worktree the task spun off (via `hwt subtask`). Declared in the
 /// owning task's `subtasks.json`. `task` is the only required field; the rest is display metadata.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct SubtaskRef {
@@ -113,7 +113,7 @@ pub struct SubtaskRef {
     #[serde(default)]
     pub topic: Option<String>,
     /// Project, if recorded. A subtask always shares its parent's project, so this is
-    /// optional and defaults to the owner's — `/spawn` writes it to keep the entry
+    /// optional and defaults to the owner's — `hwt subtask` writes it to keep the entry
     /// self-describing.
     #[serde(default)]
     pub project: Option<String>,
@@ -126,6 +126,10 @@ pub struct SubtaskRef {
     /// `YYYY-MM-DD` the subtask was created, if present.
     #[serde(default)]
     pub created: Option<String>,
+    /// Whether the subtask is worked now, as a tab of the owner's session; `false` when it is
+    /// postponed, and for every entry written before tabs existed.
+    #[serde(default)]
+    pub tab: bool,
 }
 
 impl SubtaskRef {
@@ -348,7 +352,7 @@ pub struct Task {
     pub repos: Vec<Repo>,
     /// Pull requests declared in the task's `prs.json` (live status loaded async).
     pub prs: Vec<Pr>,
-    /// Subtasks this task owns, declared in its `subtasks.json` (sibling worktrees spun off via `/spawn`).
+    /// Subtasks this task owns, declared in its `subtasks.json` (sibling worktrees spun off via `hwt subtask`).
     pub subtasks: Vec<SubtaskRef>,
     /// Research aspects recorded under the task's `aspects/` notes dir, by name, closed ones
     /// included.

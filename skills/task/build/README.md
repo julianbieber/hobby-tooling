@@ -72,11 +72,14 @@ session can read them.
 session, judged by the six Task shaping rules in `~/.claude-hobby/CLAUDE.md`.
 This pipeline is one branch: everything it does lands as one change.
 
-The gate refuses on a branch that already has commits or a dirty tree. That
-refusal is what lets a subtask's PR target the default branch — `/subtask` cuts
-from this branch, so at assessment time the two are the same thing and each
-subtask is genuinely independent. Later, subtasks would inherit unmerged work.
-Depth is bounded at one by `is_subtask` in the seeded state file rather than by
+A subtask is cut from the default branch, so its PR holds only its own work.
+Work this branch already holds reaches a subtask by `hwt subtask --take`: whole
+commits are cherry-picked onto it and this branch is rebased onto the
+subtask's, so the commits appear in exactly one PR and drop out of this
+branch once it merges. A split therefore works on a branch that has commits;
+uncommitted work has to be committed first, which the gate asks for rather
+than does. Each subtask is worked now, as a tab of this session, or
+postponed on its own card. Depth is bounded at one by `is_subtask` in the seeded state file rather than by
 asking the model to remember.
 
 Most tasks are one task, and the phase is expected to say so in a line.
