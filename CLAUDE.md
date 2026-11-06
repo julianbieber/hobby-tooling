@@ -32,7 +32,7 @@ dotfiles/
   nushell/{hwt.nu, hcdev.nu}          # symlinked into ~/.config/nushell/
   zellij/{config.kdl, layouts/hobby-dev.kdl}   # symlinked into ~/.config/zellij/
   claude-md/                          # symlinked into ~/.claude-hobby/ and ~/fun_worktrees/
-bin/{chobby, hauto, hresearch, hx-claude, zj-notes}   # symlinked into ~/.local/bin/
+bin/{chobby, hauto, haspect, hresearch, hx-claude, zj-notes}   # symlinked into ~/.local/bin/
 hooks/<name>/hook.sh                  # symlinked into ~/.claude-hobby/hooks/
 skills/<name>/{skill.md, README.md}   # symlinked into ~/.claude-hobby/commands/
 settings/hobby.settings.json          # symlinked to ~/.claude-hobby/settings.json
@@ -511,6 +511,52 @@ hand-typed `hcdev auto` keeps the play gate and the running application.
 `hcoord` is its own workspace rather than a member of `tools/hdash`'s, and `hdash`
 reads the one field it needs from `tasks.json` with `serde_json::Value` rather than
 depending on the crate.
+
+## A research aspect is a part of a task, worked in a tab
+
+A task that needs a lot of research used to do it inline, filling its own
+session with sources, spikes and dead ends, or split it off as a subtask —
+which is a deliverable with its own card and session, the wrong shape for a
+question whose answer is a file. A **research aspect** is the third option:
+`/aspect <question>` in the task's session creates
+`notes/<p>/<t>/<task>/aspects/<name>/` (`aspect.json`, a self-contained
+`brief.md`), a worktree on branch `<task>@<name>` cut from the task's branch,
+and a tab in the task's zellij session whose Claude (`haspect` →
+`/task:aspect`) writes `findings.md` and stops. hdash lists it on the task's
+card with its state, `open` → `active` → `reported` → `closed`.
+
+**An aspect is not a task**: no `task.json`, so `scan_tasks` and `known-tasks`
+never enumerate it and it has no card. Slices of implementation stay subtasks
+— the decision in `business-context.md` `## decisions` is that a subtask is
+the shape for work that may be postponed, and opening one as a tab is a later
+step of this design.
+
+**Its worktree lives under `~/fun_aspects`, not beside the task.** About a
+dozen consumers read the third component under `~/fun_worktrees` as the task —
+`hcdev-task-parts`, `all-tasks` (orphans, `hwt sync`), hdash's `task_of` and
+orphan scan, `hauto`, `track-pr`, `zj-notes` — so a sibling `<task>@<name>`
+dir would have been an orphan, a sync target, and a phantom notes dir on the
+first PR. Under a separate root each of them says "not a task" unchanged, and
+aspect awareness is added only where it is wanted: `hresearch` resolves an
+aspect worktree to the aspect's notes dir. `@` is in the branch name only;
+`<task>/<name>` cannot coexist with a branch `<task>`.
+
+**A tab, not a session.** `hcdev tab <name>` opens the aspect with
+`zellij --session <task's> action new-tab`, or switches to it; with the
+session down it starts it from a layout rendered with both tabs.
+`hcdev-dev-panes` spells the two panes for the rendered layouts, which
+duplicates `hobby-dev.kdl` until `hcdev wt` renders its layout too.
+
+`/aspect` refuses under `auto: true`: an unattended run is one session watched
+through one `build-task.json`, and a tab it cannot see would hold a gate
+nobody answers.
+
+Not yet done, and planned (`plan-2026-11-06-task-aspects.md` in the task
+notes): a per-tab idle/busy badge — every tab shares the task's zellij session
+name, so the session-state attribution credits an aspect's Claude to the task
+— and ctrl-g per tab, since the conversation dump is keyed on the session name
+too; `hwt rm`/`done`/`restore` cascading to aspect worktrees; and subtasks
+opened as tabs.
 
 ## Opening a session from a dashboard: two things that kill the terminal
 

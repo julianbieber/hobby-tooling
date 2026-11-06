@@ -50,6 +50,12 @@ const HCDEV_SCRIPT: &str =
 const RESTORE_SCRIPT: &str = "hwt restore $env.HDASH_TASK --no-cd | ignore; \
      hcdev wt $env.HDASH_TASK --project $env.HDASH_PROJECT --topic $env.HDASH_TOPIC";
 
+const TAB_SCRIPT: &str = "hcdev tab $env.HDASH_ASPECT --task $env.HDASH_TASK \
+     --project $env.HDASH_PROJECT --topic $env.HDASH_TOPIC";
+
+const TAB_ATTACH_SCRIPT: &str = "hcdev tab $env.HDASH_ASPECT --task $env.HDASH_TASK \
+     --project $env.HDASH_PROJECT --topic $env.HDASH_TOPIC --attach";
+
 const COORDINATOR_SCRIPT: &str = "hcdev coordinator $env.HDASH_TASK --project $env.HDASH_PROJECT";
 
 fn hold_on_error(cmd: &str) -> String {
@@ -59,6 +65,10 @@ fn hold_on_error(cmd: &str) -> String {
 }
 
 fn launch_nu(dir: &str, title: &str, cmd: &str, spec: &LaunchSpec) {
+    launch_nu_with(dir, title, cmd, &spec.env());
+}
+
+fn launch_nu_with(dir: &str, title: &str, cmd: &str, envs: &[(&str, &str)]) {
     spawn_detached_with(
         &[
             "-f",
@@ -73,7 +83,7 @@ fn launch_nu(dir: &str, title: &str, cmd: &str, spec: &LaunchSpec) {
             "-c",
             &hold_on_error(cmd),
         ],
-        &spec.env(),
+        envs,
     );
 }
 
@@ -111,6 +121,27 @@ pub fn launch_coordinator(spec: &LaunchSpec) {
         &spec.session_title(),
         COORDINATOR_SCRIPT,
         spec,
+    );
+}
+
+/// Open research aspect `aspect` of the task as a tab in the task's running session, with no
+/// terminal of its own; the session's window, if any, is the caller's to focus.
+pub fn open_aspect_tab(spec: &LaunchSpec, aspect: &str) {
+    let mut envs = spec.env().to_vec();
+    envs.push(("HDASH_ASPECT", aspect));
+    spawn_detached_with(&["-f", "nu", "--login", "-c", TAB_SCRIPT], &envs);
+}
+
+/// Open research aspect `aspect` of the task as a tab and attach to the task's session in a new
+/// terminal, starting the session first when it does not run.
+pub fn launch_aspect(dir: &Path, spec: &LaunchSpec, aspect: &str) {
+    let mut envs = spec.env().to_vec();
+    envs.push(("HDASH_ASPECT", aspect));
+    launch_nu_with(
+        &dir.to_string_lossy(),
+        &spec.session_title(),
+        TAB_ATTACH_SCRIPT,
+        &envs,
     );
 }
 
@@ -153,7 +184,13 @@ mod tests {
             topic: "perf".into(),
             task: "it's-'; rm -rf ~".into(),
         };
-        for script in [HCDEV_SCRIPT, RESTORE_SCRIPT, COORDINATOR_SCRIPT] {
+        for script in [
+            HCDEV_SCRIPT,
+            RESTORE_SCRIPT,
+            COORDINATOR_SCRIPT,
+            TAB_SCRIPT,
+            TAB_ATTACH_SCRIPT,
+        ] {
             assert!(!script.contains('\''), "no literal in {script}");
             assert!(script.contains("$env.HDASH_TASK"));
         }

@@ -44,6 +44,11 @@ pub fn fingerprint(worktrees: &Path, notes: &Path) -> Fingerprint {
             for file in NOTES_FILES {
                 record(&mut fp, &dir.join(file));
             }
+            let aspects = dir.join("aspects");
+            record(&mut fp, &aspects);
+            for aspect in visible_dirs(&aspects) {
+                record(&mut fp, &aspect.join("aspect.json"));
+            }
         }
     }
     Fingerprint(fp)
@@ -190,7 +195,8 @@ mod tests {
     use super::*;
 
     // Pins what the fingerprint watches: task dirs three levels down and the notes files a card
-    // reads, but not a worktree's contents or the notes repo's .git.
+    // reads, including each aspect's aspect.json, but not a worktree's contents or the notes
+    // repo's .git.
     #[test]
     fn fingerprint_sees_task_dirs_and_notes_files_but_not_repo_contents() {
         let root = std::env::temp_dir().join(format!("hdash_fp_{}", std::process::id()));
@@ -211,6 +217,24 @@ mod tests {
         std::thread::sleep(Duration::from_millis(20));
         std::fs::write(notes.join("p/topic/task/build-task.json"), "{}").unwrap();
         assert_ne!(fp, fingerprint(&wt, &notes), "a phase write is seen");
+
+        let fp = fingerprint(&wt, &notes);
+        std::thread::sleep(Duration::from_millis(20));
+        std::fs::create_dir_all(notes.join("p/topic/task/aspects/spike")).unwrap();
+        std::fs::write(notes.join("p/topic/task/aspects/spike/aspect.json"), "{}").unwrap();
+        let with_aspect = fingerprint(&wt, &notes);
+        assert_ne!(fp, with_aspect, "a new aspect is seen");
+        std::thread::sleep(Duration::from_millis(20));
+        std::fs::write(
+            notes.join("p/topic/task/aspects/spike/aspect.json"),
+            r#"{"state":"reported"}"#,
+        )
+        .unwrap();
+        assert_ne!(
+            with_aspect,
+            fingerprint(&wt, &notes),
+            "an aspect state write is seen"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }

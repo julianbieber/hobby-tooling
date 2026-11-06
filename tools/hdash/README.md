@@ -23,7 +23,7 @@ re-runs itself in a fullscreen Alacritty window titled and classed `hdash`. Warn
 
 ### Mouse and keys
 
-Every button and chip works by click, as do the project rows, the PR and subtask lines and a
+Every button and chip works by click, as do the project rows, the PR, subtask and aspect lines and a
 card's body, which selects the card. The wheel scrolls the sidebar or the list under the
 pointer; the control under the pointer is drawn reversed.
 
@@ -31,7 +31,7 @@ pointer; the control under the pointer is drawn reversed.
 | --- | --- |
 | `q` / `Ctrl-C` | quit (`Ctrl-C` also while typing in the filter field) |
 | `↑` `ü` / `↓` `ä` | select the previous / next card; `PgUp` / `PgDn` by a screen |
-| `←` `ö` / `→` `#` | move along the selected card's buttons, then its todo toggle, PR toggle, PR lines and subtasks |
+| `←` `ö` / `→` `#` | move along the selected card's buttons, then its todo toggle, PR toggle, PR lines, subtasks and aspects |
 | `Enter` / `Space` | press the focused control (a newly selected card starts on its primary button) |
 | `/` | focus the project filter field |
 
@@ -131,8 +131,15 @@ card line: **`▸ Todo (3/7)`** with the active step beside it, and **`waiting: 
 amber while a gate holds. Clicking the toggle (or focusing it and pressing `Enter`) expands
 the whole list — `✓` done, `▶` active, `○` pending, `✗` dropped. `/task:build` and
 `/task:auto` write both fields; a dropped item counts as done. It is the hobby half of the
-work `wt-overview`'s flow line: no aspects, because a second PR here is a subtask, which the
-card already lists.
+work `wt-overview`'s flow line, without work's flow aspects: a second PR here is a subtask,
+which the card already lists.
+
+A task with research aspects lists them under **`Aspects (n)`**, one line each:
+`⌕ <name> · <state> · <question>`, green once the state is `reported`. The state comes from
+`notes/…/<task>/aspects/<name>/aspect.json`. Clicking a line opens that aspect as a tab in
+the task's session (`hcdev tab`): with the session's window on screen the tab is opened
+without a terminal and the window focused; otherwise a terminal starts or attaches the
+session with the tab.
 
 ## Session state
 
@@ -185,8 +192,8 @@ Every read runs in the background, on a small job pool (git, `gh`, pull) or its 
 | model | — | the notes and worktree trees | rescan when their fingerprint moves (every 2 s) |
 
 The fingerprint is the mtimes of the project, topic and task dirs of both trees and of each
-notes task's `task.json`, `prs.json`, `subtasks.json`, `build-task.json`, `issue.md` and
-`tasks.json`. A rescan is merged in: git status carries over by repo path and PR state by URL,
+notes task's `task.json`, `prs.json`, `subtasks.json`, `build-task.json`, `issue.md`,
+`tasks.json`, its `aspects/` dir and each aspect's `aspect.json`. A rescan is merged in: git status carries over by repo path and PR state by URL,
 so a background update never resets a card to loading, and nothing is redrawn when nothing
 changed. **Refresh** un-hides the cards and rescans in the background, keeping the cards
 until it lands.

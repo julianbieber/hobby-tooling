@@ -11,7 +11,7 @@ use ratatui::layout::Rect;
 use super::*;
 use crate::app::Action;
 use crate::model::project::Project;
-use crate::model::task::{GitInfo, Pr, PrStatus, Repo, SubtaskRef, Todo, TodoStatus};
+use crate::model::task::{AspectRef, GitInfo, Pr, PrStatus, Repo, SubtaskRef, Todo, TodoStatus};
 use crate::session::Session;
 use crate::testkit::{find, row, screen};
 use crate::widgets::{ACCENT, SIDEBAR_COLS};
@@ -40,6 +40,7 @@ pub(crate) fn task(name: &str) -> Task {
         has_branch: true,
         prs: Vec::new(),
         subtasks: Vec::new(),
+        aspects: Vec::new(),
         last_active: None,
         coordinator: None,
         phase: None,
@@ -280,4 +281,30 @@ fn the_primary_button_follows_the_stage() {
     let buf = frame(&mut view);
     let open = find(&buf, "[Open coordinator]", Some("list"), 0);
     assert_eq!(click(&mut view, open), Some(Action::Coordinator(coord)));
+}
+
+// Pins that a task's research aspects are listed on its card with their state, and that clicking
+// one asks for that aspect's tab rather than the task's session.
+#[test]
+fn aspect_lines_show_state_and_open_their_tab() {
+    let mut a = task("task-a");
+    a.aspects = vec![AspectRef {
+        name: "wgpu-limits".into(),
+        state: "reported".into(),
+        goal: Some("which limits apply".into()),
+    }];
+    let mut view = view(vec![a.clone()]);
+
+    let buf = frame(&mut view);
+    assert!(screen(&buf).contains("Aspects (1)"), "{}", screen(&buf));
+    let line = find(
+        &buf,
+        "⌕ wgpu-limits · reported · which limits apply",
+        None,
+        0,
+    );
+    assert_eq!(
+        click(&mut view, line),
+        Some(Action::Aspect(a, "wgpu-limits".into()))
+    );
 }

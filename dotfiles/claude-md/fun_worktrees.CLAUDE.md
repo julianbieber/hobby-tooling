@@ -33,6 +33,7 @@ task, and the main checkout it derives from is `~/fun_repos/<project>`.
 | PRs opened | same dir, `prs.json` (written by the track-pr hook) |
 | HMML specs | same dir, `<unit>.hmml` |
 | Business context | same dir, `business-context.md` (my own words, recorded verbatim) |
+| Research aspects | same dir, `aspects/<name>/` (`aspect.json`, `brief.md`, `findings.md`); worktree `~/fun_aspects/<project>/<topic>/<task>/<name>` |
 
 Derive topic and task from the path: they are the **second and third** components
 under `~/fun_worktrees`, with the project first.
@@ -62,6 +63,9 @@ hcdev coordinator <blurb>                from ~/fun_repos/<project>: task list +
 hcdev close <task> [-p] [-t]             kill its session, stop its processes, close its window
 hcdev claude-pane <task> [-p] [-t]       resolve the Claude pane id of a running auto session
 hcdev notes                              cd to this task's notes dir
+hwt aspect new <name> [-g <question>]    research aspect of this task: worktree + notes
+hwt aspect list | close <name>           a task's aspects / remove one's worktree, keep notes
+hcdev tab <name>                         open or focus an aspect as a tab in the task's session
 ```
 
 A task under the topic `coordinator` is a **coordinator**: notes, `task.json`

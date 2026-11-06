@@ -151,8 +151,9 @@ bootstrap-config: _root-notice
     @ln -sf "{{REPO_ROOT}}/dotfiles/claude-md/hobby.CLAUDE.md" "{{CONFIG_DIR}}/CLAUDE.md"
     @echo "  config dir ready: {{CONFIG_DIR}}"
 
-# The `chobby` wrapper — bare claude on the hobby account — and `hauto`, the
-# stage driver the hobby-auto layout runs in its Claude pane
+# The `chobby` wrapper — bare claude on the hobby account — `hauto`, the stage
+# driver the hobby-auto layout runs in its Claude pane, and `haspect`, the same
+# for a research aspect's tab
 install-chobby: _root-notice
     #!/usr/bin/env bash
     set -euo pipefail
@@ -161,6 +162,8 @@ install-chobby: _root-notice
     echo "  linked chobby -> {{BIN_DIR}}/chobby"
     ln -sf "{{REPO_ROOT}}/bin/hauto" "{{BIN_DIR}}/hauto"
     echo "  linked hauto -> {{BIN_DIR}}/hauto"
+    ln -sf "{{REPO_ROOT}}/bin/haspect" "{{BIN_DIR}}/haspect"
+    echo "  linked haspect -> {{BIN_DIR}}/haspect"
     ln -sf "{{REPO_ROOT}}/bin/hresearch" "{{BIN_DIR}}/hresearch"
     echo "  linked hresearch -> {{BIN_DIR}}/hresearch"
     case ":$PATH:" in
@@ -422,7 +425,7 @@ uninstall:
     #!/usr/bin/env bash
     set -euo pipefail
     rm -f "{{NU_DIR}}/hwt.nu" "{{NU_DIR}}/hcdev.nu" "{{ZJ_LAYOUTS}}/hobby-dev.kdl" "{{ZJ_LAYOUTS}}/hobby-auto.kdl" "{{ZJ_LAYOUTS}}/notes-task.kdl"
-    rm -f "{{BIN_DIR}}/chobby" "{{BIN_DIR}}/hauto" "{{BIN_DIR}}/hx-claude" "{{BIN_DIR}}/zj-notes"
+    rm -f "{{BIN_DIR}}/chobby" "{{BIN_DIR}}/hauto" "{{BIN_DIR}}/haspect" "{{BIN_DIR}}/hx-claude" "{{BIN_DIR}}/zj-notes"
     rm -f "$HOME/fun_worktrees/CLAUDE.md"
     rm -f "{{CONFIG_DIR}}/settings.json" "{{CONFIG_DIR}}/CLAUDE.md"
     rm -f "{{CONFIG_DIR}}"/commands/*.md "{{CONFIG_DIR}}"/hooks/*.sh

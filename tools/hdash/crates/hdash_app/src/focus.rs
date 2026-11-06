@@ -242,6 +242,7 @@ mod tests {
             has_branch: true,
             prs: Vec::new(),
             subtasks: Vec::new(),
+            aspects: Vec::new(),
             last_active: None,
             coordinator: None,
             phase: None,

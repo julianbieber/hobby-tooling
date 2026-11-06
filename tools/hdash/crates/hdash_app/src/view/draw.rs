@@ -16,7 +16,9 @@ use crate::facets::{Chip, Facts, Group, candidates, count, facts, passes};
 use crate::focus::Presence;
 use crate::model::item::{Item, Stage, backlog_visible, rank_projects};
 use crate::model::project::Project;
-use crate::model::task::{Pr, PrStatus, Repo, SubtaskRef, Task, TaskId, TodoCount, TodoStatus};
+use crate::model::task::{
+    AspectRef, Pr, PrStatus, Repo, SubtaskRef, Task, TaskId, TodoCount, TodoStatus,
+};
 use crate::session::{Session, SessionState, now_secs};
 use crate::widgets::{
     self, ACCENT, AMBER, CLOSED, DIM, DONE, Lines, MERGED, SIDEBAR_COLS, badge, button, clean,
@@ -690,6 +692,20 @@ impl DashView {
                 lines.extend(flow(vec![subtask_line(&task.id, sub)], width, 2));
             }
         }
+
+        if !task.aspects.is_empty() {
+            lines.extend(flow(
+                vec![text(
+                    &format!("Aspects ({})", task.aspects.len()),
+                    Style::default().fg(DIM),
+                )],
+                width,
+                2,
+            ));
+            for aspect in &task.aspects {
+                lines.extend(flow(vec![aspect_line(&task.id, aspect)], width, 2));
+            }
+        }
         lines
     }
 
@@ -851,6 +867,23 @@ fn todo_marker(status: TodoStatus) -> (&'static str, Style) {
             "✗",
             Style::default().fg(DIM).add_modifier(Modifier::CROSSED_OUT),
         ),
+    }
+}
+
+fn aspect_line(owner: &TaskId, aspect: &AspectRef) -> Item_ {
+    let mut label = format!("⌕ {} · {}", aspect.name, aspect.state);
+    if let Some(goal) = &aspect.goal {
+        label.push_str(&format!(" · {goal}"));
+    }
+    let style = match aspect.state.as_str() {
+        "reported" => Style::default().bg(Color::Indexed(238)).fg(Color::Green),
+        "closed" => Style::default().fg(DIM),
+        _ => Style::default().bg(Color::Indexed(238)),
+    };
+    widgets::Item {
+        spans: vec![Span::styled(format!(" {} ", clean(&label)), style)],
+        control: Some(Control::Aspect(owner.clone(), aspect.name.clone())),
+        gap: 1,
     }
 }
 

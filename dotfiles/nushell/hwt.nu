@@ -27,7 +27,7 @@ const NOTES_BASE = $NOTES_REPO | path join "notes"
 # is clamped to what zellij's socket path allows, and the launcher strips the
 # zellij env vars and redirects the terminal's stdio — a second copy of either
 # rule would silently drift from what hcdev actually does.
-use hcdev.nu [hcdev-session-name hcdev-spawn-window]
+use hcdev.nu [hcdev-session-name hcdev-spawn-window hcdev-aspect-worktree hcdev-aspect-notes hcdev-aspect-of-path]
 
 # Main hwt command - shows help.
 # Named `main` rather than `hwt`: a nushell module cannot export a command with
@@ -60,6 +60,9 @@ export def main [] {
     print "  hwt refresh [-n]                               Fetch/pull default branch on all repos"
     print "  hwt claude <task>                              Start Claude (hobby account) in a worktree"
     print "  hwt sessions [-n]                              Open an hcdev session per open task"
+    print "  hwt aspect new <name> [-g <goal>] [--task <t>] Research aspect: worktree + notes, launches nothing"
+    print "  hwt aspect list [--task <t>]                   A task's research aspects"
+    print "  hwt aspect close <name> [--task <t>] [-f]      Remove an aspect's worktree, keep its notes"
     print ""
     print "Structure:"
     print $"  ($PROJECTS_BASE)/<project>                       Main repositories"
@@ -701,6 +704,174 @@ export def --env "hwt new" [
 
     if not $no_cd { cd $worktree_dir }
     $worktree_dir
+}
+
+def aspect-parent [task?: string, project?: string] {
+    if $task != null {
+        let found = (find-known-task $task $project)
+        if $found == null { error make { msg: $"Task '($task)' not found" } }
+        return $found
+    }
+    let of_aspect = (hcdev-aspect-of-path (pwd))
+    if $of_aspect != null {
+        return {
+            project: $of_aspect.project
+            topic: $of_aspect.topic
+            task: $of_aspect.task
+            path: ($WORKTREE_BASE | path join $of_aspect.project $of_aspect.topic $of_aspect.task)
+        }
+    }
+    let from_cwd = task-from-cwd
+    if $from_cwd == null {
+        error make { msg: $"No --task given and the current directory is not a task or aspect worktree" }
+    }
+    $from_cwd
+}
+
+def aspect-meta-path [parent: record, name: string] {
+    hcdev-aspect-notes $parent.project $parent.topic $parent.task $name | path join "aspect.json"
+}
+
+def aspect-completions [context?: string] {
+    let parent = (try { aspect-parent } catch { null })
+    if $parent == null { return [] }
+    let dir = ($NOTES_BASE | path join $parent.project $parent.topic $parent.task "aspects")
+    try { ls $dir | where type == dir | get name | path basename } catch { [] }
+}
+
+def aspect-base-ref [main_repo: path, branch: string] {
+    if (ref-exists $main_repo $"refs/heads/($branch)") { return $branch }
+    let remote = (remote-branch-ref $main_repo $branch)
+    if $remote != null { $remote } else { "HEAD" }
+}
+
+def remove-empty-dirs-up [dir: path, stop: path] {
+    mut d = ($dir | path expand)
+    let stop_at = ($stop | path expand)
+    while ($d != $stop_at) and ($d | str starts-with $"($stop_at)/") and ($d | path exists) and ((ls -a $d | length) == 0) {
+        rm $d
+        $d = ($d | path dirname)
+    }
+}
+
+# Create research aspect `name` of a task: a worktree on branch `<task>@<name>`
+# cut from the task's branch (its committed state), and a notes dir holding
+# `aspect.json` (kind research, state open) and a `brief.md` seeded from
+# `--goal` when none exists. The task is the current directory's — a task or
+# aspect worktree — unless `--task` names it. Idempotent: an existing aspect
+# keeps its notes, and a closed one is checked out again and set active. Opens
+# nothing; `hcdev tab <name>` does. Returns the worktree path. Errors on a name
+# that is not a lowercase slug, an unknown task, or a missing main checkout.
+export def "hwt aspect new" [
+    name: string                                 # Aspect name, a lowercase slug
+    --goal (-g): string                          # The question or goal, seeds brief.md
+    --task: string@task-completions              # Parent task (defaults to the current directory's)
+    --project (-p): string@project-completions   # Disambiguate the task across projects
+] {
+    if not ($name =~ '^[a-z0-9][a-z0-9_-]*$') {
+        error make { msg: $"Aspect name '($name)' must be a lowercase slug: a-z, 0-9, '-' and '_'" }
+    }
+    let parent = (aspect-parent $task $project)
+    let main_repo = ($PROJECTS_BASE | path join $parent.project)
+    if not ($main_repo | path exists) {
+        error make { msg: $"Main repo not found at ($main_repo)" }
+    }
+    let dir = (hcdev-aspect-worktree $parent.project $parent.topic $parent.task $name)
+    let branch = $"($parent.task)@($name)"
+    mkdir ($dir | path dirname)
+    create-worktree $main_repo $dir $branch (aspect-base-ref $main_repo $parent.task)
+
+    let notes = (hcdev-aspect-notes $parent.project $parent.topic $parent.task $name)
+    mkdir $notes
+    let meta_file = ($notes | path join "aspect.json")
+    let today = (date now | format date "%Y-%m-%d")
+    if ($meta_file | path exists) {
+        let meta = (open --raw $meta_file | from json)
+        if ($meta.state? == "closed") {
+            $meta | upsert state "active" | to json --indent 2 | save -f $meta_file
+            print $"Reopened aspect ($name)"
+        }
+    } else {
+        {
+            kind: "research"
+            state: "open"
+            goal: ($goal | default "")
+            branch: $branch
+            created: $today
+        } | to json --indent 2 | save -f $meta_file
+    }
+    let brief = ($notes | path join "brief.md")
+    if not ($brief | path exists) {
+        $"---
+title: \"($parent.task) — Aspect: ($name)\"
+created: ($today)
+tags:
+  - aspect
+  - research
+---
+
+## Question
+
+($goal | default '{to be written}')
+" | save -f $brief
+    }
+    print $"Aspect ($parent.task)/($name): ($dir)"
+    print $"  notes: ($notes)"
+    print $"  open:  hcdev tab ($name)"
+    $dir
+}
+
+# The research aspects of a task, as [{name, kind, state, goal, created,
+# present}] — `present` is whether its worktree is checked out. The task is the
+# current directory's unless `--task` names it. An unreadable `aspect.json`
+# lists with state `unreadable` rather than being skipped.
+export def "hwt aspect list" [
+    --task: string@task-completions              # Parent task (defaults to the current directory's)
+    --project (-p): string@project-completions   # Disambiguate the task across projects
+] {
+    let parent = (aspect-parent $task $project)
+    let dir = ($NOTES_BASE | path join $parent.project $parent.topic $parent.task "aspects")
+    if not ($dir | path exists) { return [] }
+    ls $dir | where type == dir | get name | path basename | sort | each {|name|
+        let meta = (try { open --raw (aspect-meta-path $parent $name) | from json } catch { {state: "unreadable"} })
+        {
+            name: $name
+            kind: ($meta.kind? | default "research")
+            state: ($meta.state? | default "open")
+            goal: ($meta.goal? | default "")
+            created: ($meta.created? | default "")
+            present: ((hcdev-aspect-worktree $parent.project $parent.topic $parent.task $name) | path exists)
+        }
+    }
+}
+
+# Close research aspect `name`: remove its worktree and set its state to
+# `closed`. The notes and the `<task>@<name>` branch are kept, so `hwt aspect
+# new <name>` brings it back. Refuses a dirty worktree unless `--force`, as
+# `git worktree remove` does. Errors when the task has no such aspect.
+export def "hwt aspect close" [
+    name: string@aspect-completions              # Aspect name
+    --task: string@task-completions              # Parent task (defaults to the current directory's)
+    --project (-p): string@project-completions   # Disambiguate the task across projects
+    --force (-f)                                 # Remove even if the worktree is dirty
+] {
+    let parent = (aspect-parent $task $project)
+    let meta_file = (aspect-meta-path $parent $name)
+    if not ($meta_file | path exists) {
+        error make { msg: $"Task ($parent.task) has no aspect '($name)'" }
+    }
+    let dir = (hcdev-aspect-worktree $parent.project $parent.topic $parent.task $name)
+    if ($dir | path exists) {
+        let main_repo = ($PROJECTS_BASE | path join $parent.project)
+        let args = if $force { ["worktree" "remove" "--force" $dir] } else { ["worktree" "remove" $dir] }
+        let r = (do -i { ^git -C $main_repo ...$args } | complete)
+        if $r.exit_code != 0 {
+            error make { msg: $"git ($args | str join ' ') failed: ($r.stderr | str trim)" }
+        }
+        remove-empty-dirs-up ($dir | path dirname) ($dir | path dirname | path dirname | path dirname | path dirname)
+    }
+    open --raw $meta_file | from json | upsert state "closed" | to json --indent 2 | save -f $meta_file
+    print $"Closed aspect ($parent.task)/($name); notes kept"
 }
 
 # Find notes task(s) that reference a given PR URL, by scanning prs.json.
