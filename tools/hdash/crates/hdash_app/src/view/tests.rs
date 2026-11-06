@@ -149,6 +149,7 @@ fn clicks_run_the_control_drawn_under_the_pointer() {
         blurb: None,
         goal: None,
         created: None,
+        tab: false,
     }];
     let mut b = task("task-b");
     b.present = false;
@@ -322,6 +323,43 @@ fn aspect_lines_show_state_and_open_their_tab() {
     );
     assert_eq!(
         click(&mut view, line),
-        Some(Action::Aspect(a, "wgpu-limits".into()))
+        Some(Action::Tab(a, "wgpu-limits".into()))
     );
+}
+
+// Pins that a subtask line says whether it is worked as a tab or postponed, carries the child's
+// session badge, and that clicking a tab subtask asks for its tab while a postponed one still
+// scopes the list to its project.
+#[test]
+fn subtask_lines_open_tabs_only_for_tab_subtasks() {
+    let sub = |name: &str, tab: bool| SubtaskRef {
+        task: name.into(),
+        topic: None,
+        project: None,
+        blurb: None,
+        goal: None,
+        created: None,
+        tab,
+    };
+    let mut a = task("task-a");
+    a.subtasks = vec![sub("now-child", true), sub("later-child", false)];
+    let mut view = view(vec![a.clone()]);
+    view.sessions.tasks.insert(
+        id("now-child"),
+        Session {
+            state: SessionState::Busy,
+            since: 0,
+        },
+    );
+
+    let buf = frame(&mut view);
+    let (_, now_y) = find(&buf, "now-child · tab", None, 0);
+    assert!(row(&buf, now_y).contains("busy "), "{}", row(&buf, now_y));
+    let later = find(&buf, "later-child · postponed", None, 0);
+    let now = find(&buf, "now-child · tab", None, 0);
+    assert_eq!(
+        click(&mut view, now),
+        Some(Action::Tab(a, "now-child".into()))
+    );
+    assert_eq!(click(&mut view, later), None);
 }

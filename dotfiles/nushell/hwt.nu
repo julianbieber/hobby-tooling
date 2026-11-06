@@ -60,6 +60,7 @@ export def main [] {
     print "  hwt refresh [-n]                               Fetch/pull default branch on all repos"
     print "  hwt claude <task>                              Start Claude (hobby account) in a worktree"
     print "  hwt sessions [-n]                              Open an hcdev session per open task"
+    print "  hwt subtask <name> [-g <goal>] [--take c…] [--tab]  Subtask of this task, off the default branch"
     print "  hwt aspect new <name> [-g <goal>] [--task <t>] Research aspect: worktree + notes, launches nothing"
     print "  hwt aspect list [--task <t>]                   A task's research aspects"
     print "  hwt aspect close <name> [--task <t>] [-f]      Remove an aspect's worktree, keep its notes"
@@ -752,6 +753,115 @@ def remove-empty-dirs-up [dir: path, stop: path] {
         rm $d
         $d = ($d | path dirname)
     }
+}
+
+def default-base-ref [repo: path] {
+    do -i { ^git -C $repo fetch -q origin } | complete | ignore
+    let remote = (["main" "master"] | where {|c| ref-exists $repo $"refs/remotes/origin/($c)" } | get -o 0)
+    if $remote != null { return $"origin/($remote)" }
+    let local = (["main" "master"] | where {|c| ref-exists $repo $"refs/heads/($c)" } | get -o 0)
+    if $local != null { return $local }
+    error make { msg: $"($repo) has neither main nor master" }
+}
+
+def git-ok [dir: path, args: list<string>] {
+    let r = (do -i { ^git -C $dir ...$args } | complete)
+    if $r.exit_code != 0 {
+        error make { msg: $"git ($args | str join ' ') in ($dir) failed: ([$r.stdout $r.stderr] | str join | str trim)" }
+    }
+    $r.stdout | str trim
+}
+
+def take-in-order [parent_dir: path, base: string, take: list<string>] {
+    let wanted = ($take | each {|c| git-ok $parent_dir ["rev-parse" "--verify" $"($c)^{commit}"] })
+    let own = (git-ok $parent_dir ["rev-list" "--reverse" $"($base)..HEAD"] | lines)
+    let foreign = ($wanted | where {|c| $c not-in $own })
+    if ($foreign | is-not-empty) {
+        error make { msg: $"Not commits of the task's own branch \(already on ($base), or elsewhere\): ($foreign | str join ', ')" }
+    }
+    $own | where {|c| $c in $wanted }
+}
+
+def record-subtask [parent: record, entry: record] {
+    let file = ($NOTES_BASE | path join $parent.project $parent.topic $parent.task "subtasks.json")
+    let existing = if ($file | path exists) {
+        let raw = (open --raw $file | str trim)
+        if ($raw | is-empty) { [] } else { $raw | from json }
+    } else { [] }
+    let others = ($existing | where {|e| $e.task != $entry.task })
+    let prior = ($existing | where {|e| $e.task == $entry.task } | get -o 0 | default {})
+    $others | append ($prior | merge $entry) | to json --indent 2 | save -f $file
+}
+
+# Create subtask `name` of a task: a task of its own (worktree, branch and
+# `task.json`, same project and topic) cut from the default branch, recorded in
+# the parent's `subtasks.json` with `tab` — true when it is worked now, as a tab
+# in the parent's session (`hcdev tab <name>`), false when it is postponed. The
+# parent is the current directory's task unless `--task` names it.
+#
+# `--take` moves whole commits of the parent's own branch into the subtask: they
+# are cherry-picked onto it in the parent's order, and the parent is then
+# rebased onto the subtask's branch, so its diff against the default branch
+# stops containing them and drops them for good once the subtask merges. This
+# rewrites the parent's branch; a pushed parent needs a force push. Refuses a
+# parent with uncommitted changes, and a commit that is not the parent's own. A
+# conflicting cherry-pick is aborted and leaves the subtask at its base; a
+# conflicting rebase is aborted and leaves the parent as it was. Launches
+# nothing. Returns the subtask's worktree path.
+export def "hwt subtask" [
+    name: string                                 # Subtask task name, a lowercase slug
+    --goal (-g): string                          # One-line goal, recorded in subtasks.json
+    --take: list<string> = []                    # Parent commits the subtask takes over
+    --tab                                        # Worked now, as a tab (default: postponed)
+    --task: string@task-completions              # Parent task (defaults to the current directory's)
+    --project (-p): string@project-completions   # Disambiguate the parent across projects
+] {
+    if not ($name =~ '^[a-z0-9][a-z0-9_-]*$') {
+        error make { msg: $"Subtask name '($name)' must be a lowercase slug: a-z, 0-9, '-' and '_'" }
+    }
+    let parent = (aspect-parent $task $project)
+    if $name == $parent.task {
+        error make { msg: "A subtask needs a name of its own" }
+    }
+    let main_repo = ($PROJECTS_BASE | path join $parent.project)
+    let base = (default-base-ref $main_repo)
+    let commits = if ($take | is-empty) { [] } else {
+        if not ($parent.path | path exists) {
+            error make { msg: $"--take needs the parent's worktree checked out: hwt restore ($parent.task)" }
+        }
+        if (git-ok $parent.path ["status" "--porcelain"] | is-not-empty) {
+            error make { msg: $"($parent.task) has uncommitted changes — commit or drop them before taking commits from it" }
+        }
+        take-in-order $parent.path $base $take
+    }
+
+    let dir = (hwt new $name --project $parent.project --topic $parent.topic --base $base --no-cd)
+    if ($commits | is-not-empty) {
+        let picked = (do -i { ^git -C $dir cherry-pick ...$commits } | complete)
+        if $picked.exit_code != 0 {
+            do -i { ^git -C $dir cherry-pick --abort } | complete | ignore
+            error make { msg: $"Cherry-picking into ($name) conflicted and was aborted; ($name) is at ($base). ($picked.stderr | str trim)" }
+        }
+        let rebased = (do -i { ^git -C $parent.path rebase $name } | complete)
+        if $rebased.exit_code != 0 {
+            do -i { ^git -C $parent.path rebase --abort } | complete | ignore
+            error make { msg: $"($name) holds the taken commits, but rebasing ($parent.task) onto it conflicted and was aborted — ($parent.task) is unchanged. ($rebased.stderr | str trim)" }
+        }
+        print $"Moved ($commits | length) commit\(s\) into ($name); ($parent.task) now builds on it"
+    }
+
+    record-subtask $parent {
+        project: $parent.project
+        topic: $parent.topic
+        task: $name
+        goal: ($goal | default "")
+        created: (date now | format date "%Y-%m-%d")
+        tab: $tab
+    }
+    let how = if $tab { $"open: hcdev tab ($name)" } else { $"postponed; later: hcdev tab ($name), or hcdev wt ($name)" }
+    print $"Subtask ($parent.task)/($name): ($dir)"
+    print $"  ($how)"
+    $dir
 }
 
 # Create research aspect `name` of a task: a worktree on branch `<task>@<name>`

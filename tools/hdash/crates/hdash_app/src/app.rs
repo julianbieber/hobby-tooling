@@ -25,8 +25,8 @@ use ratatui::style::{Color, Style};
 
 use crate::focus::{Launches, activate, find_window};
 use crate::model::launch::{
-    launch_aspect, launch_coordinator, launch_hcdev, launch_restore, launch_terminal,
-    open_aspect_tab, open_notes, open_url,
+    launch_coordinator, launch_hcdev, launch_restore, launch_tab, launch_terminal, open_notes,
+    open_tab, open_url,
 };
 use crate::model::task::Task;
 use crate::session::now_secs;
@@ -44,7 +44,7 @@ pub enum Action {
     Coordinator(Task),
     Terminal(Task),
     Notes(Task),
-    Aspect(Task, String),
+    Tab(Task, String),
 }
 
 /// Run the dashboard: in this terminal when there is one, else re-run in a fullscreen Alacritty.
@@ -284,12 +284,12 @@ impl App {
                 launch_terminal(&task.dir, &format!("term-{}", task.id.name));
             }
             Action::Notes(task) => open_notes(&task),
-            Action::Aspect(task, name) => match find_window(&task) {
+            Action::Tab(task, name) => match find_window(&task) {
                 Some(wid) => {
-                    open_aspect_tab(&task_spec(&task), &name);
+                    open_tab(&task_spec(&task), &name);
                     activate(wid);
                 }
-                None => launch_aspect(&task.dir, &task_spec(&task), &name),
+                None => launch_tab(&task.dir, &task_spec(&task), &name),
             },
         }
     }

@@ -169,12 +169,12 @@ pub fn aspect_of(project_dir: &Path, root: &Path) -> Option<(TaskId, String)> {
 }
 
 /// Keep, per task, the newest record whose Claude process still runs (same pid and start time, so
-/// a reused pid does not count). A record whose project dir lies in a research aspect's worktree
-/// under `aspects` belongs to that aspect — every aspect tab shares its task's zellij session, so
-/// this is checked first. Otherwise it belongs to the task whose zellij session it ran in — which
-/// is how a coordinator's pane, whose directory is the main checkout, is found — and otherwise to
-/// the task whose worktree under `root` its project dir lies in. Every Claude process counts,
-/// whatever pane or stage started it.
+/// a reused pid does not count). A record belongs to what its project dir lies in: a research
+/// aspect's worktree under `aspects`, else a task's worktree under `root` — so a tab of a task's
+/// session that works an aspect or a subtask is credited to that, although every tab shares the
+/// task's zellij session name. Only a dir in neither, such as a coordinator's main checkout, is
+/// matched by the zellij session it ran in. Every Claude process counts, whatever pane or stage
+/// started it.
 pub fn attribute(
     records: impl IntoIterator<Item = (Record, u64)>,
     by_session: &HashMap<String, TaskId>,
@@ -190,13 +190,13 @@ pub fn attribute(
         let dir = Path::new(&record.project_dir);
         let Some(id) = aspect_of(dir, aspects)
             .map(|(id, name)| Owner::Aspect(id, name))
+            .or_else(|| task_of(dir, root).map(Owner::Task))
             .or_else(|| {
                 by_session
                     .get(&record.zellij_session)
                     .cloned()
                     .map(Owner::Task)
             })
-            .or_else(|| task_of(dir, root).map(Owner::Task))
         else {
             continue;
         };
@@ -481,7 +481,7 @@ mod tests {
     }
 
     // Pins that a coordinator's pane, whose directory is the main checkout, is found by its zellij
-    // session, and that the session name wins over the directory.
+    // session.
     #[test]
     fn attribute_finds_coordinators_by_session_name() {
         let coordinator = id("p", "coordinator", "list");
@@ -603,6 +603,29 @@ mod tests {
             sessions.aspect(&id("p", "t", "a"), "x").map(|s| s.state),
             Some(SessionState::Idle)
         );
+    }
+
+    // Pins that a subtask worked as a tab of its parent's session, sharing the parent's session
+    // name, is credited to the subtask by its worktree.
+    #[test]
+    fn attribute_credits_a_subtask_tab_to_the_subtask() {
+        let parent = id("p", "t", "a");
+        let by_session = HashMap::from([("hcdev-p-t-a".to_owned(), parent.clone())]);
+        let out = attribute(
+            [
+                (rec("/w/p/t/a", "hcdev-p-t-a", SessionState::Busy, 1), 10),
+                (
+                    rec("/w/p/t/child", "hcdev-p-t-a", SessionState::Idle, 2),
+                    10,
+                ),
+            ],
+            &by_session,
+            Path::new("/w"),
+            Path::new("/asp"),
+            alive,
+        );
+        assert_eq!(out[&Owner::Task(parent)].record.pid, 1);
+        assert_eq!(out[&Owner::Task(id("p", "t", "child"))].record.pid, 2);
     }
 
     // Pins the stuck-busy correction: busy for a whole window with almost no CPU reads idle,

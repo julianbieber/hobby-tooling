@@ -9,7 +9,7 @@
 #   hcdev here                    - session in the current directory
 #   hcdev auto <task>             - session whose Claude pane starts /task:auto
 #   hcdev coordinator <blurb>     - coordinator session: task list + Claude, from a main checkout
-#   hcdev tab <aspect>            - open or focus a research aspect's tab in its task's session
+#   hcdev tab <name>              - open or focus an aspect's or subtask's tab in its task's session
 #   hcdev notes                   - cd to this task's notes
 #   hcdev code                    - cd to this task's worktree
 #   hcdev list / attach           - manage running sessions
@@ -178,8 +178,39 @@ def hcdev-aspect-completions [context?: string] {
         if $of_aspect != null { $of_aspect } else { hcdev-task-context }
     } catch { null })
     if $ctx == null { return [] }
-    let dir = ($NOTES_BASE | path join $ctx.project $ctx.topic $ctx.task "aspects")
-    try { ls $dir | where type == dir | get name | path basename } catch { [] }
+    let notes = ($NOTES_BASE | path join $ctx.project $ctx.topic $ctx.task)
+    let aspects = (try { ls ($notes | path join "aspects") | where type == dir | get name | path basename } catch { [] })
+    let subtasks = (try { open --raw ($notes | path join "subtasks.json") | from json | get task } catch { [] })
+    $aspects | append $subtasks
+}
+
+def hcdev-subtasks-file [parent: record] {
+    $NOTES_BASE | path join $parent.project $parent.topic $parent.task "subtasks.json"
+}
+
+def hcdev-tab-target [parent: record, name: string] {
+    let aspect_dir = (hcdev-aspect-worktree $parent.project $parent.topic $parent.task $name)
+    if ($aspect_dir | path exists) {
+        return { dir: $aspect_dir, claude: "haspect", subtask: false }
+    }
+    let file = (hcdev-subtasks-file $parent)
+    let entry = (try { open --raw $file | from json | where task == $name | get -o 0 } catch { null })
+    if $entry == null {
+        error make { msg: $"($parent.task) has no aspect worktree and no subtask named '($name)' — 'hwt aspect new ($name)' or 'hwt subtask ($name)' makes one" }
+    }
+    let topic = ($entry.topic? | default $parent.topic)
+    let dir = ($WORKTREE_BASE | path join ($entry.project? | default $parent.project) $topic $name)
+    if not ($dir | path exists) {
+        error make { msg: $"Subtask '($name)' is not checked out at ($dir) — run 'hwt restore ($name)'" }
+    }
+    { dir: $dir, claude: "chobby", subtask: true }
+}
+
+def hcdev-mark-tab [parent: record, name: string] {
+    let file = (hcdev-subtasks-file $parent)
+    open --raw $file | from json
+    | each {|e| if $e.task == $name { $e | upsert tab true } else { $e } }
+    | to json --indent 2 | save -f $file
 }
 
 def hcdev-dev-panes [claude_cmd: string] {
@@ -192,33 +223,33 @@ def hcdev-dev-panes [claude_cmd: string] {
     }"
 }
 
-def hcdev-aspect-tab-layout [] {
+def hcdev-tab-layout [claude: string] {
     $"layout {
-    (hcdev-dev-panes 'haspect')
+    (hcdev-dev-panes $claude)
 }
 "
 }
 
-def hcdev-task-with-aspect-layout [task: string, name: string, dir: string] {
+def hcdev-task-with-tab-layout [task: string, name: string, dir: string, claude: string] {
     $"layout {
     tab name=($task | to json) {
         (hcdev-dev-panes 'chobby')
     }
     tab name=($name | to json) cwd=($dir | to json) focus=true {
-        (hcdev-dev-panes 'haspect')
+        (hcdev-dev-panes $claude)
     }
 }
 "
 }
 
-def hcdev-open-tab [session: string, name: string, dir: string] {
+def hcdev-open-tab [session: string, name: string, dir: string, claude: string] {
     let names = (^zellij --session $session action query-tab-names | lines)
     if $name in $names {
         ^zellij --session $session action go-to-tab-name $name | ignore
         return
     }
-    let layout_file = (hcdev-runtime-dir | path join "hobby-aspect-tab.kdl")
-    hcdev-aspect-tab-layout | save -f $layout_file
+    let layout_file = (hcdev-runtime-dir | path join $"hobby-tab-($claude).kdl")
+    hcdev-tab-layout $claude | save -f $layout_file
     ^zellij --session $session action new-tab --layout $layout_file --name $name --cwd $dir | ignore
 }
 
@@ -563,7 +594,7 @@ export def main [] {
     print "  hcdev dir <path>                 Start session in a given directory"
     print "  hcdev auto <task> [-p] [-t] [-w] Session whose Claude pane starts /task:auto (-w: new window)"
     print "  hcdev coordinator <blurb> [-p]   Coordinator session (task list + Claude) from a main checkout"
-    print "  hcdev tab <aspect> [--task] [-a] Open or focus a research aspect's tab in its task's session"
+    print "  hcdev tab <name> [--task] [-a]   Open or focus an aspect's or subtask's tab in its task's session"
     print "  hcdev notes                      cd to this task's notes directory"
     print "  hcdev code                       cd to this task's worktree"
     print "  hcdev list                       List running hobby sessions"
@@ -723,35 +754,37 @@ export def --env "hcdev coordinator" [
     hcdev-launch $main_repo $session $layout_file
 }
 
-# Open research aspect `name` as a tab in its task's session, or switch to that
-# tab when it is already open. The task is the one the current directory lies in
-# (its worktree, or any of its aspect worktrees) unless `--task` names it. When
-# the task's session is not running it is started, in the foreground, with the
-# aspect's tab focused. With `--attach`, a running session is also attached when
-# the caller is not already inside it. Errors when the task is unknown, not
-# checked out, or has no worktree for that aspect (`hwt aspect new` makes one).
+# Open `name` — a research aspect or a subtask of the task — as a tab in the
+# task's session, or switch to that tab when it is already open. An aspect's tab
+# runs `haspect`; a subtask's runs `chobby` in the subtask's own worktree, and
+# opening it records the subtask as worked now (`tab: true` in the task's
+# `subtasks.json`). The task is the one the current directory lies in (its
+# worktree, or any of its aspect worktrees) unless `--task` names it. When the
+# task's session is not running it is started, in the foreground, with the new
+# tab focused. With `--attach`, a running session is also attached when the
+# caller is not already inside it. Errors when the task is unknown or not
+# checked out, when `name` is neither an aspect with a worktree nor a recorded
+# subtask, or when that subtask is not checked out.
 export def --env "hcdev tab" [
-    name: string@hcdev-aspect-completions             # Aspect name
+    name: string@hcdev-aspect-completions             # Aspect or subtask name
     --task: string@hcdev-task-completions             # Parent task (defaults to the current directory's)
     --project (-p): string@hcdev-project-completions  # Disambiguate the task across projects
     --topic (-t): string@hcdev-topic-completions      # Disambiguate the task across topics
     --attach (-a)                                     # Attach to the running session after opening the tab
 ] {
     let parent = (hcdev-aspect-parent $task $project $topic)
-    let dir = (hcdev-aspect-worktree $parent.project $parent.topic $parent.task $name)
-    if not ($dir | path exists) {
-        error make { msg: $"Aspect '($name)' of ($parent.task) has no worktree at ($dir) — create it with 'hwt aspect new ($name)'" }
-    }
+    let target = (hcdev-tab-target $parent $name)
+    if $target.subtask { hcdev-mark-tab $parent $name }
     let session = (hcdev-session-name $parent.project $parent.topic $parent.task)
     if (hcdev-session-live $session) {
-        hcdev-open-tab $session $name $dir
+        hcdev-open-tab $session $name $target.dir $target.claude
         if $attach and ($env.ZELLIJ_SESSION_NAME? != $session) {
             hcdev-launch $parent.path $session
         }
         return
     }
     let layout_file = (hcdev-runtime-dir | path join $"hobby-tabs-($session).kdl")
-    hcdev-task-with-aspect-layout $parent.task $name $dir | save -f $layout_file
+    hcdev-task-with-tab-layout $parent.task $name $target.dir $target.claude | save -f $layout_file
     hcdev-launch $parent.path $session $layout_file
 }
 

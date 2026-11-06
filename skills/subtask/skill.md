@@ -1,103 +1,102 @@
 ---
-description: Split current work into a subtask with an optional issue in its notes
-allowed-tools: Skill, Bash(git branch:*), Bash(git status:*), Bash(git rev-parse:*), Bash(ls:*), Bash(pwd:*), Bash(mkdir:*), Bash(nu -c:*), Read, Write, Edit
+description: Split part of the current task into a subtask — a task of its own off the default branch, optionally taking whole commits from this branch — worked now as a tab of this session or postponed, with a seeded brief and an optional issue
+allowed-tools: Skill, AskUserQuestion, Bash(git branch:*), Bash(git status:*), Bash(git log:*), Bash(git rev-parse:*), Bash(ls:*), Bash(pwd:*), Bash(date:*), Bash(mkdir:*), Bash(nu -c:*), Read, Write, Edit
 ---
 
-Split part of the current task into a separate subtask with its own worktree,
-notes, and optionally an `issue.md`.
+Split part of the current task into a **subtask**: a task of its own — worktree,
+branch, `task.json`, its own PR — recorded in this task's `subtasks.json` and
+shown on its hdash card. A subtask is either **worked now**, as a tab of this
+task's zellij session, or **postponed**, waiting on its own card until someone
+opens it.
 
-**Arguments:** $ARGUMENTS — a short description of what to split out (e.g.,
-"extract the spatial hash into its own module")
+A question whose answer is a file, not a merge, is a research aspect
+(`/aspect`), not this.
+
+**Arguments:** `$ARGUMENTS` — what to split out (e.g. "extract the spatial hash
+into its own module").
 
 ## Instructions
 
-1. **Extract the parent task context** from the current worktree path:
+1. **Resolve the parent** from `pwd`: `~/fun_worktrees/PROJECT/TOPIC/TASK`, the
+   task directory is the worktree. Anywhere else, stop with "/subtask must run
+   inside a task worktree". The subtask shares the parent's project and topic.
 
-   - Run `pwd`. The layout is `~/fun_worktrees/PROJECT/TOPIC/TASK`.
-   - **First** component is the project, **second** is the topic, **third** is the
-     parent task. There is no repo level — the task directory is the worktree.
-   - Example: `~/fun_worktrees/bevy_survivor/features/enemy-waves`
-     - project `bevy_survivor`, topic `features`, parent task `enemy-waves`
-   - The subtask stays in the same project and topic as its parent.
-   - If not in a worktree, ask the user for the project, topic, and parent task.
+2. **What to split.** `$ARGUMENTS`, or — when empty — ask. Do not invent it.
 
-2. **Determine subtask details** from `$ARGUMENTS`:
-
-   - If no arguments were given, ask what should be split out.
-   - The description becomes the subtask summary.
-
-3. **Ask the user** two questions:
-
-   a. **Write an issue?** (yes/no) — should the subtask get an `issue.md` of its
-   own, linked to the parent?
-   b. **Subtask ID** — a short plain slug (e.g. `spatial_hash`), or suggest one
-   derived from the description. It must not already exist under
-   `notes/{project}/`.
-
-4. **Create the worktree:**
+3. **Which commits it takes.** List this branch's own commits:
 
    ```bash
-   nu -c "use ~/.config/nushell/hwt.nu *; hwt new {subtask_id} -p {project} -t {topic} --no-cd"
+   git log --oneline "$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null || echo origin/main)..HEAD"
    ```
 
-   Same project and topic as the parent. `--no-cd` because this runs from bash.
+   If any of them belong to the split-out work, propose them by hash and
+   subject. Only **whole commits** move: a commit mixing both halves stays
+   here, and you say so. If the tree is dirty and the dirty work belongs to
+   the subtask, say that it must be committed first — the commit is mine to
+   make or approve, never made silently.
 
-5. **If writing an issue:** run `/issue-create` (Skill tool) as a **refresh** of
-   `{project}/{topic}/{subtask_id}`, passing the subtask description and the
-   parent task to name in its Context section. That skill writes `issue.md` and
-   runs the task-shaping check; this one does not write issues itself.
+4. **Ask me**, in one AskUserQuestion call:
 
-6. **Create the notes directory** at
-   `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{subtask_id}/`:
+   a. **Work it now or postpone it?** Now opens it as a tab of this session;
+      postponed leaves it on its card.
+   b. **Name** — a short plain slug, suggested from the description, not
+      already a task under `notes/PROJECT/`.
+   c. **Commits to take** — the ones from step 3, or none.
+   d. **Write an issue?** — an `issue.md` of its own.
 
-   - `mkdir -p` the directory
-   - Write `implementation.md`:
+5. **Create it:**
 
-     ```markdown
-     ---
-     title: "{subtask_id} — Implementation"
-     created: {YYYY-MM-DD}
-     tags:
-       - implementation
-       - subtask
-       - {project}
-     ---
+   ```bash
+   nu -c "use ~/.config/nushell/hwt.nu *; hwt subtask <name> --goal '<one line>' [--take [<hash> …]] [--tab]"
+   ```
 
-     ## Current State
-     **Status:** Not Started
-     **Parent:** {parent_task}
-     **Focus:** {subtask description}
-     **Blockers:** None
-     **Next:** Begin implementation
+   That cuts the worktree from the default branch, cherry-picks the taken
+   commits in this branch's order, rebases this branch onto the subtask's, and
+   records the entry in `subtasks.json`. On a conflict it aborts and says what
+   it left; report that and stop. A rebase of a branch that was already
+   pushed needs a force push later — say so when it happened.
 
-     ## Goal
+6. **Write the brief** —
+   `~/fun_repos/hobby-mimisbrunnr/notes/PROJECT/TOPIC/<name>/implementation.md`.
+   The subtask's session has no memory of this conversation, so make it
+   complete: goal, file paths, constraints, done-when, and which commits it
+   took.
 
-     {subtask description from arguments}
+   ```markdown
+   ---
+   title: "<name> — Implementation"
+   created: YYYY-MM-DD
+   tags:
+     - implementation
+     - subtask
+   ---
 
-     Split from [{parent_task}](../{parent_task}/implementation.md).
+   ## Current State
+   **Status:** Not Started
+   **Parent:** TASK
+   **Focus:** <one line>
+   **Next:** Begin implementation
 
-     ## Requirements
+   ## Goal
+   <the full brief>
 
-     {to be defined}
+   Split from [TASK](../TASK/implementation.md).
 
-     ## Plan
+   ## Taken over
+   <commits moved here from TASK, or "nothing">
 
-     {to be defined}
+   ## Done when
+   <one observation someone can make>
+   ```
 
-     ## Key Files
+7. **If writing an issue:** run `/issue-create` (Skill tool) as a refresh of
+   `PROJECT/TOPIC/<name>`, naming the parent in its Context section. That skill
+   writes `issue.md` and runs the task-shaping check.
 
-     {to be defined}
-     ```
+8. **If worked now:** `nu -c "use ~/.config/nushell/hcdev.nu *; hcdev tab <name>"`.
 
-   The parent link is a sibling path (`../{parent_task}/`) because parent and
-   subtask share a project and topic.
+9. **Report:** the subtask, its worktree, its notes, what it took, and — worked
+   now — that its tab is open; postponed — that it waits on this task's hdash
+   card, and `hcdev tab <name>` or `hcdev wt <name>` opens it later.
 
-7. **Report to the user:**
-
-   - Subtask ID and worktree path
-   - The `issue.md` path, if written
-   - Navigate: `hwt go {subtask_id}`
-   - Start a session there: `hcdev wt {subtask_id}`
-
-8. **Git:** `~/fun_repos/hobby-mimisbrunnr/` is a git repo. After writing the
-   notes files, **do not run `git add` or `git commit`** — leave that to the user.
+Never commit to the notes repo.
