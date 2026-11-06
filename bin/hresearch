@@ -26,6 +26,7 @@ from pathlib import Path
 
 NOTES_BASE = Path.home() / "fun_repos" / "hobby-mimisbrunnr" / "notes"
 WORKTREE_BASE = Path.home() / "fun_worktrees"
+ASPECT_BASE = Path.home() / "fun_aspects"
 
 STOPWORDS = {
     "how", "do", "i", "to", "the", "a", "an", "with", "in", "of", "for", "is", "what",
@@ -102,6 +103,14 @@ WS_RE = re.compile(r"\s+")
 
 
 def resolve_notes_dir(cwd: Path):
+    try:
+        rel = cwd.relative_to(ASPECT_BASE)
+    except ValueError:
+        rel = None
+    if rel is not None and len(rel.parts) >= 4:
+        p, t, task, name = rel.parts[:4]
+        candidate = NOTES_BASE / p / t / task / "aspects" / name
+        return candidate if candidate.is_dir() else None
     for base in (WORKTREE_BASE, NOTES_BASE):
         try:
             rel = cwd.relative_to(base)
@@ -1360,14 +1369,25 @@ def refresh_index(conn) -> None:
                 conn.execute(f"DELETE FROM {table} WHERE dir = ?", (key,))
 
 
+def project_of(root: Path):
+    for base in (WORKTREE_BASE, ASPECT_BASE):
+        try:
+            return root.relative_to(base).parts[0]
+        except ValueError:
+            continue
+    return None
+
+
 def worktree_root(cwd: Path):
-    try:
-        rel = cwd.relative_to(WORKTREE_BASE)
-    except ValueError:
-        return None
-    if len(rel.parts) < 3:
-        return None
-    return WORKTREE_BASE.joinpath(*rel.parts[:3])
+    for base, depth in ((WORKTREE_BASE, 3), (ASPECT_BASE, 4)):
+        try:
+            rel = cwd.relative_to(base)
+        except ValueError:
+            continue
+        if len(rel.parts) < depth:
+            return None
+        return base.joinpath(*rel.parts[:depth])
+    return None
 
 
 def find_lock(cwd: Path):
@@ -1557,7 +1577,7 @@ def cmd_symbols(query: str) -> int:
     cwd = Path.cwd()
     lock = worktree_lock_versions(cwd)
     root = worktree_root(cwd)
-    this_project = root.relative_to(WORKTREE_BASE).parts[0] if root else None
+    this_project = project_of(root) if root else None
     lowered = [w.lower() for w in words]
     ranked = []
     for r in rows:

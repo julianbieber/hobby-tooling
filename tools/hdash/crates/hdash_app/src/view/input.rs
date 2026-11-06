@@ -195,6 +195,10 @@ impl DashView {
                 self.ui.selected_project = Some(child.project);
                 self.reset_selection = true;
             }
+            Control::Aspect(id, name) => {
+                let task = self.task(&id)?.clone();
+                return Some(Action::Aspect(task, name));
+            }
         }
         None
     }
@@ -314,6 +318,11 @@ impl DashView {
             task.subtasks
                 .iter()
                 .map(|s| Control::Subtask(id.clone(), s.resolved_id(&id.project, &id.topic))),
+        );
+        out.extend(
+            task.aspects
+                .iter()
+                .map(|a| Control::Aspect(id.clone(), a.name.clone())),
         );
         out
     }

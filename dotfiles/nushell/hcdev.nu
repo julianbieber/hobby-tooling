@@ -9,6 +9,7 @@
 #   hcdev here                    - session in the current directory
 #   hcdev auto <task>             - session whose Claude pane starts /task:auto
 #   hcdev coordinator <blurb>     - coordinator session: task list + Claude, from a main checkout
+#   hcdev tab <aspect>            - open or focus a research aspect's tab in its task's session
 #   hcdev notes                   - cd to this task's notes
 #   hcdev code                    - cd to this task's worktree
 #   hcdev list / attach           - manage running sessions
@@ -22,6 +23,7 @@ const WORKTREE_BASE = "~/fun_worktrees" | path expand
 const PROJECTS_BASE = "~/fun_repos" | path expand
 const NOTES_BASE = "~/fun_repos/hobby-mimisbrunnr/notes" | path expand
 const HOBBY_CONFIG_DIR = "~/.claude-hobby" | path expand
+const ASPECT_BASE = "~/fun_aspects" | path expand
 
 # --- task.json metadata (mirrors hwt.nu) ------------------------------------
 
@@ -132,6 +134,92 @@ def hcdev-task-context [] {
         error make { msg: $"Can't determine project/topic/task from ($cwd)" }
     }
     { project: ($parts | get 0), topic: ($parts | get 1), task: ($parts | get 2) }
+}
+
+# The worktree of research aspect `name` of a task:
+# `~/fun_aspects/<project>/<topic>/<task>/<name>`. Outside `~/fun_worktrees` on
+# purpose, so nothing that reads the third component there as a task sees it.
+export def hcdev-aspect-worktree [project: string, topic: string, task: string, name: string] {
+    $ASPECT_BASE | path join $project $topic $task $name
+}
+
+# The notes directory of research aspect `name` of a task, which holds its
+# `aspect.json`, `brief.md` and `findings.md`.
+export def hcdev-aspect-notes [project: string, topic: string, task: string, name: string] {
+    $NOTES_BASE | path join $project $topic $task "aspects" $name
+}
+
+# {project, topic, task, name} of the aspect worktree `dir` lies in, or null
+# when it is not under `~/fun_aspects/<project>/<topic>/<task>/<name>`.
+export def hcdev-aspect-of-path [dir: path] {
+    let expanded = ($dir | path expand)
+    if not ($expanded | str starts-with $"($ASPECT_BASE)/") { return null }
+    let parts = ($expanded | str replace $"($ASPECT_BASE)/" "" | split row "/")
+    if ($parts | length) < 4 { return null }
+    { project: ($parts | get 0), topic: ($parts | get 1), task: ($parts | get 2), name: ($parts | get 3) }
+}
+
+def hcdev-aspect-parent [task?: string, project?: string, topic?: string] {
+    if $task != null {
+        let found = (hcdev-find-task $task $project $topic)
+        if $found == null { error make { msg: $"Task '($task)' not found" } }
+        return $found
+    }
+    let of_aspect = (hcdev-aspect-of-path (pwd))
+    let ctx = if $of_aspect != null { $of_aspect } else { hcdev-task-context }
+    let found = (hcdev-find-task $ctx.task $ctx.project $ctx.topic)
+    if $found == null { error make { msg: $"Task '($ctx.task)' not found" } }
+    $found
+}
+
+def hcdev-aspect-completions [context?: string] {
+    let ctx = (try {
+        let of_aspect = (hcdev-aspect-of-path (pwd))
+        if $of_aspect != null { $of_aspect } else { hcdev-task-context }
+    } catch { null })
+    if $ctx == null { return [] }
+    let dir = ($NOTES_BASE | path join $ctx.project $ctx.topic $ctx.task "aspects")
+    try { ls $dir | where type == dir | get name | path basename } catch { [] }
+}
+
+def hcdev-dev-panes [claude_cmd: string] {
+    $"pane split_direction=\"vertical\" {
+        pane size=\"65%\" name=\"editor\"
+        pane size=\"35%\" command=\"($claude_cmd)\" name=\"claude\" close_on_exit=false
+    }
+    pane size=1 borderless=true {
+        plugin location=\"compact-bar\"
+    }"
+}
+
+def hcdev-aspect-tab-layout [] {
+    $"layout {
+    (hcdev-dev-panes 'haspect')
+}
+"
+}
+
+def hcdev-task-with-aspect-layout [task: string, name: string, dir: string] {
+    $"layout {
+    tab name=($task | to json) {
+        (hcdev-dev-panes 'chobby')
+    }
+    tab name=($name | to json) cwd=($dir | to json) focus=true {
+        (hcdev-dev-panes 'haspect')
+    }
+}
+"
+}
+
+def hcdev-open-tab [session: string, name: string, dir: string] {
+    let names = (^zellij --session $session action query-tab-names | lines)
+    if $name in $names {
+        ^zellij --session $session action go-to-tab-name $name | ignore
+        return
+    }
+    let layout_file = (hcdev-runtime-dir | path join "hobby-aspect-tab.kdl")
+    hcdev-aspect-tab-layout | save -f $layout_file
+    ^zellij --session $session action new-tab --layout $layout_file --name $name --cwd $dir | ignore
 }
 
 # The directory zellij puts its IPC sockets in — the same derivation zellij uses
@@ -475,6 +563,7 @@ export def main [] {
     print "  hcdev dir <path>                 Start session in a given directory"
     print "  hcdev auto <task> [-p] [-t] [-w] Session whose Claude pane starts /task:auto (-w: new window)"
     print "  hcdev coordinator <blurb> [-p]   Coordinator session (task list + Claude) from a main checkout"
+    print "  hcdev tab <aspect> [--task] [-a] Open or focus a research aspect's tab in its task's session"
     print "  hcdev notes                      cd to this task's notes directory"
     print "  hcdev code                       cd to this task's worktree"
     print "  hcdev list                       List running hobby sessions"
@@ -632,6 +721,38 @@ export def --env "hcdev coordinator" [
     let layout_file = (hcdev-runtime-dir | path join $"hobby-coordinator-($session).kdl")
     hcdev-coordinator-layout $notes_dir | save -f $layout_file
     hcdev-launch $main_repo $session $layout_file
+}
+
+# Open research aspect `name` as a tab in its task's session, or switch to that
+# tab when it is already open. The task is the one the current directory lies in
+# (its worktree, or any of its aspect worktrees) unless `--task` names it. When
+# the task's session is not running it is started, in the foreground, with the
+# aspect's tab focused. With `--attach`, a running session is also attached when
+# the caller is not already inside it. Errors when the task is unknown, not
+# checked out, or has no worktree for that aspect (`hwt aspect new` makes one).
+export def --env "hcdev tab" [
+    name: string@hcdev-aspect-completions             # Aspect name
+    --task: string@hcdev-task-completions             # Parent task (defaults to the current directory's)
+    --project (-p): string@hcdev-project-completions  # Disambiguate the task across projects
+    --topic (-t): string@hcdev-topic-completions      # Disambiguate the task across topics
+    --attach (-a)                                     # Attach to the running session after opening the tab
+] {
+    let parent = (hcdev-aspect-parent $task $project $topic)
+    let dir = (hcdev-aspect-worktree $parent.project $parent.topic $parent.task $name)
+    if not ($dir | path exists) {
+        error make { msg: $"Aspect '($name)' of ($parent.task) has no worktree at ($dir) — create it with 'hwt aspect new ($name)'" }
+    }
+    let session = (hcdev-session-name $parent.project $parent.topic $parent.task)
+    if (hcdev-session-live $session) {
+        hcdev-open-tab $session $name $dir
+        if $attach and ($env.ZELLIJ_SESSION_NAME? != $session) {
+            hcdev-launch $parent.path $session
+        }
+        return
+    }
+    let layout_file = (hcdev-runtime-dir | path join $"hobby-tabs-($session).kdl")
+    hcdev-task-with-aspect-layout $parent.task $name $dir | save -f $layout_file
+    hcdev-launch $parent.path $session $layout_file
 }
 
 # Start a session in the current directory

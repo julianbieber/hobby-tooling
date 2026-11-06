@@ -41,12 +41,13 @@ $env.EDITOR = "hx-claude"   # ~/.config/nushell/env.nu
 `just doctor` warns when it doesn't point here, because a dump nothing opens is
 just as invisible as no dump at all.
 
-## Per-session keying
+## Per-pane keying
 
 Both derive the same path, `/tmp/claude-conversation-<key>.md`, where `<key>` is
-the sanitized `$ZELLIJ_SESSION_NAME` — so ctrl-g in one pane opens that pane's
-conversation, not a neighbour's. Outside zellij it falls back to an `md5(PWD)`
-hash.
+the sanitized `$ZELLIJ_SESSION_NAME-p$ZELLIJ_PANE_ID` — so ctrl-g in one pane
+opens that pane's conversation, not a neighbour's. The pane id is what separates
+a task's tab from its research aspects' tabs, which all share the task's session
+name. Outside zellij it falls back to an `md5(PWD)` hash.
 
 **That derivation is the entire contract between the two scripts.** Change it in
 one and the other silently opens a different file.
@@ -69,7 +70,8 @@ watcher, so `:reload` is what refreshes a view left open across a turn.
 ```bash
 echo '{"transcript_path":"'"$HOME"'/.claude-hobby/projects/<proj>/<session>.jsonl"}' \
   | ~/.claude-hobby/hooks/claude-conversation.sh
-bat "/tmp/claude-conversation-${ZELLIJ_SESSION_NAME:-$(printf '%s' "$PWD" | md5sum | cut -c1-8)}.md"
+key=$(printf '%s' "${ZELLIJ_SESSION_NAME}${ZELLIJ_PANE_ID:+-p$ZELLIJ_PANE_ID}" | tr -c 'A-Za-z0-9._-' '_')
+bat "/tmp/claude-conversation-${key}.md"   # inside zellij; outside, the key is md5(PWD)
 ```
 
 ## Configuration

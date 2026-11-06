@@ -27,6 +27,7 @@ else
 fi
 if command -v chobby >/dev/null 2>&1; then ok "chobby on PATH"; else bad "chobby not on PATH" "just install-chobby"; fi
 if command -v hauto >/dev/null 2>&1; then ok "hauto on PATH"; else warn "hauto not on PATH (hcdev auto needs it)" "just install-chobby"; fi
+if command -v haspect >/dev/null 2>&1; then ok "haspect on PATH"; else warn "haspect not on PATH (hcdev tab needs it)" "just install-chobby"; fi
 if command -v hresearch >/dev/null 2>&1; then ok "hresearch on PATH"; else warn "hresearch not on PATH (/research needs it)" "just install-chobby"; fi
 
 echo ""

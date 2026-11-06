@@ -151,6 +151,27 @@ impl SubtaskRef {
     }
 }
 
+/// A research aspect of a task: a question carved out into its own worktree and tab, recorded in
+/// `notes/PROJECT/TOPIC/TASK/aspects/NAME/aspect.json`. Never a task of its own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AspectRef {
+    /// The aspect's directory name, which is also its tab name.
+    pub name: String,
+    /// `open`, `active`, `reported` or `closed` as the file records it; `unreadable` when the
+    /// file could not be parsed.
+    pub state: String,
+    /// The question, if recorded.
+    pub goal: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct AspectFile {
+    #[serde(default)]
+    state: Option<String>,
+    #[serde(default)]
+    goal: Option<String>,
+}
+
 /// A live PR status result, delivered from the async query over a channel. Mirrors [`GitMsg`].
 pub struct PrMsg {
     /// The task the PR belongs to.
@@ -329,6 +350,9 @@ pub struct Task {
     pub prs: Vec<Pr>,
     /// Subtasks this task owns, declared in its `subtasks.json` (sibling worktrees spun off via `/spawn`).
     pub subtasks: Vec<SubtaskRef>,
+    /// Research aspects recorded under the task's `aspects/` notes dir, by name, closed ones
+    /// included.
+    pub aspects: Vec<AspectRef>,
     /// Notes directory/file last-modified time, if any.
     pub last_active: Option<SystemTime>,
     /// The list counts when this task is a coordinator (topic [`COORDINATOR_TOPIC`]) whose
@@ -736,6 +760,7 @@ fn build_task(id: TaskId, adopted: bool, done: bool, block: Option<Block>) -> Ta
         waiting_on,
     } = read_build_state(&id);
     let subtasks = read_subtasks(&id);
+    let aspects = read_aspects(&notes_root().join(id.rel()).join("aspects"));
     let last_active =
         notes_path(&id).and_then(|p| std::fs::metadata(&p).ok().and_then(|m| m.modified().ok()));
     let title = std::fs::read_to_string(issue_path(&id))
@@ -760,6 +785,7 @@ fn build_task(id: TaskId, adopted: bool, done: bool, block: Option<Block>) -> Ta
         repos,
         prs,
         subtasks,
+        aspects,
         last_active,
         coordinator,
         phase,
@@ -967,6 +993,36 @@ fn read_prs(id: &TaskId) -> Vec<Pr> {
     }
 }
 
+fn read_aspects(dir: &Path) -> Vec<AspectRef> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut aspects: Vec<AspectRef> = entries
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let parsed = std::fs::read_to_string(e.path().join("aspect.json"))
+                .ok()
+                .and_then(|text| serde_json::from_str::<AspectFile>(&text).ok());
+            match parsed {
+                Some(file) => AspectRef {
+                    name: clean(&name),
+                    state: clean(file.state.as_deref().unwrap_or("open")),
+                    goal: file.goal.map(|g| clean(&g)).filter(|g| !g.is_empty()),
+                },
+                None => AspectRef {
+                    name: clean(&name),
+                    state: "unreadable".into(),
+                    goal: None,
+                },
+            }
+        })
+        .collect();
+    aspects.sort_by(|a, b| a.name.cmp(&b.name));
+    aspects
+}
+
 /// Path to a task's `subtasks.json` in the notes tree: `notes/PROJECT/TOPIC/TASK/subtasks.json`.
 pub fn subtasks_path(id: &TaskId) -> PathBuf {
     notes_root().join(id.rel()).join("subtasks.json")
@@ -1106,6 +1162,51 @@ fn set_backlog_at(path: &Path, backlog: bool) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Pins how a task's aspects are read: sorted by name, state and goal from aspect.json, an
+    // empty goal dropped, a missing state read as open, and a malformed file still listed.
+    #[test]
+    fn aspects_are_read_from_the_aspects_dir() {
+        let dir = std::env::temp_dir().join(format!("hdash_aspects_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for (name, body) in [
+            (
+                "b-spike",
+                r#"{"kind":"research","state":"reported","goal":"why"}"#,
+            ),
+            ("a-fresh", r#"{"goal":""}"#),
+            ("c-broken", "{not json"),
+        ] {
+            std::fs::create_dir_all(dir.join(name)).unwrap();
+            std::fs::write(dir.join(name).join("aspect.json"), body).unwrap();
+        }
+        let aspects = read_aspects(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            aspects,
+            vec![
+                AspectRef {
+                    name: "a-fresh".into(),
+                    state: "open".into(),
+                    goal: None
+                },
+                AspectRef {
+                    name: "b-spike".into(),
+                    state: "reported".into(),
+                    goal: Some("why".into())
+                },
+                AspectRef {
+                    name: "c-broken".into(),
+                    state: "unreadable".into(),
+                    goal: None
+                },
+            ]
+        );
+        assert!(
+            read_aspects(&dir).is_empty(),
+            "a task without aspects has none"
+        );
+    }
 
     // Pins how build-task.json's todo list and waiting_on are read: statuses map, blank text and
     // an unknown status degrade instead of failing, and a file without them yields nothing.

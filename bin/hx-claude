@@ -16,7 +16,7 @@
 set -uo pipefail
 
 if [ -n "${ZELLIJ_SESSION_NAME:-}" ]; then
-    key=$(printf '%s' "$ZELLIJ_SESSION_NAME" | tr -c 'A-Za-z0-9._-' '_')
+    key=$(printf '%s' "${ZELLIJ_SESSION_NAME}${ZELLIJ_PANE_ID:+-p$ZELLIJ_PANE_ID}" | tr -c 'A-Za-z0-9._-' '_')
 else
     key=$(printf '%s' "$PWD" | md5sum | cut -c1-8)
 fi

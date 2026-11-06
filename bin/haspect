@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# The Claude pane of a research aspect's tab: start /task:aspect while the aspect
+# is still `open`, and resume the aspect's last conversation after that.
+#
+# Runs from the aspect worktree (~/fun_aspects/<project>/<topic>/<task>/<name>)
+# and reads aspect.json in notes/<project>/<topic>/<task>/aspects/<name>/.
+# Records this pane's own id there as claude-pane.json on every start, as hauto
+# does for a task. Exit 1 when the cwd is not an aspect worktree; otherwise it
+# becomes the claude process.
+
+set -uo pipefail
+
+ASPECT_BASE="$HOME/fun_aspects"
+NOTES_BASE="$HOME/fun_repos/hobby-mimisbrunnr/notes"
+
+case "$PWD" in
+  "$ASPECT_BASE"/*/*/*/*) ;;
+  *) echo "haspect: $PWD is not an aspect worktree under $ASPECT_BASE" >&2; exit 1 ;;
+esac
+REL="${PWD#"$ASPECT_BASE"/}"
+PROJECT="${REL%%/*}"; REST="${REL#*/}"
+TOPIC="${REST%%/*}"; REST="${REST#*/}"
+TASK="${REST%%/*}"; REST="${REST#*/}"
+NAME="${REST%%/*}"
+DIR="$NOTES_BASE/$PROJECT/$TOPIC/$TASK/aspects/$NAME"
+
+if [ -n "${ZELLIJ_PANE_ID:-}" ]; then
+  mkdir -p "$DIR"
+  jaq -n --arg session "${ZELLIJ_SESSION_NAME:-}" --arg pane_id "terminal_$ZELLIJ_PANE_ID" \
+    --arg worktree "$PWD" --arg recorded "$(date -u +%FT%TZ)" \
+    '{session: $session, pane_id: $pane_id, worktree: $worktree, recorded: $recorded}' \
+    > "$DIR/claude-pane.json" || true
+fi
+
+STATE=$(jaq -r '.state // "open"' "$DIR/aspect.json" 2>/dev/null || echo open)
+if [ "$STATE" = open ]; then
+  exec chobby "/task:aspect"
+fi
+exec chobby --continue
