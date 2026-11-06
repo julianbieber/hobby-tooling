@@ -32,7 +32,7 @@ dotfiles/
   nushell/{hwt.nu, hcdev.nu}          # symlinked into ~/.config/nushell/
   zellij/{config.kdl, layouts/hobby-dev.kdl}   # symlinked into ~/.config/zellij/
   claude-md/                          # symlinked into ~/.claude-hobby/ and ~/fun_worktrees/
-bin/{chobby, hauto, haspect, hresearch, hx-claude, zj-notes}   # symlinked into ~/.local/bin/
+bin/{chobby, hauto, haspect, happ, hresearch, hx-claude, zj-notes}   # symlinked into ~/.local/bin/
 hooks/<name>/hook.sh                  # symlinked into ~/.claude-hobby/hooks/
 skills/<name>/{skill.md, README.md}   # symlinked into ~/.claude-hobby/commands/
 settings/hobby.settings.json          # symlinked to ~/.claude-hobby/settings.json

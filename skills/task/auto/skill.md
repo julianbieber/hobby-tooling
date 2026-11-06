@@ -37,7 +37,7 @@ the report because a failing command stops the pipeline and a report does not.
 1. **Never write a reason I did not give you.** Three sources: the brief, what
    is recorded in `business-context.md`, a fact verified in the code. Nothing
    is asked mid-run. A *why* none of them supplies is a **gap**, listed at the
-   play gate, never filled in.
+   play gate — unattended, in the journal — never filled in.
 2. **The state file is a contract.** Write `build-task.json` at every
    transition. The waiting phases are `await-acceptance`, `await-play`
    (interactive only) and `await-fix` (unattended, or CI that would not go
@@ -80,7 +80,7 @@ Task context from `pwd` (`~/fun_worktrees/PROJECT/TOPIC/TASK`). State file at
 { "phase": "acceptance", "auto": true, "model": "sonnet",
   "coordinator": "<notes dir, or absent>", "merge": "mine|coordinator",
   "goal": "<path to goal.md, when seeded from one>", "scenarios": ["S1"],
-  "brief_source": "coordinator|description|issue", "brief": "<verbatim>",
+  "brief_source": "coordinator|description|issue|notes", "brief": "<verbatim>",
   "acceptance": "<the done-when observation, verbatim>",
   "context_questions": [], "plan": "plan.md",
   "acceptance_checks": [ { "scenario": "S1", "command": "", "expect": "" },
@@ -95,7 +95,7 @@ Task context from `pwd` (`~/fun_worktrees/PROJECT/TOPIC/TASK`). State file at
     "base": "", "base_updated": true, "checked": "<RFC 3339>" },
   "ci_result": { "checked": "<RFC 3339>", "outcome": "green|blocked", "rounds": 0,
     "case": "", "check": "", "run": "", "log": "", "pr": "" },
-  "play": { "command": "", "log": "" }, "feedback": [], "rounds": 0,
+  "play": { "command": "", "log": "", "pid": "" }, "feedback": [], "rounds": 0,
   "todo": [ { "text": "<plan step>", "status": "pending" } ],
   "waiting_on": null, "delta": false, "hmml_units": [],
   "written": "<RFC 3339>", "phase_since": "<RFC 3339>" }
@@ -112,23 +112,38 @@ coordinator seeded it.** A state file this skill writes for itself sets
 `mine`**, so a hand-typed `hcdev auto` never merges. `merge_result` is written
 by the `merge` phase below. `goal` and `scenarios` are written by `hcoord seed`
 and absent otherwise. **`delta`** is false unless I ask for it — `--delta` on
-either stage, or a coordinator that seeded it — and turns on the `delta` phase
-below; it is on demand because this skill exists to spend as little context as
-a task allows.
+a stage typed by hand, or `delta` at the play gate; neither `hauto` nor a
+coordinator seed sets it — and turns on the `delta` phase below; it is on
+demand because this skill exists to spend as little context as a task allows.
 
-Phases: `acceptance`, `await-acceptance`, `plan`, `planned`, `build`,
-`implement`, `delta` (only when `delta` is true), `comments`, `standards`, then either `verify` and `await-fix`
+Phases, each one written to the state file as it starts: `acceptance`,
+`await-acceptance`, `plan`, `planned`, `implement`, `delta` (only when `delta`
+is true), `comments`, `standards`, then either `verify` and `await-fix`
 (unattended) or `play` and `await-play` (interactive), then `pr`, `merge`,
-`fix-ci`, `journal`, `done`.
+`fix-ci`, `journal`, `done`. `plan` and `build` are also the two **stage**
+arguments; `build` is never a phase.
 
 The stage argument is required. `plan` runs from whatever phase is recorded up
 to `planned`; `build` runs from `planned` to `done`. A `build` invoked with no
 `plan.md` on disk says so and stops. A phase past `planned` given `build`
-resumes at that phase (this is `hauto`'s `--continue` path).
+resumes at that phase — a resume typed by hand; `hauto` resumes a phase past
+`planned` with `chobby --continue`, which reopens the build session itself
+rather than invoking a stage.
 
-**The brief** is the seeded state file's `brief` when `brief_source` is
-`coordinator`; otherwise the argument after the stage — free text, or `--issue`
-for the task's `issue.md`. Record it verbatim.
+**The brief**, the first of these that exists, recorded verbatim with its
+`brief_source`:
+
+1. the seeded state file's `brief`, when `brief_source` is `coordinator`;
+2. the argument after the stage — free text (`description`), or `--issue`
+   for the task's `issue.md` (`issue`);
+3. the task's `issue.md` in the notes dir (`issue`) — `hauto` passes no
+   argument, so this is what a hand-typed `hcdev auto` plans from;
+4. `journal:resume` over the notes dir, when it holds journal entries
+   (`notes`);
+5. none: set `phase: await-acceptance` with the single question *what should
+   this task do, and what will you do to check it is done?*, as P1 does. The
+   answer is recorded as both `brief` (`brief_source: description`) and
+   `acceptance`.
 
 Announce `{project, topic, task, stage, phase}` in one line and run.
 
@@ -183,7 +198,11 @@ P1 does, and end the turn. That is the gate the coordinator already handles, so
 it costs no new kind of stop.
 
 **P4 — Write `plan.md`** into the task's notes dir. It is the build stage's
-entire input, read by a session that has never seen this conversation:
+entire input, read by a session that has never seen this conversation. The
+name is fixed and a re-plan **overwrites** it, unlike the dated plans of
+`/task:build`: an auto task is meant to be small enough not to need a re-plan,
+and when one does, a second plan beside the first would leave the build stage
+two documents to execute from.
 
 ```markdown
 ---
@@ -239,7 +258,10 @@ ______________________________________________________________________
 Fresh session. Read `build-task.json`, `plan.md`, and `business-context.md` if
 it exists. Nothing else until a step names a file.
 
-**Implement.** Follow `Steps` in order, reading each file when its step comes.
+**Implement.** Write `phase: implement` with the first `todo` item `active`
+before the first edit — until then the file reads `planned`, and that is what
+`hdash`, `hcoord status` and a coordinator would show for the whole
+implementation. Follow `Steps` in order, reading each file when its step comes.
 Write comments to the rule as you go — module header, public contract, test
 justification, nothing else — taking any *why* from the plan's `Goal` and
 `business-context.md` only. Run the plan's `build` command after each step
@@ -278,7 +300,7 @@ observation, run as commands by the session that wrote the code, because there
 is nobody to hand a running application to.
 
 1. When the plan's `## Acceptance checks` says `needs: run`, launch the app the
-   way the play gate does — detached, output to `<notes dir>/play.log` — wait a
+   way the play gate does — `happ start <notes dir> '<run command>'` — wait a
    few seconds and `head` the log. A build error there is fixed before any check
    runs.
 2. Run each check in `acceptance_checks` that carries a command, in order,
@@ -299,7 +321,7 @@ is nobody to hand a running application to.
    **A capture that fails is recorded with the failure as its `note` and no
    `screen`, and the run goes on**: the scenario said nobody can run it, so
    there is nothing for a failure to mean beyond a missing picture.
-4. Kill the application (`pkill -f` on the recorded command) if one was launched.
+4. `happ stop <notes dir>` if the application was launched.
 5. Write `acceptance_result` into the state file — `checked`, `passed`,
    `rounds`, and one object per check with `scenario` (or `name`), `command`,
    `exit`, `state` and a `note` of at most one line of evidence, plus `screen` on
@@ -329,13 +351,16 @@ ______________________________________________________________________
 `auto` false or absent only — I am at the machine and the running application is
 what I am handed.
 
-1. Launch the app with the plan's `run` command, detached, output to the
-   notes dir:
+1. Launch the app with the plan's `run` command:
    ```bash
-   setsid -f sh -c '<run command> > <notes dir>/play.log 2>&1'
+   happ start <notes dir> '<run command>'
    ```
-   Wait a few seconds, `head` the log: a build error is yours to fix before the
-   gate. No `run` in the plan (a library, a tool without a UI) → the play step
+   It runs detached in its own process group, logs to `<notes dir>/play.log`,
+   records the group in `<notes dir>/play.pid` and prints its id. Never stop
+   the app with `pkill -f` on its command: the pattern sits in the calling
+   shell's own command line and kills it too — `happ stop <notes dir>` stops
+   the group and nothing else. Wait a few seconds, `head` the log: a build
+   error is yours to fix before the gate. No `run` in the plan (a library, a tool without a UI) → the play step
    is the acceptance observation run as a command, its output printed.
 2. Record `play` in the state file, set `phase: await-play`, and write it.
    **Nothing of the report is printed until that write has happened** — the
@@ -365,8 +390,8 @@ what I am handed.
 prints it, and returns to `await-play` without relaunching.
 
 **Feedback** is anything else but `continue`. Record it verbatim as
-`## feedback-<n>` in `business-context.md`, append to `feedback`, kill the
-running app (`pkill -f` on the recorded command), implement the change reading
+`## feedback-<n>` in `business-context.md`, append to `feedback`,
+`happ stop <notes dir>`, implement the change reading
 only the files it touches, build, test, comments, standards, play again. No
 cap on rounds.
 
@@ -374,7 +399,7 @@ ______________________________________________________________________
 
 ## Phase `pr` — on `continue`
 
-1. Stop the app (`pkill -f`; ignore failure).
+1. `happ stop <notes dir>` — a no-op when nothing was launched.
 2. **Run the repo's CI locally, before anything is pushed.** Read
    `.github/workflows/*.yml` and `*.yaml` — the one read rule 3 allows that
    the plan did not name, because the workflows are what the PR will be
@@ -387,14 +412,15 @@ ______________________________________________________________________
    the only run they get. No workflows → nothing to run.
    A failing step is this session's own, like a failing test: repair it
    reading only the files its output names, re-run the workflow steps from
-   the top, increment `ci_result.rounds`. At the bound (three,
-   `business-context.md` `## fix-loop-bound`) write `ci_result` with
+   the top, increment `ci_result.rounds`. At the bound of three write `ci_result` with
    `outcome: blocked`, `case: own-diff`, `check` (the step's name) and `log`
    (at most three lines), set `phase: await-fix`, print one line, and **end
    the turn** — nothing is committed or pushed.
 3. `git status --short`; stage the task's files and nothing else — no
-   artefacts, no `play.log`. One commit unless two decisions would share a
-   message. Subject and body to the rule; a justification comes from the
+   artefacts, no `play.log`, no `play.pid`. A commit is a unit of change that
+   can be reviewed on its own, with no context from the commits after it — so
+   usually one; split only where a part stands alone that way. Subject and body
+   to the rule; a justification comes from the
    brief, the acceptance answer, `business-context.md`, or a verified fact.
 4. `git push -u origin <branch>`.
 5. `gh pr create`: title in commit-subject shape, the three sections and
@@ -447,17 +473,16 @@ the same turn.
    (a conflict, a closed PR, a `gh` refusal, or the wait running out) sets
    `phase: await-fix`, prints one line naming the PR and the reason, and
    **ends the turn**. Never rebase, never force, never
-   close the PR: `business-context.md` `## merge-conflicts` says a conflict
-   means something pushed to the default branch outside the run, which is
-   exactly the assumption being violated.
+   close the PR: a conflict means something was pushed to the default branch
+   outside the run, which is exactly the one-task-at-a-time assumption the
+   run depends on, so it is escalated rather than resolved unattended.
 
 ## Phase `fix-ci` — the session repairs its own red checks
 
 A red check on a task's own PR is almost always that task's own diff, and this
 session holds what a coordinator does not: the branch, the plan, and the
-failing log. `hcoord ci` classifies the failure and applies the bound so a
-session that loses count still stops (`business-context.md`
-`## fix-loop-bound`).
+failing log. `hcoord ci` classifies the failure and applies the bound of
+three attempts, so a session that loses count still stops.
 
 1. `hcoord ci <pr url> --spent <ci_result.rounds>`, Bash `timeout: 600000`.
 2. `outcome: green` → write `ci_result` with `outcome: green`. With
@@ -486,9 +511,8 @@ session that loses count still stops (`business-context.md`
    reason `checks still pending after ~38 minutes`.
 
 `ci_result.rounds` counts CI-fix attempts and `acceptance_result.rounds`
-counts the pre-PR repair rounds from the `verify` phase — two counters that
-happen to share the number three by decision (`business-context.md`
-`## fix-loop-bound`), never one counter: a CI failure is discovered only
+counts the pre-PR repair rounds from the `verify` phase — two counters with
+the same bound of three, never one counter: a CI failure is discovered only
 after the PR is open, which is after the acceptance rounds have already
 finished spending themselves.
 

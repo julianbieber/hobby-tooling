@@ -5,7 +5,7 @@
 | Type         | skill                                                          |
 | Install path | `~/.claude-hobby/commands/task/auto.md` → `/task:auto`         |
 | Owner        | @julianbieber                                                  |
-| Dependencies | `hauto` (the stage driver in `bin/`), `comment-pass`, `structure`, `journal:write` |
+| Dependencies | `hauto` (the stage driver in `bin/`), `happ` (starts and stops the app), `hcoord`, `comment-pass`, `structure`, `journal:write` |
 | Status       | experimental                                                   |
 | Derived from | `task:build`                                                   |
 
@@ -24,6 +24,31 @@ like.
 stage from the phase in `build-task.json`. It is the pipeline
 `/task:coordinate` runs in each task window, and it also works typed by hand
 in a worktree: `hcdev auto <task>`.
+
+A hand-typed run has no seed and `hauto` passes the plan stage no argument, so
+the brief falls back in order: the task's `issue.md`, then a `journal:resume`
+over its notes, then a question at `await-acceptance`. That order is my answer
+in `notes/hobby-tooling/skills/auto-stage/business-context.md` `## no-brief`
+("journal resume if something exists, fall back to ask the human"); before it,
+a hand-typed run planned from nothing.
+
+`plan.md` keeps one fixed name and a re-plan overwrites it, against the dated
+plan rule everywhere else — `## plan-overwrite` in the same file: "an auto
+task should be small enoguh not to need replanning. if it replans the task, it
+should be overwritten to avoid confusing the execution."
+
+## The app is stopped by process group, never by name
+
+The play gate, `verify` and the feedback loop start the application with
+`happ start <notes dir> '<command>'` and stop it with `happ stop <notes dir>`.
+It used to be `pkill -f` on the command, which matches the calling shell too,
+since the pattern is in that shell's own command line — the same exit-144
+failure `hcdev close` records in `CLAUDE.md`. `happ` records the process group
+at launch and kills that, so `cargo run` and the binary it spawns stop together
+and nothing else does. It is a script rather than a paragraph so `/task:goal`
+and `/task:judge`, which launch an app the same way, can use the same
+mechanism — `## app-lifecycle` in the auto-stage notes asked for whichever
+option "leads to more consistency and faster execution by the agent".
 
 ## Two processes, because context is the cost
 
@@ -130,7 +155,10 @@ still never committed here.
 
 `build-task.json` is written at every transition, as in `/task:build`, and the
 waiting phases are named `await-acceptance`, `await-play` (interactive) and
-`await-fix` (unattended, when the acceptance checks would not pass). `hcoord
+`await-fix` — the acceptance checks would not pass (unattended), the repo's CI
+would not go green locally or on the PR, or the PR could not be merged (a
+conflict, a `gh` refusal, or the checks still pending at the wait's end).
+`acceptance_result`, `ci_result` and `merge_result` say which. `hcoord
 wait` returns on any `await-*` phase and on `done`, which is how
 `/task:coordinate` knows when a task wants a person and when it is finished
 without either session talking to the other. `hcoord wait` also returns on a
@@ -174,11 +202,15 @@ name it does not recognise would instead hold the list waiting on a gate that
 never resolves. `merge_result.outcome` is what tells the two failure kinds
 apart once the coordinator does know to look.
 
-A merge conflict is always `blocked`, never resolved by rebasing here.
-`business-context.md`'s `## merge-conflicts` records why: a conflict means
-something landed on the default branch outside this run, which is exactly the
-one-task-at-a-time assumption the whole coordinator loop depends on — the
-session escalates it rather than guessing at a resolution unattended.
+A merge conflict is always `blocked`, never resolved by rebasing here: a
+conflict means something landed on the default branch outside this run, which
+is exactly the one-task-at-a-time assumption the whole coordinator loop depends
+on — the session escalates it rather than guessing at a resolution unattended.
+That was settled in #48, `## merge-conflicts` in
+`notes/hobby-tooling/auto_flow_improvements/gh-48-self-merge/business-context.md`.
+The skill states the rule itself rather than citing the handle, because a
+session runs under the three-source rule in *its own* task's notes, where that
+handle does not exist.
 
 ## A PR is handed over green, whoever merges it
 
@@ -193,5 +225,7 @@ The local run is a filter, not a substitute. `uses:` steps, secrets, service
 containers and other operating systems cannot be reproduced on this machine, so
 the PR's checks remain the authority and the local run only catches what can be
 caught before a round trip to the runner. Both share `ci_result.rounds` and its
-bound of three: they are two places the same CI can fail, not two loops.
+bound of three: they are two places the same CI can fail, not two loops. Three
+matches the acceptance-repair cap, as settled in #49 — `## fix-loop-bound` in
+`notes/hobby-tooling/auto_flow_improvements/gh-49-self-fix-ci/business-context.md`.
 
