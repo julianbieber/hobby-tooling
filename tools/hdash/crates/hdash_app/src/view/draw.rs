@@ -16,7 +16,7 @@ use crate::facets::{Chip, Facts, Group, candidates, count, facts, passes};
 use crate::focus::Presence;
 use crate::model::item::{Item, Stage, backlog_visible, rank_projects};
 use crate::model::project::Project;
-use crate::model::task::{Pr, PrStatus, Repo, SubtaskRef, TaskId};
+use crate::model::task::{Pr, PrStatus, Repo, SubtaskRef, Task, TaskId, TodoCount, TodoStatus};
 use crate::session::{Session, SessionState, now_secs};
 use crate::widgets::{
     self, ACCENT, AMBER, CLOSED, DIM, DONE, Lines, MERGED, SIDEBAR_COLS, badge, button, clean,
@@ -652,6 +652,7 @@ impl DashView {
             meta.push(text(&format!("· {reason}"), Style::default().fg(DIM)));
         }
         lines.extend(flow(meta, width, 0));
+        lines.extend(self.todo_lines(task, width));
 
         if !task.prs.is_empty() {
             let expanded = self.ui.pr_expanded.contains(&task.id);
@@ -687,6 +688,45 @@ impl DashView {
             ));
             for sub in &task.subtasks {
                 lines.extend(flow(vec![subtask_line(&task.id, sub)], width, 2));
+            }
+        }
+        lines
+    }
+
+    fn todo_lines(&self, task: &Task, width: u16) -> CardLines {
+        let mut lines = Vec::new();
+        let expanded = self.ui.todo_expanded.contains(&task.id);
+        let mut items = Vec::new();
+        if !task.todo.is_empty() {
+            let arrow = if expanded { "▾" } else { "▸" };
+            let count = TodoCount::of(&task.todo);
+            items.push(button(
+                &format!("{arrow} Todo ({}/{})", count.done, count.total()),
+                Control::TodoToggle(task.id.clone()),
+                false,
+            ));
+            if let Some(active) = task.todo.iter().find(|t| t.status == TodoStatus::Active) {
+                items.push(text(&format!("▶ {}", active.text), Style::default()));
+            }
+        }
+        if let Some(waiting) = &task.waiting_on {
+            items.push(text(
+                &format!("waiting: {waiting}"),
+                Style::default().fg(AMBER),
+            ));
+        }
+        if items.is_empty() {
+            return lines;
+        }
+        lines.extend(flow(items, width, 0));
+        if expanded {
+            for todo in &task.todo {
+                let (marker, style) = todo_marker(todo.status);
+                lines.extend(flow(
+                    vec![text(marker, style), text(&todo.text, style)],
+                    width,
+                    2,
+                ));
             }
         }
         lines
@@ -799,6 +839,18 @@ fn pr_line(owner: &TaskId, pr: &Pr) -> Item_ {
         )],
         control: Some(Control::PrLine(owner.clone(), pr.url.clone())),
         gap: 1,
+    }
+}
+
+fn todo_marker(status: TodoStatus) -> (&'static str, Style) {
+    match status {
+        TodoStatus::Done => ("✓", Style::default().fg(DONE)),
+        TodoStatus::Active => ("▶", Style::default().fg(ACCENT)),
+        TodoStatus::Pending => ("○", Style::default()),
+        TodoStatus::Dropped => (
+            "✗",
+            Style::default().fg(DIM).add_modifier(Modifier::CROSSED_OUT),
+        ),
     }
 }
 

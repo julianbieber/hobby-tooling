@@ -11,7 +11,7 @@ use ratatui::layout::Rect;
 use super::*;
 use crate::app::Action;
 use crate::model::project::Project;
-use crate::model::task::{GitInfo, Pr, PrStatus, Repo, SubtaskRef};
+use crate::model::task::{GitInfo, Pr, PrStatus, Repo, SubtaskRef, Todo, TodoStatus};
 use crate::session::Session;
 use crate::testkit::{find, row, screen};
 use crate::widgets::{ACCENT, SIDEBAR_COLS};
@@ -43,6 +43,8 @@ pub(crate) fn task(name: &str) -> Task {
         last_active: None,
         coordinator: None,
         phase: None,
+        todo: Vec::new(),
+        waiting_on: None,
         session_name: String::new(),
     }
 }
@@ -90,6 +92,39 @@ fn id(name: &str) -> TaskId {
 fn summary(buf: &Buffer) -> String {
     let (_, y) = find(buf, "Work", None, SIDEBAR_COLS);
     row(buf, y)
+}
+
+// Pins the todo line on a card: counts and the active step collapsed, waiting_on beside them, and
+// the toggle expanding to every item.
+#[test]
+fn todo_line_shows_progress_and_expands() {
+    let mut a = task("task-a");
+    a.waiting_on = Some("answer GATE C".into());
+    a.todo = [
+        ("write the test", TodoStatus::Done),
+        ("fix it", TodoStatus::Active),
+        ("ship it", TodoStatus::Pending),
+    ]
+    .into_iter()
+    .map(|(text, status)| Todo {
+        text: text.into(),
+        status,
+    })
+    .collect();
+    let mut view = view(vec![a]);
+
+    let buf = frame(&mut view);
+    let shown = screen(&buf);
+    assert!(shown.contains("▶ fix it"), "{shown}");
+    assert!(shown.contains("waiting: answer GATE C"), "{shown}");
+    assert!(!shown.contains("ship it"), "collapsed by default: {shown}");
+
+    let toggle = find(&buf, "[▸ Todo (1/3)]", None, 0);
+    assert_eq!(click(&mut view, toggle), None);
+    let shown = screen(&frame(&mut view));
+    assert!(shown.contains("▾ Todo (1/3)"), "{shown}");
+    assert!(shown.contains("✓ write the test"), "{shown}");
+    assert!(shown.contains("○ ship it"), "{shown}");
 }
 
 // Pins that every click runs the control drawn under the pointer: card selection, the PR toggle
