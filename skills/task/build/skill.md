@@ -113,9 +113,14 @@ represents the implemented change, never a plan.
 
    **`is_subtask`** marks a task this pipeline created. It is written into the
    seeded state file, never inferred, and it permanently skips `assess-split` —
-   the split depth is exactly one. **`split`** records the one-time assessment so
-   it is never re-asked, and **`subtasks`** lists what it produced; both are
-   absent until `assess-split` runs.
+   the split depth is exactly one for the subtasks GATE S creates. A subtask cut
+   later with `/subtask` is a barebones task with no state file: it is picked up
+   when someone writes its brief and runs `/task:build` there, and that session
+   assesses it like any new task. **`split`** records the one-time assessment so
+   it is never re-asked; it is absent until `assess-split` runs. What a split
+   produced is recorded in this task's `subtasks.json`, written by `hwt
+   subtask`, and nowhere else. **`evidence`**, **`commits`** and **`pr`** are
+   written in `implement` and `review`, and are what `pr` commits and opens.
 
    **Migrate an old record** before anything else, and say so in one line: a
    phase of `await-hmml-review` or `revise` becomes `implement` (its annotated
@@ -126,7 +131,8 @@ represents the implemented change, never a plan.
    `split` record and a phase past `plan` gets
    `split: {"outcome": "none", "reason": "task already in flight"}` rather
    than a back-filled assessment: work already under way is split, when it
-   needs to be, by `/subtask` taking its commits.
+   needs to be, by `/subtask` taking its commits. A `subtasks` key is dropped
+   — `subtasks.json` is the record.
 
 4. **Starting phase**, in this precedence: `phase: assess-split` outranks
    everything below — the subtask question is answered before any planning, and
@@ -140,7 +146,8 @@ represents the implemented change, never a plan.
    branch → `done`.
 
    **`phase: handed-off` is terminal.** This task's work lives in its subtasks
-   now. Print the `subtasks` list with the `hcdev wt <task>` command for each,
+   now. Print the entries of this task's `subtasks.json` with the `hcdev wt
+   <task>` command for each,
    remind me that each one runs its own `/task:build`, and end the turn. Do not
    plan, implement, or open a PR here — this task owns no code.
 
@@ -292,20 +299,23 @@ Only after I approve the decomposition. Per approved subtask, in order:
    ```json
    { "phase": "plan", "is_subtask": true, "brief_source": "description",
      "brief": "<the full brief>", "no_hmml": false, "no_context": false,
-     "todo": [], "waiting_on": null }
+     "todo": [], "waiting_on": null,
+     "written": "<RFC 3339>", "phase_since": "<RFC 3339>" }
    ```
    `is_subtask: true` is what bounds the depth at one — without it the subtask's
    own session would assess a split of its own.
 
 Then, once per task:
 
-3. Record every subtask under `subtasks` with `task`, `goal` and `created`, set
-   `split: {"outcome": "split", …}` and `phase: handed-off`, and write the state
-   file.
+3. Set `split: {"outcome": "split", …}` and `phase: handed-off`, and write the
+   state file. The subtasks themselves are already recorded: `hwt subtask`
+   wrote each one to `subtasks.json`.
 4. Run `journal:write` once, recording the decomposition and *why* each cut fell
    where it did. The rejected candidates belong here too — that reasoning is the
    part that would otherwise be lost, and the subtask journals will not have it.
-5. Open the subtasks worked now: `hcdev tab <name>` for each. Print the
+5. Open the subtasks worked now, one call each:
+   `nu -c "use ~/.config/nushell/hcdev.nu *; hcdev tab <name>"` — `hwt subtask
+   --tab` only records `tab: true`, so this is what opens the tab. Print the
    handoff: each subtask with its worktree path, now (its tab is open) or
    postponed (`hcdev tab <name>` or `hcdev wt <name>` opens it later), a note
    that `hdash` lists them under this task's card, and a reminder that each
@@ -664,9 +674,9 @@ ______________________________________________________________________
   GATE C, and what I answer there is recorded verbatim: no phase and no
   sub-skill may smooth it into prose of yours.
 - **A subtask is a separate deliverable; this pipeline is one branch.** Work that
-  wants its own worktree, branch and PR is a subtask, decided once at GATE S back
-  before this branch had commits. Once it does, the answer is to finish this task
-  and write the rest up as issues with `/issue-create`.
+  wants its own worktree, branch and PR is a subtask. GATE S asks once, before
+  planning; work found later is split out with `/subtask`, which can take this
+  branch's commits whole (`hwt subtask --take`).
 - If artifacts and the state file disagree, trust the artifacts, say so, and
   correct the state file.
 - If I ask for something off-pipeline mid-run, handle it, then re-anchor on the

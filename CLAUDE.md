@@ -1372,9 +1372,11 @@ default branch, never from the parent's, so its PR holds only its own work;
 what the parent already committed reaches it as whole commits (`hwt subtask
 --take`), with the parent rebased onto the subtask's branch so each commit lands
 in exactly one PR. That is what lets a split happen after work has started,
-where the gate used to refuse. Depth is bounded at one by `is_subtask`
-in the seeded state file rather than by asking the model to remember. Most tasks
-are one task, and the phase is expected to say so in a line.
+where the gate used to refuse. Depth is bounded at one by `is_subtask` in the
+state file `handed-off` seeds for the subtasks GATE S creates; a `/subtask` is a
+barebones task with no state file until someone writes its brief and runs
+`/task:build` there. Most tasks are one task, and the phase is expected to say
+so in a line.
 
 ## Installing
 

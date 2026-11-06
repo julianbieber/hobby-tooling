@@ -5,7 +5,7 @@
 | Type         | skill                                                                  |
 | Install path | `~/.claude-hobby/commands/task/build.md` → `/task:build`               |
 | Owner        | @julianbieber                                                          |
-| Dependencies | `journal:resume`, `hmml-extract`, `comment-pass`, `structure`, `subtask`, `journal:write` |
+| Dependencies | `journal:resume`, `hmml-extract`, `comment-pass`, `structure`, `journal:write`; nushell `hwt subtask`, `hcdev tab`; `hcoord ci`; `gh` |
 | Status       | experimental                                                           |
 | Supersedes   | `dev-flow`                                                             |
 
@@ -80,8 +80,11 @@ subtask's, so the commits appear in exactly one PR and drop out of this
 branch once it merges. A split therefore works on a branch that has commits;
 uncommitted work has to be committed first, which the gate asks for rather
 than does. Each subtask is worked now, as a tab of this session, or
-postponed on its own card. Depth is bounded at one by `is_subtask` in the seeded state file rather than by
-asking the model to remember.
+postponed on its own card. Depth is bounded at one by `is_subtask` in the
+state file `handed-off` seeds, rather than by asking the model to remember. A
+subtask cut later with `/subtask` gets no state file: it is a barebones task
+until someone writes its brief and runs `/task:build` there. Subtasks are
+recorded once, in the parent's `subtasks.json`, which `hdash` reads.
 
 Most tasks are one task, and the phase is expected to say so in a line.
 
@@ -124,7 +127,7 @@ belong here.)
 | phase | runs | ends |
 |---|---|---|
 | `assess-split` | precondition check, the cut tested against the shaping rules | hard stop |
-| `handed-off` | `/subtask` per approved cut, seeded state, `journal:write` | terminal |
+| `handed-off` | `hwt subtask` per approved cut, seeded state, `journal:write` | terminal |
 | `plan` | Gate 0 prior-art/size, Gate 0b the repo's standards, brief, reading the code, then the business-context questions | hard stop |
 | `context` | records my answers verbatim, writes the plan file, seeds `todo` | falls through |
 | `implement` | the change from the plan, run + test, the repo's CI workflows run locally | falls through |
@@ -154,7 +157,7 @@ prunes stale symlinks on the next run.
 
 ```
 /task:build "make the spawner respect the wave budget"
-/task:build #42
+/task:build --issue
 /task:build --notes
 /task:build implement
 /task:build context          # re-open the questions and rebuild off fuller answers
