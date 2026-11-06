@@ -1,4 +1,4 @@
-//! A goal file — the UX spec a run is judged against — read into its screens,
+//! A goal file — the UX spec a run is built and accepted against — read into its screens,
 //! scenarios and widgets, and the checks that hold between them.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -7,7 +7,7 @@ use std::process::ExitCode;
 
 use crate::model::Coordinator;
 
-/// One `### <name> (<qualifier>)` under `## Screens`, with the heading and everything
+/// One `### <name> (<qualifier>)` under `## Screens` or `## Project on disk`, with the heading and everything
 /// beneath it kept verbatim so a brief can quote the drawing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Screen {
@@ -85,8 +85,6 @@ pub struct Finding {
 
 const REQUIRED_SECTIONS: [&str; 5] = ["Intent", "Decisions", "Screens", "Scenarios", "Widgets"];
 
-/// Sections whose text is a person's words recorded verbatim; a `?` there is
-/// theirs to ask, not a guess left in the goal.
 const VERBATIM_SECTIONS: [&str; 2] = ["Intent", "Decisions"];
 
 /// Parse the goal's text. Never fails: a malformed file parses to a `Goal` whose
@@ -141,7 +139,7 @@ pub fn parse(text: &str) -> Goal {
                     d.text.push('\n');
                 }
             }
-            "Screens" => {
+            "Screens" | "Project on disk" => {
                 if let Some(head) = raw.strip_prefix("### ") {
                     let (name, qualifier) = split_qualifier(head);
                     goal.screens.push(Screen {
@@ -282,7 +280,7 @@ pub fn lint(goal: &Goal) -> Vec<Finding> {
             Some(name) if !screen_names.contains(name) => out.push(Finding {
                 line: s.line,
                 message: format!(
-                    "{} names screen `{name}`, which `## Screens` does not have",
+                    "{} names screen `{name}`, which neither `## Screens` nor `## Project on disk` has",
                     s.id
                 ),
             }),
@@ -335,16 +333,37 @@ pub fn lint(goal: &Goal) -> Vec<Finding> {
 }
 
 /// The checks between a goal and the `tasks.json` split from it: every scenario is
-/// owned by exactly one task, and every task owns at least one scenario.
+/// owned by exactly one task, and every task owns at least one scenario — unless its
+/// `note` declares `enabling -> <task>`, naming another task in the list that has it
+/// in `depends_on`.
 pub fn lint_tasks(goal: &Goal, tasks: &Coordinator) -> Vec<Finding> {
     let mut out = Vec::new();
     let mut owners: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for task in &tasks.tasks {
         if task.scenarios.is_empty() {
-            out.push(Finding {
-                line: 0,
-                message: format!("task `{}` owns no scenario", task.task),
-            });
+            let problem = match task.enables() {
+                None => Some(
+                    "owns no scenario and its note declares no `enabling -> <task>`".to_owned(),
+                ),
+                Some(consumer) if consumer == task.task => {
+                    Some("is `enabling` for itself".to_owned())
+                }
+                Some(consumer) => match tasks.tasks.iter().find(|t| t.task == consumer) {
+                    None => Some(format!(
+                        "is `enabling` for `{consumer}`, which the list does not have"
+                    )),
+                    Some(c) if !c.depends_on.contains(&task.task) => Some(format!(
+                        "is `enabling` for `{consumer}`, which does not list it in `depends_on`"
+                    )),
+                    Some(_) => None,
+                },
+            };
+            if let Some(problem) = problem {
+                out.push(Finding {
+                    line: 0,
+                    message: format!("task `{}` {problem}", task.task),
+                });
+            }
         }
         for id in &task.scenarios {
             owners
@@ -692,6 +711,49 @@ mod tests {
         let f = lint(&parse(&text));
         assert_eq!(f.len(), 1);
         assert!(f[0].message.contains("editor.other"));
+    }
+
+    // A directory tree is a screen too, so a scenario must be able to name one drawn
+    // under `## Project on disk` rather than `## Screens`.
+    #[test]
+    fn a_scenario_may_name_a_screen_under_project_on_disk() {
+        let text = CLEAN
+            .replace(
+                "## Screens\n",
+                "## Project on disk\n### project.tree (target)\n    materials/\n## Screens\n",
+            )
+            .replace(
+                "screen: editor.main\n    1. click",
+                "screen: project.tree\n    1. click",
+            );
+        let goal = parse(&text);
+        assert_eq!(lint(&goal), vec![]);
+        assert!(goal.screens[0].text.contains("materials/"));
+    }
+
+    // Shaping rule 1's labelled escape: a task owning no scenario passes only when it
+    // names its consumer and that consumer waits for it, so it is done before the
+    // consumer starts.
+    #[test]
+    fn an_enabling_task_passes_only_when_its_consumer_depends_on_it() {
+        let goal = parse(CLEAN);
+        let check = |provider_note: &str, consumer_depends: &str| {
+            let tasks: Coordinator = serde_json::from_str(&format!(
+                r#"{{"project":"p","blurb":"b","tasks":[
+                    {{"task":"b-input","title":"t","note":"{provider_note}"}},
+                    {{"task":"b-one","title":"t","scenarios":["S1","S2"],"depends_on":[{consumer_depends}]}}]}}"#
+            ))
+            .unwrap();
+            lint_tasks(&goal, &tasks)
+        };
+        assert_eq!(check("enabling -> b-one", r#""b-input""#), vec![]);
+        let not_waiting = check("enabling -> b-one", "");
+        assert_eq!(not_waiting.len(), 1);
+        assert!(not_waiting[0].message.contains("depends_on"));
+        let missing = check("enabling -> b-gone", r#""b-input""#);
+        assert!(missing[0].message.contains("does not have"));
+        let undeclared = check("provides the text input", r#""b-input""#);
+        assert!(undeclared[0].message.contains("owns no scenario"));
     }
 
     // The split is checked from both sides: an orphan scenario is work that will

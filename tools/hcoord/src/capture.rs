@@ -1,5 +1,5 @@
-//! Capturing the screen a `hand` scenario names, as the one artefact a judgement pass
-//! looks at: a png in the task's notes directory, whatever the screen was made of.
+//! Capturing the screen a `hand` scenario names as a png in the task's notes
+//! directory, whatever the screen was made of.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};

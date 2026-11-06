@@ -45,9 +45,13 @@ struct State<'a> {
 /// capture next to the goal. `dir` is the coordinator's notes directory and `goal_path`
 /// the goal file, both as they should be recorded; `now` is seconds since the epoch.
 ///
-/// Fails, writing nothing, when the task owns no scenario, the goal or its split fails
-/// `lint` (an open `?` included — a goal with a question left must not seed a run), or an
-/// owned scenario is not in the goal.
+/// A task owning no scenario is seeded only as the split's `enabling` task: its
+/// `acceptance` says there are no checks and its PR's CI is the acceptance, and its brief
+/// quotes the scenarios of the task it enables as what it unlocks.
+///
+/// Fails, writing nothing, when the goal or its split fails `lint` (an open `?` included —
+/// a goal with a question left must not seed a run; a scenario-less task that is not a
+/// valid `enabling` one included), or an owned scenario is not in the goal.
 pub fn seed(
     dir: &Path,
     coord: &Coordinator,
@@ -56,9 +60,6 @@ pub fn seed(
     goal_text: &str,
     now: i64,
 ) -> Result<Seeded, String> {
-    if entry.scenarios.is_empty() {
-        return Err(format!("task {} owns no scenario", entry.task));
-    }
     let parsed = goal::parse(goal_text);
     let mut findings = goal::lint(&parsed);
     findings.extend(goal::lint_tasks(&parsed, coord));
@@ -78,17 +79,38 @@ pub fn seed(
             lines.join("\n")
         ));
     }
-    let acceptance = goal::show_text(&parsed, &entry.scenarios)
-        .map_err(|missing| format!("no such scenario: {}", missing.join(", ")))?;
+    let show = |ids: &[String]| {
+        goal::show_text(&parsed, ids)
+            .map_err(|missing| format!("no such scenario: {}", missing.join(", ")))
+    };
+    let unlocks = enabled(coord, entry)?;
+    let acceptance = match unlocks {
+        None => show(&entry.scenarios)?,
+        Some(consumer) => format!(
+            "None: `{}` owns no scenario; it is `enabling` for `{}`. There are no acceptance \
+             checks — its pull request's checks going green is the acceptance.\n",
+            entry.task, consumer.task
+        ),
+    };
+    let unlocked = unlocks.map(|c| show(&c.scenarios)).transpose()?;
+    let relevant: &[String] = unlocks.map_or(&entry.scenarios, |c| &c.scenarios);
 
     let selected: Vec<&Decision> = parsed
         .decisions
         .iter()
-        .filter(|d| entry.scenarios.iter().any(|id| d.names(id)) || d.names(&entry.task))
+        .filter(|d| relevant.iter().any(|id| d.names(id)) || d.names(&entry.task))
         .collect();
 
     let written = clock::rfc3339_utc(now);
-    let brief = brief(coord, entry, goal_path, &parsed, &selected, &acceptance);
+    let brief = brief(
+        coord,
+        entry,
+        goal_path,
+        &parsed,
+        &selected,
+        &acceptance,
+        unlocks.zip(unlocked.as_deref()),
+    );
     let state = State {
         phase: "acceptance",
         auto: true,
@@ -191,11 +213,11 @@ fn try_run(dir: &Path, task: &str, force: bool) -> Result<String, String> {
         .map_err(|e| format!("cannot create {}: {e}", notes.display()))?;
     std::fs::write(&state_path, &seeded.state)
         .map_err(|e| format!("cannot write {}: {e}", state_path.display()))?;
-    let mut line = format!(
-        "seeded {}: {STATE_FILE} ({})",
-        notes.display(),
-        entry.scenarios.join(", ")
-    );
+    let owned = match entry.enables().filter(|_| entry.scenarios.is_empty()) {
+        Some(consumer) => format!("enabling -> {consumer}"),
+        None => entry.scenarios.join(", "),
+    };
+    let mut line = format!("seeded {}: {STATE_FILE} ({owned})", notes.display());
     if let Some(context) = &seeded.context {
         std::fs::write(&context_path, context)
             .map_err(|e| format!("cannot write {}: {e}", context_path.display()))?;
@@ -214,6 +236,7 @@ fn brief(
     goal: &Goal,
     selected: &[&Decision],
     acceptance: &str,
+    unlocks: Option<(&TaskEntry, &str)>,
 ) -> String {
     let mut sections: Vec<String> = Vec::new();
 
@@ -264,18 +287,29 @@ fn brief(
     sections.push(format!("## This task\n\n{}", this.join("\n")));
 
     sections.push(format!("## Scenarios you own\n\n{}", acceptance.trim_end()));
+    let named = match unlocks {
+        None => &entry.scenarios,
+        Some((consumer, text)) => {
+            sections.push(format!(
+                "## Scenarios it unlocks (`{}`'s acceptance, not this task's)\n\n{}",
+                consumer.task,
+                text.trim_end()
+            ));
+            &consumer.scenarios
+        }
+    };
     sections.push(format!(
         "## Screens they name\n\n{}",
-        screens_named(goal, entry, goal_path)
+        screens_named(goal, named, goal_path)
     ));
     sections.push(format!("## Dependencies\n\n{}", dependencies(coord, entry)));
 
     sections.join("\n\n")
 }
 
-fn screens_named(goal: &Goal, entry: &TaskEntry, goal_path: &Path) -> String {
+fn screens_named(goal: &Goal, ids: &[String], goal_path: &Path) -> String {
     let mut names: Vec<&str> = Vec::new();
-    for id in &entry.scenarios {
+    for id in ids {
         if let Some(name) = goal
             .scenarios
             .iter()
@@ -303,6 +337,26 @@ fn screens_named(goal: &Goal, entry: &TaskEntry, goal_path: &Path) -> String {
     } else {
         blocks.join("\n\n")
     }
+}
+
+fn enabled<'a>(coord: &'a Coordinator, entry: &TaskEntry) -> Result<Option<&'a TaskEntry>, String> {
+    if !entry.scenarios.is_empty() {
+        return Ok(None);
+    }
+    let consumer = entry
+        .enables()
+        .ok_or_else(|| format!("task {} owns no scenario", entry.task))?;
+    coord
+        .tasks
+        .iter()
+        .find(|t| t.task == consumer)
+        .map(Some)
+        .ok_or_else(|| {
+            format!(
+                "task {} is enabling for {consumer}, which the list does not have",
+                entry.task
+            )
+        })
 }
 
 fn dependencies(coord: &Coordinator, entry: &TaskEntry) -> String {
@@ -475,12 +529,32 @@ mod tests {
         );
     }
 
-    // Pins the refusal of a task that owns no scenario.
+    // Pins the refusal of a task that owns no scenario and declares no consumer.
     #[test]
     fn a_task_with_no_scenarios_is_refused() {
         let coord = list(r#"[{"task":"b-one","title":"One"}]"#);
         let e = seeded(&coord, 0).unwrap_err();
         assert!(e.contains("owns no scenario"), "{e}");
+    }
+
+    // Pins the seed of an `enabling` task: no checks of its own, CI as its acceptance,
+    // and the consumer's scenarios and decisions in its brief as what it unlocks.
+    #[test]
+    fn an_enabling_task_is_seeded_with_its_consumers_scenarios_as_context() {
+        let coord = list(
+            r#"[{"task":"b-input","title":"Input","note":"enabling -> b-one"},
+                {"task":"b-one","title":"One","scenarios":["S1","S2","S10"],"depends_on":["b-input"]}]"#,
+        );
+        let s = seeded(&coord, 0).unwrap();
+        let st = state(&s);
+        assert_eq!(st["scenarios"], serde_json::json!([]));
+        let acceptance = st["acceptance"].as_str().unwrap();
+        assert!(acceptance.contains("no acceptance checks"), "{acceptance}");
+        assert!(!acceptance.contains("### S1"));
+        let brief = st["brief"].as_str().unwrap();
+        assert!(brief.contains("## Scenarios it unlocks (`b-one`'s acceptance"));
+        assert!(brief.contains("### S1 open it"));
+        assert!(s.context.unwrap().contains("## about-s2"));
     }
 
     // Pins that a `?` left in the goal makes `seed` fail with the lint's finding.

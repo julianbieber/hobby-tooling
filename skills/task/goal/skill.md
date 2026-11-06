@@ -2,6 +2,7 @@
 description: Interview me toward a goal file — record my intent verbatim, capture the screens that exist, draft the target screens and scenarios with every guess marked, ask those questions open, record my answers verbatim — then split the scenarios into the coordinator's task list without filing anything
 argument-hint: '<blurb> [<intent>]'
 allowed-tools: Skill, Read, Write, Edit, Bash
+disallowed-tools: AskUserQuestion
 ---
 
 The one session where I work closely with the model, at the front of a body of
@@ -19,8 +20,10 @@ the check.
    of them is the question list.
 3. **Open where the answer is a picture.** No option list and no `Recommended`
    on a UX question. A closed question is for a binary technical choice only, and
-   says that it is one. `AskUserQuestion` is not available here on purpose: an
-   answer picked from options is not my words.
+   says that it is one. Never `AskUserQuestion`: an answer picked from options is
+   not my words. `disallowed-tools` removes it only for the turn that invokes this
+   skill — the restriction clears with my next message — so after the first gate
+   this rule is what holds it.
 4. **A screen that exists is captured, never drawn from the code.** Only a
    `(target)` screen is drawn.
 5. **Nothing is filed and nothing is built.** The output is `goal.md` and
@@ -61,14 +64,14 @@ nothing added.
 ## Step 2 — Current state, and the screens that exist
 
 Find how the app runs — the project's `justfile`, `README.md`, `Cargo.toml`
-binaries — and **print the command before running it**. Launch it detached, its
-output in the planning dir:
+binaries — and **print the command before running it**. Launch it detached,
+its output and process group in the planning dir:
 
 ```bash
-setsid -f sh -c '<run command> > <planning dir>/goal.log 2>&1'
+happ start <planning dir> '<run command>'
 ```
 
-Wait a few seconds and `head` the log; a build error is reported to me, not
+Wait a few seconds and `head` `<planning dir>/play.log`; a build error is reported to me, not
 repaired here. A project whose screens are all files or printed output launches
 nothing and says so in one line.
 
@@ -84,11 +87,13 @@ hcoord capture <planning dir> <screen name> --text <file>
 
 It writes `<planning dir>/screens/<name>.png` and prints the relative path. A
 screen name may hold letters, digits, `.`, `_` and `-`. Stop the app when the
-captures are taken (`pkill -f` on the launched command).
+captures are taken with `happ stop <planning dir>` — by its process group,
+never by a name pattern, which matches the calling shell too.
 
 Each capture becomes `### <name> (exists — screens/<name>.png)` under
 `## Screens`, its ASCII **transcribed from the picture**. A directory tree the
-intent is about is a screen too, under `## Project on disk`.
+intent is about is a screen too: `### <name> (exists)` or `(target)` under
+`## Project on disk`, which a scenario names like any other screen.
 
 `## Current state (<date>, captured before anything was asked)` is written from
 the code, in the areas the intent touches. It is the one part of the file that
@@ -103,8 +108,8 @@ Write the rest of the file to the format in `skills/task/goal/README.md`:
 - `## Scenarios`: `### S<n> <title>    screen: <name>`, numbered steps of one
   gesture each, exactly one `->` holding the single observation, and a
   `widgets:` line. `hand` on a line of its own **only** when no command can
-  produce the observation: it says the screen is worth a picture at judgement,
-  and is not a way out of acceptance;
+  produce the observation: it says the screen is worth a picture, and is not a
+  way out of acceptance;
 - `## Widgets`: one row per affordance a scenario names, `exists` as `yes`,
   `no` or `in feathers, not in this app`; anything not `yes` names what provides
   it;
@@ -158,8 +163,12 @@ On `split`, run `/task-split` over the intent and the scenarios. It files
 nothing.
 
 **Every scenario id is owned by exactly one task, and every task owns at least
-one** — that is what `hcoord goal lint --tasks` checks. A decision the split
-wants made first therefore cannot be a task here. The decisions of this work were
+one, except an `enabling` task** — that is what `hcoord goal lint --tasks`
+checks. A widget with `exists: no` becomes an `enabling` task, which owns no
+scenario: its `note` says `enabling -> <task>`, naming the task it unlocks, and
+that task lists it in `depends_on`, because the enabling task is done before the
+next one starts. Its acceptance is its PR's checks going green; `hcoord seed`
+writes that. A decision the split wants made first still cannot be a task here. The decisions of this work were
 made at GATE 1, which is what this session is for; a question still open is
 answered at that gate and not carried into the list as a scenario-less task the
 lint rejects.
@@ -171,9 +180,10 @@ Per task:
 | `task` | `<blurb>-<slug>`, lowercase `[a-z0-9-]`, at most 40 characters — no issue is filed yet, so no `gh-<n>` |
 | `topic` | the blurb |
 | `title` | one line |
-| `scenarios` | the owned ids |
-| `done_when` | names the ids and quotes each observation as the goal states it |
-| `depends_on` | task names, ordered so a widget that does not exist is provided before the scenario needing it, with `enabling -> <task>` in `note` |
+| `scenarios` | the owned ids; none for an `enabling` task |
+| `done_when` | names the ids and quotes each observation as the goal states it; for an `enabling` task, the widget it provides and that its PR's checks are green |
+| `depends_on` | task names; the task an `enabling` one unlocks lists it here |
+| `note` | `enabling -> <task>` on an `enabling` task |
 | `status` | `"todo"` |
 
 Create `~/fun_repos/hobby-mimisbrunnr/notes/<project>/coordinator/<blurb>/` when
@@ -209,5 +219,4 @@ new). Never commit the notes repo.
 - **No issue is filed and no code is written.**
 - **`Current state` is the only section written from the code.** A `(target)`
   screen is drawn and never captured.
-- **This skill stops at the list.** Running it is `/task:coordinate`, and
-  judging the result is `/task:judge`.
+- **This skill stops at the list.** Running it is `/task:coordinate`.

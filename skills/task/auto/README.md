@@ -45,9 +45,8 @@ It used to be `pkill -f` on the command, which matches the calling shell too,
 since the pattern is in that shell's own command line — the same exit-144
 failure `hcdev close` records in `CLAUDE.md`. `happ` records the process group
 at launch and kills that, so `cargo run` and the binary it spawns stop together
-and nothing else does. It is a script rather than a paragraph so `/task:goal`
-and `/task:judge`, which launch an app the same way, can use the same
-mechanism — `## app-lifecycle` in the auto-stage notes asked for whichever
+and nothing else does. It is a script rather than a paragraph so `/task:goal`,
+which launches an app the same way, can use the same mechanism — `## app-lifecycle` in the auto-stage notes asked for whichever
 option "leads to more consistency and faster execution by the agent".
 
 ## Two processes, because context is the cost

@@ -27,11 +27,6 @@ hcoord seed <coordinator notes dir> <task> [--force]       write a task's build-
 hcoord capture <task notes dir> <scenario> --window <name> | --text <file>
                                                            write screens/<scenario>.png for a hand
                                                            scenario: an X11 window, or text rendered
-hcoord judge list <coordinator notes dir>                  the scenarios to judge, hand ones first
-hcoord judge show <coordinator notes dir> <scenario>       one scenario, its screens and its capture
-hcoord judge record <coordinator notes dir> <scenario> <ok|wrong|tune>
-                    [--words <file|->] [--follow-up <text>]
-                                                           write the verdict into judgement.md
 ```
 
 ## `tui` shows `tasks.json` and nothing else
@@ -254,14 +249,18 @@ failing the call.
 `hcoord` is its own workspace, and `hdash` reads the `status` field of
 `tasks.json` with `serde_json::Value` rather than depending on this crate.
 
-## `goal` reads the UX spec a run is judged against
+## `goal` reads the UX spec a run is built and accepted against
 
 A goal file (`skills/task/goal/README.md` has the format) is what a coordinator's
 tasks are split from: each task's `scenarios` names the ids it owns, and the
 coordinator's `goal` names the file. `lint` checks the file on its own — every
 scenario on a drawn screen, one observation each, every widget it names in the
 table, no `?` left — and with `--tasks` that every scenario has exactly one
-owner and every task at least one scenario. `show` prints scenarios verbatim so a
+owner and every task at least one scenario. The one task allowed none is an
+`enabling` one: its `note` says `enabling -> <task>`, and that task is in the list
+with it in `depends_on`, so it is done before the task it enables starts. A
+`### <name> (exists|target)` under `## Project on disk` is a screen like one under
+`## Screens`, so a scenario can name a directory tree. `show` prints scenarios verbatim so a
 brief quotes them rather than paraphrasing. Both are plain text with `file:line`
 findings and exit 1 when there is one; nothing here is JSON because a person
 reads it.
@@ -279,8 +278,13 @@ also writes `business-context.md` with the goal's decision blocks that name the
 task or one of its scenarios as a whole word; when none does, no such file is
 written.
 
-It refuses, writing nothing, a goal that fails `lint` (an open `?` included), a
-task that owns no scenario, a list with no `goal`, and a task whose notes already
+An `enabling` task is seeded with no scenarios and an `acceptance` saying it has no
+checks — its PR's CI going green is the acceptance — and its brief quotes the
+scenarios of the task it enables under *Scenarios it unlocks*, with their screens
+and the decisions naming them, as what it is for.
+
+It refuses, writing nothing, a goal that fails `lint` (an open `?` included, and a
+scenario-less task that is not a valid `enabling` one), a list with no `goal`, and a task whose notes already
 hold a `build-task.json` — `--force` overwrites both files. It makes no network
 call.
 
@@ -291,8 +295,7 @@ call.
 path. `verify` calls it for each scenario a goal marks `hand`, and records the
 path on the check as `screen`.
 
-The artefact is always a png because the pass that judges a run looks at pictures.
-The two sources are there because a goal's screens are of two kinds: a window of
+The artefact is always a png. The two sources are there because a goal's screens are of two kinds: a window of
 the running application, or a file or a command's output. A png of rendered text is
 still the picture. `--text -` reads standard input, so `<cmd> | hcoord capture …
 --text -` captures a command's output without a temporary file.
@@ -303,28 +306,3 @@ one visible window is refused rather than guessed at, because a capture of the w
 window is wrong silently. A failed capture writes nothing and exits 1; `verify`
 records the failure as the check's `note` and does not fail the run, since the
 scenario was one nobody could run in the first place.
-
-## `judge` is the shape of the pass; the words are the skill's
-
-`hcoord judge list | show | record` is what `/task:judge` calls once a run is
-finished. The order the scenarios are judged in — hand ones first, then the goal's
-own — the lookup of each one's captured screen, and the format of `judgement.md`
-are here rather than in the prompt because a prompt re-derives them wrongly on
-every run. What stays in the skill is what only a conversation can do: asking me,
-and turning my words into a follow-up line or a changed default.
-
-The capture shown for a scenario is the `screen` its task recorded on the
-`acceptance_result` check in `build-task.json`, and failing that
-`screens/<id>.png` in the task's notes directory.
-
-`judgement.md` is written in the goal's scenario order however the scenarios were
-judged, because it is read afterwards as a report on the goal. `record` on a
-scenario already judged replaces its block, and the follow-up its earlier answer
-proposed with it. `--words -` reads the answer from standard input, so it reaches
-the file without passing through a shell's quoting. A `wrong` or a `tune` with no
-words is refused: the follow-up line and the tuning commit are both made from those
-words.
-
-The goal is not linted at judgement time, unlike at `seed` time. The run has already
-been built from it, and refusing to record a verdict because a `?` was left in the
-file would lose the one thing the pass exists to keep.

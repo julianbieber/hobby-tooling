@@ -1307,7 +1307,7 @@ them. `just check-placeholders` no longer exists to find them:
 
 [bevy-website#2551]: https://github.com/bevyengine/bevy-website/pull/2551
 
-## A goal file is what an unattended run is judged against
+## A goal file is what an unattended run is built and accepted against
 
 Seven coordinator runs and 48 merged PRs produced work that matched its
 description and missed what I pictured. The description I write is three to
@@ -1337,17 +1337,32 @@ open.
 The first goal (`bevy_pbr_generator`, texture projects, 2026-09-19) added four
 sections the plan had not foreseen — Decisions inside the goal, Current state,
 a directory tree as a screen, Left to the build — which is why the format was
-written by writing one before any skill automates it. The four pieces that
-automate it now exist: the interview (`/task:goal`), the seed from scenarios
-(`hcoord seed`), `hand` in `verify`, and the judgement pass (`/task:judge`).
+written by writing one before any skill automates it. The three pieces that
+automate it exist: the interview (`/task:goal`), the seed from scenarios
+(`hcoord seed`), and `hand` in `verify`.
+
+A fourth, the judgement pass (`/task:judge`, `hcoord judge`), walked a finished
+run scenario by scenario and recorded `ok` / `wrong` / `tune` in
+`judgement.md`. It was dropped: it was meant to structure looking at the result,
+and in practice it was more cumbersome than that is.
 
 `/task:goal` encodes two decisions. **Its questions are asked open**, with no
-option list: `AskUserQuestion` is not in its `allowed-tools`, because an answer
-picked from offered options is the model's choosing and not my words, and
-Decisions are recorded verbatim. **Decisions are made at that gate and never
-become a task in the split**: `hcoord goal lint --tasks` requires every task to
-own a scenario, so a decision task would be rejected, and a question still open
-by the time of the split is a question the interview did not finish.
+option list, because an answer picked from offered options is the model's
+choosing and not my words, and Decisions are recorded verbatim. The skill lists
+`AskUserQuestion` under `disallowed-tools`, but that removes it only for the
+turn that invokes the skill — `allowed-tools` never restricted anything, it
+only pre-approves — so after the first gate the skill's own rule is what keeps
+it out. **Decisions are made at that gate and never become a task in the
+split**: `hcoord goal lint --tasks` requires every task to own a scenario, so a
+decision task would be rejected, and a question still open by the time of the
+split is a question the interview did not finish.
+
+The one task allowed to own no scenario is an **`enabling`** one — Task shaping
+rule 1's labelled escape. Its `note` says `enabling -> <task>`, the lint checks
+that the named task is in the list and has it in `depends_on`, because the
+enabling task is done before the next one starts, and `hcoord seed` gives it no
+acceptance checks: its PR's CI going green is the acceptance. Its brief quotes
+the scenarios it unlocks, marked as the other task's.
 
 ## Task shaping lives in CLAUDE.md, not in the skill that applies it
 
