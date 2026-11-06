@@ -1440,5 +1440,6 @@ and unsure, check `echo $CLAUDE_CONFIG_DIR`.
 
 ## Installing
 
-`just` lists every recipe. `just install` runs them all. Each `install-*` recipe is
-independently re-runnable.
+`just` lists every recipe. There is no single `install`: `just bootstrap` runs the
+core set, `just bootstrap-full` adds every optional Rust build and the MCP servers,
+and each `install-*` recipe is independently re-runnable.
