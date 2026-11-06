@@ -16,10 +16,11 @@ really one task; takes a brief from a description, the task's `issue.md`, or the
 task notes; collects the business context only I have; writes a short plan and
 works it as a todo list; implements and tests; reads the implemented change back
 as an HMML delta derived from the diff; runs `/comment-pass` and `/structure`;
-stops for me to read the diff and the delta; then the PR and the journal entry.
+stops for me to read the diff, the delta and the proposed commit and PR
+messages; then commits, pushes, opens the PR and writes the journal entry.
 
-Three hard stops: the subtask assessment, the business-context questions, and
-the PR.
+Three hard stops: the subtask assessment (GATE S), the business-context
+questions (GATE C), and the review of the local changes (GATE 2).
 
 ## The delta is read after the code, not reviewed before it
 
@@ -130,9 +131,9 @@ belong here.)
 | `delta` | `/hmml-extract --against <merge-base>` over the units the diff touches | falls through |
 | `comments` | `/comment-pass` over the branch diff, matched against the recorded context | falls through |
 | `standards` | `/structure` on the target repo — ratchet a budget the change improved, try to fix one it broke | falls through |
-| `review` | prints the diff, evidence and comments for me to read | hard stop |
+| `review` | prints the diff, evidence, comments and the proposed commit and PR messages for me to read | hard stop |
 | `await-review` | nothing — I read the summary | `continue` |
-| `pr` | gathers the facts, opens the PR | falls through |
+| `pr` | commits the approved messages, pushes the task branch, opens the PR | falls through |
 | `ci` | `hcoord ci` on the PR, repairing a red check on the diff's own for at most three rounds | falls through, or stops when blocked |
 | `journal` | `journal:write` | `done` |
 
@@ -167,6 +168,11 @@ prunes stale symlinks on the next run.
 - Inferring the starting phase from artifacts is a guess when a task was worked on
   outside the pipeline.
 
-## TODO(jb-doc): why the pipeline stops exactly where it does
+## It commits once the change has been read
 
-<!-- What it should cover: what makes those three points the ones worth a hard stop. -->
+The pipeline commits only after GATE 2, on the task branch, and never the notes
+repo — `hwt sync` carries those. GATE 2 is where I review the local changes
+before the PR opens, so it shows the proposed commits and PR alongside the
+diff, and `continue` approves the messages along with the change. Several
+commits in one PR are fine. Nothing goes to the default branch except through a
+PR, unless I say otherwise in chat.

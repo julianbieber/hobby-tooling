@@ -1,7 +1,7 @@
 ---
 description: Run a task end to end as one human-gated pipeline with a recorded stage and a live todo list — assess once whether it splits into standalone subtasks, brief, the business context only I hold, a short plan, implement and test, read the implemented change back as an HMML delta derived from the diff, comment pass, code quality standards, my review, PR, journal
 argument-hint: '[<description> | --issue | --notes] [<phase>] [--no-hmml] [--no-context] [--no-split] [--resume-deep]'
-allowed-tools: Skill, Read, Write, Edit, AskUserQuestion, Bash(hobby-struct-parser:*), Bash(pwd:*), Bash(date:*), Bash(ls:*), Bash(rg:*), Bash(git branch:*), Bash(git -C * status:*), Bash(git -C * diff:*), Bash(git -C * log:*), Bash(git -C * rev-parse:*), Bash(git -C * ls-files:*), Bash(git -C * merge-base:*), Bash(git status:*), Bash(git diff:*), Bash(git log:*), Bash(git merge-base:*), Bash(gh pr list:*), Bash(gh pr view:*), Bash(gh issue view:*), Bash(gh issue list:*), Bash(gh repo view:*), Bash(hcoord ci:*), Bash(gh run list:*), Bash(gh run rerun:*)
+allowed-tools: Skill, Read, Write, Edit, AskUserQuestion, Bash(hobby-struct-parser:*), Bash(pwd:*), Bash(date:*), Bash(ls:*), Bash(rg:*), Bash(git branch:*), Bash(git -C * status:*), Bash(git -C * diff:*), Bash(git -C * log:*), Bash(git -C * rev-parse:*), Bash(git -C * ls-files:*), Bash(git -C * merge-base:*), Bash(git status:*), Bash(git diff:*), Bash(git log:*), Bash(git merge-base:*), Bash(git add:*), Bash(git commit:*), Bash(git push:*), Bash(gh pr list:*), Bash(gh pr view:*), Bash(gh pr create:*), Bash(gh repo view:*), Bash(hcoord ci:*), Bash(gh run list:*), Bash(gh run rerun:*), Bash(nu -c:*), Bash(cargo:*), Bash(just:*)
 ---
 
 Run a task **end to end** as one predictable, human-gated pipeline. The individual
@@ -35,13 +35,17 @@ represents the implemented change, never a plan.
    counts, and that is deliberately all of it. Do not add a review pass of your
    own, and do not print a critique of your own change at GATE 2; give me the
    diff, the delta and the evidence.
-2. **Never auto-commit** — not the source repo, not the notes repo where the
-   `.hmml` delta lives. That is my call, same contract as every sub-skill.
-   Read-only git and `gh pr list` are fine. You do write the
-   commit *message* when I ask for one, to the rule in `~/.claude-hobby/CLAUDE.md`
-   — terse, a record of the decisions, and **no justification you were not
-   given**. If a decision in the diff has no justification from my prompts or from
-   what we settled, ask rather than inventing one.
+2. **Commit the task branch only, and only after GATE 2.** On my `continue` at
+   GATE 2 the `pr` phase commits the change to this task's branch, pushes it and
+   opens the PR; a CI repair in `ci` commits and pushes the same way. Nothing is
+   committed before GATE 2, and **the notes repo is never committed** — the
+   state file, the `.hmml` delta, `business-context.md`, the journal: I run
+   `hwt sync` for that. Nothing is ever pushed to the default branch; every
+   change reaches it through a PR, unless I say otherwise in chat. Commit
+   messages follow the rule in `~/.claude-hobby/CLAUDE.md` — terse, a record of
+   the decisions, and **no justification you were not given**. If a decision in
+   the diff has no justification from my prompts or from what we settled, ask
+   rather than inventing one.
 3. **Never write a reason I did not give you.** The comment rule and the
    commit-message rule in `~/.claude-hobby/CLAUDE.md` both allow exactly three
    sources for a justification: my prompts, what we settled in discussion, or a
@@ -88,12 +92,11 @@ represents the implemented change, never a plan.
      "is_subtask": false,
      "split": { "assessed": "<YYYY-MM-DD>", "outcome": "none|split",
                 "reason": "<one line>" },
-     "subtasks": [
-       { "task": "<new task id>", "goal": "<one-line brief>",
-         "created": "<YYYY-MM-DD>" }
-     ],
      "size_budget": "", "prior_art": "",
      "context_questions": [], "context_recorded": null, "context_gaps": [],
+     "evidence": [ "<command run, and what it showed>" ],
+     "commits": [ { "subject": "<subject>", "body": "<body>" } ],
+     "pr": { "title": "<title>", "body": "<body>" },
      "todo": [ { "text": "<step>", "status": "pending" } ],
      "waiting_on": null,
      "ci_rounds": 0,
@@ -466,7 +469,8 @@ container or another OS, and carry the skipped ones into GATE 2. A failing step
 is fixed here like a failing test, so the diff I review is one CI is expected to
 pass. No workflows → nothing to run.
 
-Record the evidence, then fall through to `delta` without stopping.
+Record the evidence under `evidence`, one line per command run, then fall
+through to `delta` without stopping. **Commit nothing here.**
 
 ## Phase `delta`
 
@@ -573,35 +577,52 @@ ______________________________________________________________________
   written form of "something I said" and "something we settled", the two sources
   a justification may otherwise not be derived from;
 - the size against the Gate 0 budget, and by how much it was crossed;
-- *"Review the above. Say continue to open the PR, or tell me what to change."*
+- **the proposed commits** — the uncommitted changes cut into one or more
+  commits, each with the files it takes and its full message, to the
+  commit-message rule in `~/.claude-hobby/CLAUDE.md`. Several commits in one PR
+  are fine; cut one per decision when the diff holds more than one. A commit
+  that needs a justification no context handle or verified fact gives is asked
+  about here, not written;
+- **the proposed PR** — title and body, written to the PR rule (see `pr`);
+- *"Review the local changes and the messages above. Say continue to commit,
+  push and open the PR, or tell me what to change."*
 
-A change I ask for here goes back through `implement` and `delta` before the
-gate is printed again. End your turn.
+Record the proposals as `commits` and `pr` in the state file, so a resumed
+session opens exactly what I approved. A change I ask for here goes back
+through `implement` and `delta` before the gate is printed again; an edit to a
+message only rewrites the proposal. End your turn.
 
 ______________________________________________________________________
 
 ## Phase `pr` — on my go only
 
-Write the description to the rule in `~/.claude-hobby/CLAUDE.md`: a title in the
+**The PR rule**, which the proposal at GATE 2 is written to: a title in the
 commit-subject shape, then **What do we change** and **Why do we change** at one or
 two sentences each, then **How can you test it by hand** as an ordered bullet list
 whose last bullet says what I should see. No other sections, no `## AI use`, no
 empty section, no attribution.
 
 The *why* is sourced, not invented — from my prompts, from what we settled, or from
-something you verified in the `implement` phase. If you do not have one, ask before
-opening the PR.
+something you verified in the `implement` phase. If you do not have one, ask at
+GATE 2 rather than proposing one.
 
 The manual-test bullets come from what you actually ran in `implement`. If nothing
 there was run by hand, say so in one bullet and name what does cover it.
+
+On my `continue`, from the approved `commits` and `pr` in the state file:
+
+1. Make each commit in order — `git add` its files, `git commit` with its
+   message. The source repo only; the notes repo is never committed.
+2. `git push -u origin HEAD` — the task branch, never the default branch.
+3. `gh pr create --title '<title>' --body '<body>'` against the default branch.
 
 The `track-pr` hook records the PR to `prs.json`. If it did not fire, append the
 PR there yourself (create with `[]` first; never store the PR's live state).
 Set `phase: ci` and continue.
 
-Hobby repos are mine, so a PR is optional — for a small solo change, pushing to
-the default branch may be right. Ask if it is not obvious, and skip to `journal`
-when I say no PR.
+**Every change reaches the default branch through a PR.** Push to the default
+branch only when I say so in chat for this task, and then skip `ci` for
+`journal`.
 
 ## Phase `ci` — the PR is green before the pipeline ends
 

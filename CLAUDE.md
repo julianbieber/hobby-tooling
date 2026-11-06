@@ -478,10 +478,11 @@ stops. The mechanism is inert in a repo with no CI, which is every repo here
 `hobby-tooling` would change the merge gate for every task behind it, so it
 is deliberately not part of this change.
 
-**`/task:auto` commits, which `/task:build` never does.** A PR cannot open
-without commits and nobody is at the keyboard between the last gate and the PR,
-so the pipeline commits once after it, to the same message rule. The notes repo
-stays uncommitted.
+**`/task:auto` commits once, after its last gate.** A PR cannot open without
+commits and nobody is at the keyboard between the last gate and the PR, so the
+pipeline commits once after it, to the same message rule. `/task:build` commits
+too, after GATE 2, where the proposed commit and PR messages are shown with the
+local changes. Neither commits the notes repo.
 
 **An unattended run has no play gate; it runs its own acceptance.** A gate is
 worth having because a person reads what it prints, and in a coordinator's task
