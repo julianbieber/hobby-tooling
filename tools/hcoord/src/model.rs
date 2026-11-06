@@ -90,6 +90,22 @@ pub struct TaskEntry {
     pub updated: Option<String>,
 }
 
+impl TaskEntry {
+    /// The task this one is `enabling` for, as its `note` declares it with
+    /// `enabling -> <task>`; `None` when the note declares no such thing. Whether the
+    /// named task exists is not checked here.
+    pub fn enables(&self) -> Option<&str> {
+        let note = self.note.as_deref()?;
+        let (_, rest) = note.split_once("enabling ->")?;
+        let name = rest
+            .trim_start()
+            .split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')))
+            .next()?
+            .trim_end_matches('.');
+        (!name.is_empty()).then_some(name)
+    }
+}
+
 fn default_status() -> Status {
     Status::Todo
 }
@@ -279,9 +295,6 @@ pub struct AcceptanceCheck {
     /// `pass`, `fail` or `hand`. Wins over `pass` when both are present.
     #[serde(default)]
     pub state: Option<String>,
-    /// The captured screen of a `hand` check, relative to the task's notes directory.
-    #[serde(default)]
-    pub screen: Option<String>,
 }
 
 impl AcceptanceCheck {
@@ -649,6 +662,27 @@ impl BuildState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The split writes the declaration into a free-text note, so the consumer has to be
+    // found inside prose and end where the task name ends.
+    #[test]
+    fn enables_reads_the_consumer_out_of_the_note() {
+        let entry = |note: Option<&str>| TaskEntry {
+            note: note.map(str::to_owned),
+            ..serde_json::from_str(r#"{"task":"a","title":"t"}"#).unwrap()
+        };
+        assert_eq!(
+            entry(Some("enabling -> b-one, provides the input")).enables(),
+            Some("b-one")
+        );
+        assert_eq!(
+            entry(Some("widget first; enabling ->b-one.")).enables(),
+            Some("b-one")
+        );
+        assert_eq!(entry(Some("enabling ->")).enables(), None);
+        assert_eq!(entry(Some("careful")).enables(), None);
+        assert_eq!(entry(None).enables(), None);
+    }
 
     // Pins the defaults a hand-edited or freshly seeded list relies on: status and the
     // optional fields may all be absent.
