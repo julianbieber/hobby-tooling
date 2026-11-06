@@ -5,29 +5,28 @@
 | Type         | skill                                                                                                                                                                                                                 |
 | Install path | `~/.claude-hobby/commands/hmml-validate.md`                                                                                                                                                                                              |
 | Owner        | @julianbieber                                                                                                                                                                                                         |
-| Dependencies | HMML grammar (`lsps/hobby-mml-lsp/grammar.md`), per-task specs in the notes repo (`~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/`), `tree-extract` + `lsp-mcp`, `hmml-{extract,translate}` |
+| Dependencies | HMML grammar (`lsps/hobby-mml-lsp/grammar.md`), per-task specs in the notes repo (`~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/`), `tree-extract` + `lsp-mcp`, `hmml-extract` |
 | Status       | experimental                                                                                                                                                                                                          |
 
 ## Description
 
 Read-only **conformance / drift check**: does the implementation still do what
-its [`.hmml`](../../lsps/hobby-mml-lsp/grammar.md) spec says? This is the
-closing step of the HMML loop and the mirror of `hmml-translate`:
+its [`.hmml`](../../lsps/hobby-mml-lsp/grammar.md) spec says?
 
-- `hmml-extract` — code → a `.hmml` baseline
-- `hmml-translate` — an annotated `.hmml` → a code change
+- `hmml-extract` — code → a `.hmml` baseline, or with `--against` the branch's
+  change as a delta
 - **`hmml-validate` — code vs the current `.hmml` → a drift report** (edits
   nothing)
 
-A spec normally carries its task's change as `# +` / `# -` annotations on top of
-the baseline (grammar §10), and that splits the report in two: a `# +` claim is
+A spec may carry a change as `# +` / `# -` annotations on top of the baseline
+(grammar §10), and that splits the report in two: a `# +` claim is
 intent, so its absence before implementation is expected and its absence after is
 unfinished work; a `# -` line is behaviour the change removes, so finding it
 still in the code after implementation is a failure to conform. The annotations
 are never stripped — they stay after the change lands.
 
 Over time code and spec drift apart — someone changes the code and forgets the
-spec, or edits a spec but never translates it. Validate routes each spec claim
+spec, or edits a spec but never implements it. Validate routes each spec claim
 to the real code (via the module `@ path` anchors, `tree-extract`, and
 `lsp-mcp`) and reports, per section, one of four verdicts:
 
@@ -44,8 +43,8 @@ an invariant).
 
 Produces: a per-section verdict table + an overall CONFORMS/DRIFTED verdict,
 with a **recommended remediation for each drift — but performs none of it.** If
-the spec is the intent, it points you at `hmml-translate`; if the code is
-the truth, at `hmml-extract`. Deciding which side is right is your call.
+the spec is the intent, the code is changed to match; if the code is the truth,
+it points you at `hmml-extract`. Deciding which side is right is your call.
 
 ## Installation
 
@@ -66,9 +65,9 @@ ln -s ~/fun_repos/hobby-tooling/skills/hmml-validate/skill.md \
 
 Point it at a bare `unit` (or a `.hmml` path). It resolves to the spec in the
 current task's notes directory, reads the spec and the code, never writing
-either, and prints a drift report. Typical follow-ups it will recommend:
-`/hmml-translate <unit>` (make code match an intended spec) or
-`/hmml-extract` (refresh a spec the code has outgrown).
+either, and prints a drift report. Typical follow-ups it will recommend: a code
+change (the spec is the intent) or `/hmml-extract` (refresh a spec the code has
+outgrown).
 
 ## Known Limitations
 

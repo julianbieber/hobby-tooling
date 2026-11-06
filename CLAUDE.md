@@ -310,6 +310,14 @@ filter chips narrow the list (including by the `/task:build` / `/task:auto` phas
 task's session — it activates that window, so leftwm switches to its tag — or **Attach**
 when the session runs without one.
 
+A card also carries the session's **live plan**: `todo` and `waiting_on` from the same
+`build-task.json`, which `/task:build` and `/task:auto` keep current — a `▸ Todo (3/7)`
+toggle with the active step beside it, `waiting: <line>` in amber while a gate holds, and
+the whole list when expanded. It is the hobby half of work's `flow` record: the todos and
+the waiting line came over, the aspects did not, because a second PR here is a subtask
+(decided at GATE S) and the card already lists those. One session writes the file, so it
+needs none of work's `wt flow patch` locking.
+
 Cards carry an `idle 12m` / `busy 3m` badge from `hooks/session-state`, which writes one
 file per hobby-account Claude session under `$XDG_RUNTIME_DIR/hobby-session-state`. **Every
 Claude process counts** — a plain hcdev pane, both `/task:auto` stages, a coordinator's
@@ -653,8 +661,7 @@ threw away the thing the change was a change *to*: read afterwards, the file sai
 what the code should do and nothing said what it did. §10 makes the file keep the
 **baseline** — the unit as it is before the change — and write the change on top
 of it as `# +` / `# -` comment markers. Both versions in one file, the delta
-surviving a commit, and `/hmml-translate` told exactly what to add and remove
-instead of inferring it from `git diff` in the notes repo.
+surviving a commit.
 
 The markers are ordinary comments, so this is a convention, not grammar — which
 is precisely why `mml-parser/src/annotations.rs` exists. **No other pass sees
@@ -668,6 +675,18 @@ typically a `# +` on something the baseline itself already needs.
 indistinguishable from a plain baseline, and the spec is the record of what the
 task changed. The next task gets its baseline from a fresh extract, not from this
 file.
+
+**The delta is derived from the diff, not designed ahead of the code.** It used
+to be: `/task:build` annotated the intended change onto the baseline, reviewed
+it at GATE 1, and `/hmml-translate` implemented the markers. That was a double
+review — the plan, then the real diff — and the plan drifted from what was
+built, as it did at work. Now `/hmml-extract --against <ref>` writes the unit as
+the branch leaves it with what `git diff <ref>...HEAD` changed marked, after the
+code exists, and `/hmml-translate` is gone. The HMML exists for me to understand
+what the code change is doing, so it represents the implemented change; the file
+is regenerated whenever the diff moves and never maintained by hand. `/hmml-new`
+and `/hmml-review` stay as standalone tools for a spec I design by hand, and
+nothing in the pipeline runs them.
 
 **§10 is the one change spelling, which cost v2.2 its member delta.** A `@ <path>`
 type body's inline `+ streak: u32` / `- remaining` said the same thing a second
@@ -1051,12 +1070,10 @@ marker by marker after the code is written. That fails for a reason worth
 recording: it asks for a judgment about code they did not author, at the moment
 where the only honest answer is often *you tell me*.
 
-So the questions moved **before** the code. `/task:build` gains a
-business-context stage between the HMML baseline and the delta annotation
-(GATE C): the questions are derived from the goal read against what the code
-does today, before anything is designed, and the answers are recorded **verbatim**
-in `business-context.md` in the task notes. They then reach the delta, the plan,
-the code, and only last a comment.
+So the questions moved **before** the code. `/task:build` asks them at GATE C,
+after reading the brief and the code it will touch and before anything is
+designed, and the answers are recorded **verbatim** in `business-context.md` in
+the task notes. They then reach the plan, the code, and only last a comment.
 
 `/comment-pass` becomes a **matcher**. Two sources for a sentence and no third:
 a fact verified in the code, or a passage in the recorded context, compressed to

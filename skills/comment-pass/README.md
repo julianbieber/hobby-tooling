@@ -34,7 +34,7 @@ decides both.
 
 The pass may assert a reason it **verified in the code**, or one it **read in
 the recorded business context** — the `business-context.md` the `/task:build`
-pipeline writes at GATE C, in my own words, before the delta was designed. A
+pipeline writes at GATE C, in my own words, before the change was designed. A
 site that needs a *why* neither supplies is reported as a **context gap** with
 its `file:line`, never filled in.
 

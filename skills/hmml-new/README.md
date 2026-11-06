@@ -5,15 +5,14 @@
 | Type         | skill                                                                                                                                                           |
 | Install path | `~/.claude-hobby/commands/hmml-new.md`                                                                                                                                             |
 | Owner        | @julianbieber                                                                                                                                                   |
-| Dependencies | HMML grammar (`lsps/hobby-mml-lsp/grammar.md`), notes repo `~/fun_repos/hobby-mimisbrunnr`, `template{,-plugin,-system,-module}.hmml` (skill assets), `hmml-translate` |
+| Dependencies | HMML grammar (`lsps/hobby-mml-lsp/grammar.md`), notes repo `~/fun_repos/hobby-mimisbrunnr`, `template{,-plugin,-system,-module}.hmml` (skill assets) |
 | Status       | experimental                                                                                                                                                    |
 
 ## Description
 
 Scaffolds a skeleton [`.hmml`](../../lsps/hobby-mml-lsp/grammar.md) (Mental
 Model Language) spec for a **new** unit of behaviour — one that has no code yet
-— so I can edit it into the shape I want before `hmml-translate` turns it
-into code. This is the "building a new feature" entry to the HMML loop; its
+— so I can edit it into the shape I want and think the design through. This is the "building a new feature" entry to the HMML loop; its
 sibling `hmml-extract` is the "adjusting an existing feature" entry (code
 → `.hmml`).
 
@@ -40,8 +39,8 @@ Produces:
   task's notes dir. A new unit usually has no `source` block yet.
 
 Writes the `.hmml` and stops — reviewing, editing, and committing it are my job.
-The spec becomes real when I edit it and commit it (in the notes repo) as the
-baseline `hmml-translate` diffs against.
+It is a thinking aid, not a plan the code is generated from: once code exists,
+`/hmml-extract --against` describes what was actually built.
 
 ## Installation
 
@@ -63,7 +62,7 @@ ln -s ~/fun_repos/hobby-tooling/skills/hmml-new/skill.md \
 Give it a rough idea (it drafts a first-pass spec) or ask for a blank template
 to fill in yourself. Either way it writes
 `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/<unit>.hmml`; you
-then edit, commit, and run `/hmml-translate <unit>`.
+then edit it.
 
 ## Known Limitations
 
@@ -71,9 +70,8 @@ then edit, commit, and run `/hmml-translate <unit>`.
   point to react to and edit down; the modules, data model, and behavior are the
   model's guess from a one-line idea, never ground truth.
 - Writes and stops — it does not iterate with you, and it never runs `git add` /
-  `git commit` in the notes repo. The spec is only a translate baseline once
-  **you** commit it.
+  `git commit` in the notes repo.
 - A new unit typically has **no `source` block** until you know the target repo
-  and paths; without one, `hmml-translate` falls back to full generation.
+  and paths.
 - Output is checked with `hobby-mml-parser <path> --lint`; a clean lint means
   well-formed, not that the draft says the right thing.

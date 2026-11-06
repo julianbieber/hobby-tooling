@@ -60,8 +60,9 @@ v2.3 makes the spec hold **both** versions of the unit: the baseline it started
 from, and the change written on top of it as `# +` / `# -` comment markers
 (grammar §10). See [Change annotations](#change-annotations-grammar-10) below for
 the checks; the reason it is worth a convention is that the delta then survives
-being committed, and `/hmml-translate` is told what to add and remove instead of
-inferring it from git.
+being committed. `/hmml-extract --against <ref>` writes that delta from a
+branch's diff, so a change is read as a change to the mental model before
+merge.
 
 v2.4 adds the **detail layer**: `kind: module`, whose third section is `## api` —
 one `fn` signature per public function, the bullets describing it nested beneath

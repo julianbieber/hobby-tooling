@@ -1,6 +1,7 @@
 ---
-description: Analyze one unit of existing code and emit a .hmml (Mental Model Language) spec
-allowed-tools: Read, Grep, Glob, Write, Bash(ls:*), Bash(pwd:*), Bash(hobby-mml-parser:*), Bash(git -C * rev-parse:*), Bash(git rev-parse:*), mcp__tree-extract__build_graph, mcp__tree-extract__list_modules, mcp__tree-extract__get_neighbors, mcp__tree-extract__call_path, mcp__tree-extract__get_symbol, mcp__tree-extract__search_symbols, mcp__lsp-mcp__document_symbol, mcp__lsp-mcp__find_references, mcp__lsp-mcp__goto_definition, mcp__lsp-mcp__hover
+description: Analyze one unit of existing code and emit a .hmml (Mental Model Language) spec — a baseline of the code today, or with --against <ref> the branch's change as a # -/# + delta for reading it before merge
+argument-hint: '[<unit or file>] [--against <ref>]'
+allowed-tools: Read, Grep, Glob, Write, Bash(ls:*), Bash(pwd:*), Bash(hobby-mml-parser:*), Bash(git -C * rev-parse:*), Bash(git rev-parse:*), Bash(git -C * diff:*), Bash(git -C * show:*), Bash(git -C * merge-base:*), Bash(git diff:*), Bash(git show:*), Bash(git merge-base:*), mcp__tree-extract__build_graph, mcp__tree-extract__list_modules, mcp__tree-extract__get_neighbors, mcp__tree-extract__call_path, mcp__tree-extract__get_symbol, mcp__tree-extract__search_symbols, mcp__lsp-mcp__document_symbol, mcp__lsp-mcp__find_references, mcp__lsp-mcp__goto_definition, mcp__lsp-mcp__hover
 ---
 
 Analyze one unit of an existing system — an endpoint, a message/queue workflow,
@@ -14,13 +15,46 @@ metrics, serializers — is *correct*, not a miss: aim for the collaborators and
 decisions a human would narrate, and accept that the code has more than the spec
 shows. The spec's job is to be edited and diffed, not to rebuild the unit.
 
-**What you emit is a baseline.** In the dev loop the extracted spec is the
-*current version* of the unit — the reference the task's change is later stated
-against as `# +` / `# -` annotations (grammar §10). Two things follow: describe
-**only what the code does today** — never the change someone is about to make,
-however obvious it seems — and emit the file **unannotated**. Adding the delta is
-a separate, human-led step; a baseline that already contains the change destroys
-the very comparison it exists to provide.
+**What you emit is a baseline.** Without `--against`, the extracted spec is the
+*current version* of the unit: describe **only what the code does today** —
+never a change someone is about to make — and emit the file **unannotated**.
+Changes are written as `# +` / `# -` annotations (grammar §10), and review mode
+below derives them from a diff; a human may also annotate by hand.
+
+**Review mode — `--against <ref>`.** For reading a finished change rather than
+planning one: the spec describes the unit as the branch leaves it, annotated
+with what the branch changed, so the change can be read at mental-model altitude
+before merge. Everything below applies, with these differences:
+
+- **Source is the task's worktree as it stands**
+  (`~/fun_worktrees/{project}/{topic}/{task}`), never `~/fun_repos/<repo>`,
+  which is still on the default branch.
+- **The change is the worktree as it stands**, committed or not: `/task:build`
+  runs this before anything is committed. So every diff here is
+  `git -C <worktree> diff --merge-base <ref>` — the merge base of `<ref>` and
+  HEAD against the working tree — never `<ref>...HEAD`, which would miss the
+  uncommitted half.
+- **No unit given** → the units are the entry points whose behaviour reaches a
+  file `git -C <worktree> diff --merge-base <ref> --name-only` lists. More than three
+  → list them and ask which.
+- **The delta comes from the diff, not from intent.** After writing the spec of the
+  worktree, read `git -C <worktree> diff --merge-base <ref>` for the unit's paths and its
+  modules' paths. A spec line whose behaviour the diff adds is `# +`; behaviour
+  the diff removes is read from `git -C <worktree> show <base>:<path>` (`<base>`
+  is `git -C <worktree> merge-base <ref> HEAD`) and written
+  in place as a `# -` line; a changed line is a `# -` (as at `<base>`) followed by
+  a `# +` (as in the worktree). Lines the diff does not touch stay plain. Dropping every
+  `# +` and restoring every `# -` must give the unit at `<base>` (grammar §10) —
+  the linter checks the form, you check the content.
+- **Existing files are derived, not owned.** An unannotated spec of the unit in
+  the task notes is the starting point for the worktree view; an annotated one from
+  an earlier review-mode run is overwritten. Never ask before refreshing in this
+  mode — the file is regenerated whenever the diff moves, never maintained.
+- **Lint.** `unresolved-source-path` on a file the branch adds is expected when
+  the parser resolves `source.repo` against `~/fun_repos/<repo>`; report it, do
+  not chase it.
+- **Report** per file: `N` removed, `M` added, and the `# -`/`# +` lines grouped
+  by section.
 
 Read `~/fun_repos/hobby-tooling/lsps/hobby-mml-lsp/grammar.md` (the authoritative
 hobby grammar, v2 — **not** the work one) before your first extraction if you
@@ -122,7 +156,7 @@ with no `Component`/`Resource`/`Event` derive goes.
        args are query/path parameters, so there is no request DTO in code), you
        may **synthesize** a request `struct` for the mental model — but emit a
        column-0 `# synthesized: <why>` comment on the line above it, so
-       translate and validate know the type is conceptual and must **not** be
+       validate and review know the type is conceptual and must **not** be
        materialized as a real code type (or flagged as drift for not existing).
      - primitives `String bool i8..i64 u8..u64 f32 f64`; opaque atoms `Uuid`,
        `Money`, `DateTime`; containers `Option<T>`, `Vec<T>`, `Map<K,V>`.
@@ -358,7 +392,7 @@ four sections, and **the derive decides which**.
      where they have a spec. **`## invariants`** states properties of the module.
    - **Leave out**: `in:`/`out:` (an error on this kind), every Bevy section,
      private functions, module state, and `where:` bindings. Those are
-     implementation — `/hmml-translate` decides them, and a bullet that calls a
+     implementation detail, not mental model, and a bullet that calls a
      private helper is simply written as the work it does.
 
 8. **Assemble and write the file.** Header first (`system`, `unit`, `kind`,
@@ -397,9 +431,8 @@ four sections, and **the derive decides which**.
    **If any file this run would write already exists in the task dir, do not
    clobber it** — the overview `<unit>.hmml` *and* every module spec from step
    7. An existing file carrying `# +` / `# -` annotations is a baseline someone
-   has already annotated with an intended change; overwriting it destroys that
-   work (and a re-extraction is exactly the diff `hmml-translate` refuses to
-   apply). A module spec is the likely casualty: two units in one task dir
+   has already annotated by hand; overwriting it destroys that work. (Review
+   mode overwrites; see above.) A module spec is the likely casualty: two units in one task dir
    routinely share a collaborator, so extracting the second unit would land on
    the `wave-rng.hmml` the first unit's extraction wrote. For an existing
    **module** spec, reuse it — leave the file untouched and just add the
@@ -479,9 +512,8 @@ four sections, and **the derive decides which**.
   trailing `where:` block binds symbols: `Symbol = value [@ config-source]`.
 - `## invariants`: flat `-` bullets, each a checkable claim.
 - Change annotations (grammar §10): `# +` / `# - <text>` comment markers write a
-  task's intended change on top of the baseline. **Extraction never emits them**
-  — they are the next step's job, and a baseline that already carries them is not
-  a baseline.
+  change on top of the baseline. **Plain extraction never emits them**; review
+  mode (`--against <ref>`) derives them from the diff.
 - Cross-spec refs (grammar §5.4): a module line, **system entry**, behavior step,
   `## api` entry, or invariant may end with `@ spec unit` — "more specification
   under" a sibling `.hmml` in the same task directory — or

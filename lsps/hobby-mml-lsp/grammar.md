@@ -18,7 +18,9 @@ one machine without Helix guessing. The binaries here stay `hobby-mml-*` — the
 never collided with the work ones.
 
 An `.hmml` file describes **one unit of behavior** — small enough to hold in one
-head, one review, one diff. You edit the `.hmml`; Claude translates spec → code.
+head, one review, one diff. Its main use is reading a change before merge:
+`/hmml-extract --against <ref>` describes the unit as the branch leaves it, with
+what the diff changed marked `# -` / `# +` (§10).
 
 > **v2.0 (2026-07-25) — the Bevy dialect.** Hobby projects are overwhelmingly
 > Bevy games, and Bevy breaks MML's founding assumption. A v1 unit is a function:
@@ -354,7 +356,7 @@ route every other section already uses.
 
 **The v2.2 inline form is legacy.** A member line may still open with `+` or `-`
 and still means add / remove, so v2.2 specs keep working and
-`/hmml-translate` still reads them; new specs do not write them. Two spellings
+the parser still reads them; new specs do not write them. Two spellings
 for one statement is one too many, and the inline one is the spelling that made
 §10's rule — unannotated text is the baseline — untrue inside a body. A `+` or
 `-` on a type that declares its own shape stays a `malformed-field` error: there
@@ -803,12 +805,12 @@ step's subtree — so a changed signature is a `# -` of the old `fn` line plus a
 for any of them — including a `@ <path>` type body, whose v2.2 inline `+` / `-`
 markers §10 supersedes ([§4.7](#47-referencing-a-rust-type--path)).
 
-In the tooling: `/hmml-extract` writes the unannotated baseline and never
-annotates; the human (or `/task:build`) adds the delta; `/hmml-review`
-pressure-tests the delta against the baseline; `/hmml-translate` implements
-exactly what the markers say and never edits the spec; `/hmml-validate` expects
-`# +` claims to be absent from the code before implementation and `# -`
-behaviour to be gone from it after.
+In the tooling: `/hmml-extract --against <ref>` derives the delta from a
+branch's diff (`/task:build` runs it once the change is implemented, before
+GATE 2); plain extraction writes no annotations, and a human may annotate by
+hand; `/hmml-review` pressure-tests a hand-written delta against the rest;
+`/hmml-validate` expects `# +` claims to be present in the code and `# -`
+behaviour to be gone from it.
 
 ## 11. The module dialect (`kind: module`)
 
@@ -906,7 +908,7 @@ fn [<Type>::]<name>(<param>: <Type>, …) [-> <Type>] [@ <path>] [@ spec <ref>]
 ### 11.3 What a module spec deliberately leaves out
 
 - **Private functions.** The bullets describe what the *public* functions do; if
-  the implementation wants a private helper, `/hmml-translate` factors one out.
+  the implementation wants a private helper, it factors one out.
   So "the code resembles the spec" is a claim about behaviour and about the
   public surface — **not** that every bullet is a statement or every nested tree
   its own function. Conformance checking tolerates helper extraction rather than

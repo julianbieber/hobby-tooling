@@ -42,16 +42,26 @@ build stage also runs on a cheaper model by default (`model` in the state
 file, `sonnet` when a coordinator seeded it), because a plan that names the
 files and the steps leaves it mostly mechanical work.
 
+HMML comes back only **on demand**: `--delta` (or `delta` at the play gate)
+runs `/hmml-extract --against <merge-base>` after the implementation, so the
+change can be read as a delta to the mental model. It is derived from the diff
+after the code exists, which is the same reason `/task:build` no longer designs
+one up front; it stays off by default because this pipeline exists to spend as
+little context as a task allows.
+
+The plan's `Steps` also seed `todo` in `build-task.json`, which `hdash` shows on
+the task's card beside `waiting_on`, so an unattended window can be read
+without being looked at.
+
 ## Why the gates moved to the ends
 
-`/task:build` stops four times because each stop is a place I read something:
-the split, the questions, the spec delta, the diff. For work where I care about
-what the change *does* and not how it is built, three of those reads are cost
-without return. What I still want is to say what done means before anything is
-designed, and to try the result before it becomes a PR. So the two gates that
-survive are exactly those, and the middle two fold into them: GATE C's
-questions are asked at the acceptance gate if they are asked at all, and GATE 1's
-review plan is implemented rather than shown. The second of the two survives
+`/task:build` stops three times because each stop is a place I read something:
+the split, the questions, the diff. For work where I care about what the change
+*does* and not how it is built, two of those reads are cost without return.
+What I still want is to say what done means before anything is designed, and to
+try the result before it becomes a PR. So the two gates that survive are exactly
+those: GATE C's questions are asked at the acceptance gate if they are asked at
+all, and the diff gives way to the running application. The second of the two survives
 only where I am there to use it — see below.
 
 The play gate is a deliberately different kind of stop from GATE 2. GATE 2 hands

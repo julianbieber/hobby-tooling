@@ -54,9 +54,10 @@ ln -s ~/fun_repos/hobby-tooling/skills/hmml-review/skill.md \
 /hmml-review --min-priority high   # only high/critical concerns in the plan
 ```
 
-It is invoked automatically by `/task:build` in the `plan` phase (self-review of the
-adjusted spec); the plan it writes is what the human reviews at GATE 1 alongside
-the `.hmml`.
+It is a standalone tool for a spec I am designing by hand. `/task:build` no
+longer runs it: the pipeline's spec is derived from the implemented change by
+`/hmml-extract --against`, and there is nothing ahead of the code left to
+pressure-test.
 
 ## Known Limitations
 
