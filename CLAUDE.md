@@ -396,7 +396,10 @@ the task's `build-task.json` and returns when the phase is one a person answers
 sessions independent: `/task:auto` names its gates `await-acceptance`,
 `await-play` and `await-fix`, and nothing else in either skill has to know the
 other exists — the third was added without touching `hcoord` at all, because
-`await-` is the whole of the *declared* contract. A `play` phase left untouched
+`await-` is the whole of the *declared* contract for an `auto: true` state file.
+Only a state file without `auto` — a `/task:build` session — also stops on that
+pipeline's two waiting states, `context` and `assess-split`; an unattended run
+never writes them, so `hcoord` counts them only there. A `play` phase left untouched
 for three minutes is a backstop under it, for the one case the naming cannot
 cover: the skill's write to `await-play` and its printed report are two halves
 of one step (#45), and a session that drops the write leaves nothing named
@@ -418,9 +421,9 @@ and `hcoord status` both read the gap between them.
 
 `hcoord merged <pr>` is the same shape one layer further on: it polls `gh pr
 view` and returns `merged`, `blocked` with a reason, or `timeout` — plus
-`mergeable`, only with `--ready`, which is how a coordinator that was handed the
-merges learns it may run `gh pr merge`. Without the flag a green PR is waited
-on, because merging is mine.
+`mergeable`, only with `--ready`, which is how a task session learns it may run
+`gh pr merge` on its own PR. The coordinator calls it without the flag, and only
+for a PR whose session finished without merging.
 
 **The coordinator layout is rendered per session, not installed.** The TUI pane
 needs the notes dir as an argument and KDL cannot expand anything, so a
@@ -448,22 +451,30 @@ whenever a review changed anything early in it. Now the list holds in
 is gone with it: every task branches off the default branch, because everything
 before it is already there.
 
-**Merging is mine by default, and the list says so.** `merge` in `tasks.json` is
-`mine` — report the green PR once, hold — or `coordinator`, which I set
-when I trust how a run is going. With `coordinator` the merge is made by the
-**task's own session**, not the coordinator: the field reaches it through the
-`merge` key in its seeded `build-task.json`, it watches its own checks with
-`hcoord merged --ready`, merges on green, confirms the merge landed, and
-reports `done` with the merge already made — the coordinator's own merge call
-is skipped for that task. It is in the file rather than in the conversation so
-a resumed session still knows. `hcoord merged` decides green from `gh`'s
-`statusCheckRollup`, and a repo with no checks at all counts as green: most
-hobby repos have no CI, and the alternative is a list that never moves. A
-merge that cannot be made — a conflict, a `gh` refusal, or a red check that
-`fix-ci` (below) could not clear — is `await-fix` with the reason in
-`merge_result`, which the coordinator renders as a blocked card; on the
-coordinator's own merge call the same three cases are a **stop**, never a
-longer wait.
+**An unattended task merges its own PR, and there is no other option.** The
+task's **own session** merges once its checks are green and its acceptance
+passed: every seed writes `merge: coordinator` into its `build-task.json`, it
+watches its own checks with `hcoord merged --ready`, merges, confirms the merge
+landed, runs `hwt done` on its own task — so hdash's card closes with the PR —
+and reports `done` with the merge already made. `tasks.json` no longer carries a
+`merge` choice, so a list `/task:goal` wrote needs no GATE L before it is
+worked. Both decisions are mine, recorded in
+`notes/hobby-tooling/skills/coord-contract/business-context.md`
+(`## one-merge-option`, `## task-done-owner`). `hcoord merged` decides green
+from `gh`'s `statusCheckRollup`, and a repo with no checks at all counts as
+green: most hobby repos have no CI, and the alternative is a list that never
+moves.
+
+**A decision the session cannot make holds the list on that task.** A conflict,
+a `gh` refusal, a red check `fix-ci` (below) may not repair, or an acceptance
+that would not pass is `await-fix`, with the reason in `ci_result`,
+`merge_result` or `acceptance_result`. `hcoord wait` names the one still
+standing as `decision` on its line, beside the PR, and the coordinator marks
+the card `blocked` with `requires decision: <decision>` and waits on with
+`--after await-fix`. I answer in the task's window, the session carries on to a
+merged PR, and the list moves (`## leave-await-fix`). A resumed coordinator
+re-checks every `blocked` entry, so a PR merged by hand releases its
+dependents.
 
 **A red check on a task's PR is that task's own diff, and its own session is
 the one holding the branch, the plan and the log** — handing it to a

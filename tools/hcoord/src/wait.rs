@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use crate::model::{AcceptanceResult, BuildState, MergeResult};
+use crate::model::{AcceptanceResult, BuildState, CiResult, MergeResult};
 
 /// Under the ten minutes Claude Code allows a single shell call.
 pub const DEFAULT_TIMEOUT_SECS: u64 = 570;
@@ -36,6 +36,12 @@ const POLL: Duration = Duration::from_secs(2);
 /// how an un-updated coordinator's W4 learns to skip its own merge call and go straight
 /// to `done`, or to read a merge failure's reason off a `blocked` outcome instead of the
 /// acceptance failures.
+///
+/// A run that recorded its CI checks carries `ci` as `{outcome, case, check, reason}`,
+/// each of the last three present only when recorded. `pr` is the PR the run opened,
+/// when it recorded one. At `await-fix` the line also carries `decision`: one line naming
+/// what is blocked — CI, the merge, or the acceptance checks, the first that applies —
+/// which is what a coordinator puts on the task's card.
 ///
 /// A state file that recorded `phase_since` also adds it and `unchanged_for` (seconds,
 /// computed at print time) to the line, plus `written` when that was recorded too — a
@@ -115,6 +121,15 @@ fn line(state: &BuildState, outcome: &str) -> String {
     if let Some(merge) = &state.merge_result {
         object["merge"] = merge_json(merge);
     }
+    if let Some(ci) = &state.ci_result {
+        object["ci"] = ci_json(ci);
+    }
+    if let Some(pr) = state.pr_url() {
+        object["pr"] = serde_json::Value::String(pr.to_owned());
+    }
+    if let Some(decision) = state.decision() {
+        object["decision"] = serde_json::Value::String(decision);
+    }
     if let Some(phase_since) = &state.phase_since {
         object["phase_since"] = serde_json::Value::String(phase_since.clone());
     }
@@ -140,6 +155,20 @@ fn merge_json(merge: &MergeResult) -> serde_json::Value {
     }
     if let Some(merge_commit) = &merge.merge_commit {
         object["merge_commit"] = serde_json::Value::String(merge_commit.clone());
+    }
+    object
+}
+
+fn ci_json(ci: &CiResult) -> serde_json::Value {
+    let mut object = serde_json::json!({ "outcome": ci.outcome });
+    for (key, value) in [
+        ("case", &ci.case),
+        ("check", &ci.check),
+        ("reason", &ci.reason),
+    ] {
+        if let Some(value) = value {
+            object[key] = serde_json::Value::String(value.clone());
+        }
     }
     object
 }
@@ -273,7 +302,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             line(&failed, "human"),
-            r#"{"acceptance":{"checks":2,"failed":[{"command":"hcoord wait .","exit":1,"name":"cli"}],"passed":false},"outcome":"human","phase":"await-fix"}"#
+            r#"{"acceptance":{"checks":2,"failed":[{"command":"hcoord wait .","exit":1,"name":"cli"}],"passed":false},"decision":"acceptance failed: cli","outcome":"human","phase":"await-fix"}"#
         );
         let value: serde_json::Value = serde_json::from_str(&line(&failed, "human")).unwrap();
         assert!(value["acceptance"].get("hand").is_none());
@@ -327,6 +356,24 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
         assert_eq!(value["merge"]["reason"], "checks failing: build");
         assert_eq!(value["merge"]["check"], "build");
+    }
+
+    // A CI block with its PR open must reach the line as a CI decision carrying the PR,
+    // not as a failed acceptance with the PR lost.
+    #[test]
+    fn the_line_carries_a_ci_block_as_the_decision_with_its_pr() {
+        let state: BuildState = serde_json::from_str(
+            r#"{"phase":"await-fix","auto":true,"pr":"https://github.com/o/r/pull/7",
+                "acceptance_result":{"passed":true,"checks":[]},
+                "ci_result":{"outcome":"blocked","case":"decision","check":"build",
+                    "log":"failed to select a version","rounds":0}}"#,
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&line(&state, "human")).unwrap();
+        assert_eq!(value["decision"], "CI decision: build");
+        assert_eq!(value["pr"], "https://github.com/o/r/pull/7");
+        assert_eq!(value["ci"]["case"], "decision");
+        assert!(value["ci"].get("log").is_none());
     }
 
     // A state file with no merge result must not grow a `merge` field the coordinator

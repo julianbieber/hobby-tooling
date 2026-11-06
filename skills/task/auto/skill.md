@@ -108,8 +108,10 @@ is `pass`, `fail` or `hand`, and a `hand` check carries `screen` instead of a
 command and never decides `passed`. **`auto` is true only when a
 coordinator seeded it.** A state file this skill writes for itself sets
 `auto: false`, so a `hcdev auto <task>` typed by hand keeps the play gate.
-**`merge`** is seeded by the coordinator from its `tasks.json`; **absent means
-`mine`**, so a hand-typed `hcdev auto` never merges. `merge_result` is written
+**`merge`** is seeded by the coordinator, and is always `coordinator`: an
+unattended task merges its own PR once its checks are green and its acceptance
+passed, and there is no other option. **Absent means `mine`**, so a hand-typed
+`hcdev auto` never merges. `merge_result` is written
 by the `merge` phase below. `goal` and `scenarios` are written by `hcoord seed`
 and absent otherwise. **`delta`** is false unless I ask for it — `--delta` on
 either stage, or a coordinator that seeded it — and turns on the `delta` phase
@@ -435,8 +437,11 @@ the same turn.
    `git -C ~/fun_repos/<project> pull --ff-only` as best effort: a refusal is
    recorded in `base_updated` and does not block.
 5. Write `merge_result` with `outcome: merged`, the PR, the merge commit,
-   `base`, `base_updated`, `checked` and `tried`; set `phase: journal` and
-   continue in the same turn.
+   `base`, `base_updated`, `checked` and `tried`. With `auto: true` the task is
+   done the moment its PR lands, and this session is the one that marks it:
+   `nu -l -c "hwt done '<task>' -p '<project>'"` — a failure is recorded in
+   `merge_result.tried` and does not block. Set `phase: journal` and continue in
+   the same turn.
 6. Blocked — a red check, a conflict, a `gh` refusal, or the wait running
    out: write `merge_result` with `outcome: blocked`, `reason` (one line),
    `check` (the failing check's name when there is one), `log` (at most three
@@ -491,6 +496,26 @@ happen to share the number three by decision (`business-context.md`
 `## fix-loop-bound`), never one counter: a CI failure is discovered only
 after the PR is open, which is after the acceptance rounds have already
 finished spending themselves.
+
+## Phase `await-fix` — a person answers
+
+`await-fix` is a decision this session could not make: the coordinator shows it
+on the task's card as `requires decision: <…>` and holds the list until this
+session moves on. `hauto` resumes the session at this phase, so the next prompt
+in this window is the person's answer.
+
+1. Read which result blocked — `ci_result` blocked, else `merge_result`
+   blocked, else `acceptance_result` failing — and take the answer as the
+   decision on it. Record the answer verbatim in `feedback`.
+2. Act on it, then resume at the phase that blocked: `fix-ci` for CI (with
+   `ci_result.rounds` reset to 0 only when the answer says to try again),
+   `merge` step 2 for a merge block, `verify` for acceptance (its rounds reset
+   the same way). With no PR yet, that path runs on through `pr`. Carry on
+   until the PR is mergeable, merged under `merge: coordinator`, and the
+   phase reaches `done` — the coordinator's wait returns then, not before.
+3. An answer that does not resolve it — or a new decision on the way — writes
+   the result with the new reason, sets `phase: await-fix` again, prints one
+   line, and ends the turn.
 
 ## Phase `journal`
 

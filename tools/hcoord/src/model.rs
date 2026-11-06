@@ -94,17 +94,6 @@ fn default_status() -> Status {
     Status::Todo
 }
 
-/// Who merges a task's pull request once its checks are green.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum MergeBy {
-    /// I merge; the coordinator reports the PR and holds the list until I have.
-    #[default]
-    Mine,
-    /// The coordinator merges as soon as the checks pass and GitHub reports no conflict.
-    Coordinator,
-}
-
 /// The whole of `tasks.json`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Coordinator {
@@ -121,9 +110,6 @@ pub struct Coordinator {
     /// Build-stage model for every task that names none.
     #[serde(default)]
     pub model: Option<String>,
-    /// Who merges each task's PR; `mine` when absent.
-    #[serde(default)]
-    pub merge: MergeBy,
     /// The goal file the tasks were split from, relative to the notes directory.
     #[serde(default)]
     pub goal: Option<String>,
@@ -453,6 +439,32 @@ impl MergeResult {
     }
 }
 
+/// What a task session recorded about its PR's checks, from the local CI run before the
+/// PR opens or from `fix-ci` after it. Absent until either has run.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct CiResult {
+    /// `"green"` or `"blocked"`, or whatever word the session wrote — a `String` for the
+    /// same reason as [`MergeResult::outcome`].
+    #[serde(default)]
+    pub outcome: String,
+    /// `hcoord ci`'s case: `own-diff`, `not-mine`, `decision` or `flake`.
+    #[serde(default)]
+    pub case: Option<String>,
+    /// The failing check or workflow step's name.
+    #[serde(default)]
+    pub check: Option<String>,
+    /// Why it is blocked, one line, when the session recorded one.
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+impl CiResult {
+    /// Whether the checks are blocked on something the session could not repair.
+    pub fn blocked(&self) -> bool {
+        self.outcome == "blocked"
+    }
+}
+
 /// The part of `build-task.json` the coordinator reacts to.
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct BuildState {
@@ -470,6 +482,12 @@ pub struct BuildState {
     /// `mine`/absent or the `merge` phase has not run yet.
     #[serde(default)]
     pub merge_result: Option<MergeResult>,
+    /// What the pipeline recorded about its CI checks; `None` until a CI run happened.
+    #[serde(default)]
+    pub ci_result: Option<CiResult>,
+    /// Whether this is an unattended `/task:auto` run, which a coordinator seeds.
+    #[serde(default)]
+    pub auto: bool,
     /// When this file was last written, RFC 3339. Absent from a file written before
     /// this field existed.
     #[serde(default)]
@@ -508,19 +526,69 @@ impl BuildState {
     }
 
     /// Whether the phase is one where the pipeline has stopped for a person: every
-    /// `await-*` phase — `await-play` interactively, `await-fix` when an unattended run
-    /// could not make its acceptance pass — the two waiting states `/task:build` names,
-    /// and a `play` phase that has sat untouched for `IDLE_GATE_SECS`. That last one is
-    /// a backstop: phase `play`'s write to `await-play` and its printed report are two
-    /// halves of one step, and a session that printed the report and skipped the write
-    /// leaves a task a coordinator would otherwise wait on forever. A file recording
-    /// neither `written` nor `phase_since` counts as idle too — it cannot be told apart
-    /// from one that has gone stale, and the case that hangs a coordinator is worse than
-    /// the case of reporting a `play` a little early.
+    /// `await-*` phase, and a `play` phase that has sat untouched for `IDLE_GATE_SECS`.
+    /// A state file that is not `auto` also counts the two waiting states `/task:build`
+    /// names, `context` and `assess-split`; an unattended run never writes them, so for
+    /// it `await-*` is the whole contract.
+    ///
+    /// The `play` case is a backstop: phase `play`'s write to `await-play` and its
+    /// printed report are two halves of one step, and a session that printed the report
+    /// and skipped the write leaves a task a coordinator would otherwise wait on forever.
+    /// A file recording neither `written` nor `phase_since` counts as idle too — it cannot
+    /// be told apart from one that has gone stale, and the case that hangs a coordinator
+    /// is worse than the case of reporting a `play` a little early.
     pub fn needs_human(&self) -> bool {
         self.phase.starts_with("await-")
-            || matches!(self.phase.as_str(), "context" | "assess-split")
+            || (!self.auto && matches!(self.phase.as_str(), "context" | "assess-split"))
             || self.is_idle_play()
+    }
+
+    /// The decision an `await-fix` waits on, as one line naming what blocked: a CI
+    /// block first, then a merge block, then failing acceptance checks, in that order
+    /// because a later stage's block is the one still standing. `None` when the phase is
+    /// not `await-fix`; `"await-fix with no reason recorded"` when it is and the session
+    /// wrote none of the three.
+    pub fn decision(&self) -> Option<String> {
+        if self.phase != "await-fix" {
+            return None;
+        }
+        if let Some(ci) = self.ci_result.as_ref().filter(|c| c.blocked()) {
+            let mut parts = vec!["CI".to_owned()];
+            if let Some(case) = &ci.case {
+                parts.push(case.clone());
+            }
+            let mut line = parts.join(" ");
+            if let Some(check) = &ci.check {
+                line = format!("{line}: {check}");
+            }
+            if let Some(reason) = &ci.reason {
+                line = format!("{line}: {reason}");
+            }
+            return Some(line);
+        }
+        if let Some(merge) = self.merge_result.as_ref().filter(|m| !m.merged()) {
+            return Some(match &merge.reason {
+                Some(reason) => format!("merge: {reason}"),
+                None => "merge blocked".to_owned(),
+            });
+        }
+        if let Some(acceptance) = self.acceptance_result.as_ref().filter(|a| !a.passed) {
+            let failed = acceptance.failed();
+            return Some(if failed.is_empty() {
+                "acceptance failed".to_owned()
+            } else {
+                format!("acceptance failed: {}", failed.join(", "))
+            });
+        }
+        Some("await-fix with no reason recorded".to_owned())
+    }
+
+    /// The PR this task opened: `pr` when the state file recorded it, else the one a
+    /// merge result names.
+    pub fn pr_url(&self) -> Option<&str> {
+        self.pr
+            .as_deref()
+            .or_else(|| self.merge_result.as_ref().and_then(|m| m.pr.as_deref()))
     }
 
     fn is_idle_play(&self) -> bool {
@@ -623,18 +691,6 @@ mod tests {
             c.counts().summary(),
             "1 running · 1 waiting for you · 1 waiting on a merge · 1 done"
         );
-    }
-
-    // Merging is mine unless the file says otherwise, so a list written before the field
-    // existed must not start merging on my behalf.
-    #[test]
-    fn merge_is_mine_unless_the_list_says_coordinator() {
-        let mine = Coordinator::parse(r#"{"project":"p","blurb":"b","tasks":[]}"#).unwrap();
-        assert_eq!(mine.merge, MergeBy::Mine);
-        let theirs =
-            Coordinator::parse(r#"{"project":"p","blurb":"b","merge":"coordinator","tasks":[]}"#)
-                .unwrap();
-        assert_eq!(theirs.merge, MergeBy::Coordinator);
     }
 
     // The view shows a PR as soon as the task's own notes record it, and shows it once
@@ -845,6 +901,63 @@ mod tests {
     fn a_state_file_without_a_merge_result_has_none() {
         let state: BuildState = serde_json::from_str(r#"{"phase":"done"}"#).unwrap();
         assert!(state.merge_result.is_none());
+    }
+
+    // A CI block recorded with no acceptance or merge result — the local CI bound spent,
+    // or fix-ci blocked — has to name CI, or the coordinator reports a failed acceptance.
+    #[test]
+    fn decision_names_a_ci_block_before_anything_else() {
+        let state: BuildState = serde_json::from_str(
+            r#"{"phase":"await-fix","pr":"https://github.com/o/r/pull/4",
+                "acceptance_result":{"passed":true,"checks":[]},
+                "merge_result":{"outcome":"blocked","reason":"checks failing: build"},
+                "ci_result":{"outcome":"blocked","case":"not-mine","check":"build",
+                    "reason":"build is already failing on the base branch"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            state.decision().unwrap(),
+            "CI not-mine: build: build is already failing on the base branch"
+        );
+        assert_eq!(state.pr_url(), Some("https://github.com/o/r/pull/4"));
+    }
+
+    // Once CI went green a later merge block is the one standing, and with neither the
+    // failing acceptance checks are; a phase other than await-fix waits on no decision.
+    #[test]
+    fn decision_falls_back_from_merge_to_acceptance_and_is_none_off_await_fix() {
+        let merge: BuildState = serde_json::from_str(
+            r#"{"phase":"await-fix","ci_result":{"outcome":"green"},
+                "merge_result":{"outcome":"blocked","reason":"conflict with main"}}"#,
+        )
+        .unwrap();
+        assert_eq!(merge.decision().unwrap(), "merge: conflict with main");
+        let acceptance: BuildState = serde_json::from_str(
+            r#"{"phase":"await-fix","acceptance_result":{"passed":false,"checks":[
+                {"name":"S1","command":"x","exit":1,"pass":false}]}}"#,
+        )
+        .unwrap();
+        assert_eq!(acceptance.decision().unwrap(), "acceptance failed: S1");
+        let bare: BuildState = serde_json::from_str(r#"{"phase":"await-fix"}"#).unwrap();
+        assert_eq!(
+            bare.decision().unwrap(),
+            "await-fix with no reason recorded"
+        );
+        let running: BuildState = serde_json::from_str(r#"{"phase":"implement"}"#).unwrap();
+        assert!(running.decision().is_none());
+    }
+
+    // `context` and `assess-split` are /task:build waits; an unattended run never writes
+    // them, so under `auto` they must not stop a coordinator, and elsewhere they still do.
+    #[test]
+    fn build_waiting_states_need_a_human_only_outside_auto() {
+        let build: BuildState = serde_json::from_str(r#"{"phase":"context"}"#).unwrap();
+        assert!(build.needs_human());
+        let auto: BuildState = serde_json::from_str(r#"{"phase":"context","auto":true}"#).unwrap();
+        assert!(!auto.needs_human());
+        let gate: BuildState =
+            serde_json::from_str(r#"{"phase":"await-fix","auto":true}"#).unwrap();
+        assert!(gate.needs_human());
     }
 
     // A write that changed the phase leaves `written` and `phase_since` equal, so the

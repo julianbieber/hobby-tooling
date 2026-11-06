@@ -180,7 +180,7 @@ Create `~/fun_repos/hobby-mimisbrunnr/notes/<project>/coordinator/<blurb>/` when
 absent, with the two files `hcdev coordinator` writes: `task.json` as
 `{ "done": false, "blocked": null }`, and `tasks.json` with `project`, `blurb`,
 `description` (the intent verbatim), `created`, `model: "sonnet"`,
-`merge: "mine"`, `goal` and `tasks`. **`goal` is written relative to the
+`goal` and `tasks`. **`goal` is written relative to the
 coordinator directory** — `../../planning/<blurb>/goal.md` — because that is
 where `hcoord seed` resolves it from. An existing `tasks.json` is not replaced:
 report it and stop.
