@@ -55,9 +55,9 @@ hwt go <task>                            cd to it (fuzzy, searches all projects)
 hwt tree                                 project -> topic -> task overview
 hwt done | block | unblock               task state
 hwt orphans                              worktrees with no task.json
-hwt rm <task>                            remove the worktree, keep the notes
-hwt restore <task>                       re-create a removed worktree
-hcdev wt <task>                          zellij session: Helix + Claude (hobby account)
+hwt rm <task>                            remove the worktree and its aspects', keep the notes
+hwt restore <task>                       re-create a removed worktree and its open aspects'
+hcdev wt <task>                          zellij session: Helix + Claude, plus its aspect/subtask tabs
 hcdev auto <task> [-w]                   the same, with Claude running /task:auto (plan, then build)
 hcdev coordinator <blurb>                from ~/fun_repos/<project>: task list + Claude
 hcdev close <task> [-p] [-t]             kill its session, stop its processes, close its window

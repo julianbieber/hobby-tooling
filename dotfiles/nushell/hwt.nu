@@ -746,6 +746,38 @@ def aspect-base-ref [main_repo: path, branch: string] {
     if $remote != null { $remote } else { "HEAD" }
 }
 
+def task-aspects [t: record] {
+    let dir = ($NOTES_BASE | path join $t.project $t.topic $t.task "aspects")
+    if not ($dir | path exists) { return [] }
+    ls $dir | where type == dir | get name | path basename | each {|name|
+        let meta = (try { open --raw ($dir | path join $name "aspect.json") | from json } catch { {} })
+        let wt = (hcdev-aspect-worktree $t.project $t.topic $t.task $name)
+        { name: $name, state: ($meta.state? | default "open"), dir: $wt, present: ($wt | path exists) }
+    }
+}
+
+def remove-aspect-worktrees [t: record, force: bool] {
+    let main_repo = ($PROJECTS_BASE | path join $t.project)
+    for a in (task-aspects $t | where present) {
+        let args = if $force { ["worktree" "remove" "--force" $a.dir] } else { ["worktree" "remove" $a.dir] }
+        let r = (do -i { ^git -C $main_repo ...$args } | complete)
+        if $r.exit_code != 0 {
+            error make { msg: $"Aspect ($a.name) of ($t.task) could not be removed, so ($t.task) was left in place: ($r.stderr | str trim) — commit or drop its changes, or pass -f" }
+        }
+        print $"  removed aspect worktree: ($a.name)"
+        remove-empty-dirs-up ($a.dir | path dirname) ($a.dir | path dirname | path dirname | path dirname | path dirname)
+    }
+}
+
+def restore-aspect-worktrees [t: record] {
+    let main_repo = ($PROJECTS_BASE | path join $t.project)
+    for a in (task-aspects $t | where {|a| (not $a.present) and $a.state != "closed" }) {
+        mkdir ($a.dir | path dirname)
+        create-worktree $main_repo $a.dir $"($t.task)@($a.name)" (aspect-base-ref $main_repo $t.task)
+        print $"  restored aspect worktree: ($a.name)"
+    }
+}
+
 def remove-empty-dirs-up [dir: path, stop: path] {
     mut d = ($dir | path expand)
     let stop_at = ($stop | path expand)
@@ -1186,9 +1218,12 @@ export def --env "hwt go" [
     cd $found.path
 }
 
-# Remove a worktree. Notes and task.json are deliberately kept so done/blocked
-# state survives and `hwt restore` can re-create the checkout; `hwt forget`
-# purges the metadata when a task is truly finished.
+# Remove a worktree, and the worktrees of its research aspects first. Notes,
+# task.json and each aspect's state are deliberately kept so done/blocked state
+# survives and `hwt restore` can re-create the checkouts; `hwt forget` purges the
+# metadata when a task is truly finished. A dirty aspect worktree stops the
+# removal before the task's own is touched, unless `--force`. Subtasks are
+# tasks of their own and are left alone.
 export def "hwt rm" [
     task: string@live-task-completions           # Task to remove
     --project (-p): string@project-completions   # Disambiguate across projects
@@ -1201,6 +1236,7 @@ export def "hwt rm" [
 
     let main_repo = ($PROJECTS_BASE | path join $found.project)
     print $"Removing worktree: ($found.project)/($found.topic)/($found.task)"
+    remove-aspect-worktrees $found $force
 
     if ($main_repo | path exists) {
         if $force {
@@ -1228,10 +1264,13 @@ export def "hwt rm" [
     print $"Kept notes. 'hwt restore ($found.task)' re-creates it; 'hwt forget ($found.task)' purges the metadata."
 }
 
-# Re-create a removed task's worktree from its notes directory. The branch is the
-# task name — an existing local branch is reused, else the branch's own remote-
-# tracking ref, else HEAD. Only the notes path is needed, so a task whose
-# task.json was purged by `hwt forget` still restores.
+# Re-create a removed task's worktree from its notes directory, and the worktree
+# of each of its research aspects that is not closed and not checked out. The
+# branch is the task name — an existing local branch is reused, else the
+# branch's own remote-tracking ref, else HEAD; an aspect's is `<task>@<name>`.
+# Only the notes path is needed, so a task whose task.json was purged by `hwt
+# forget` still restores. A task already present still gets its missing
+# aspects back.
 #
 # Repairs a checkout left half-removed as far as it can: a stale registration or
 # an empty directory at the task path is cleared rather than reported. A directory
@@ -1249,6 +1288,7 @@ export def --env "hwt restore" [
     }
     if $found.present and (is-git-repo $found.path) {
         print $"Already present: ($found.path)"
+        restore-aspect-worktrees $found
         if not $no_cd { cd $found.path }
         return $found.path
     }
@@ -1264,6 +1304,7 @@ export def --env "hwt restore" [
 
     create-worktree $main_repo $found.path $found.task
     print $"Restored: ($found.project)/($found.topic)/($found.task)"
+    restore-aspect-worktrees $found
 
     if not $no_cd { cd $found.path }
     $found.path

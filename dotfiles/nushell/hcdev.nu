@@ -230,16 +230,52 @@ def hcdev-tab-layout [claude: string] {
 "
 }
 
-def hcdev-task-with-tab-layout [task: string, name: string, dir: string, claude: string] {
+def hcdev-task-tabs [parent: record] {
+    let notes = ($NOTES_BASE | path join $parent.project $parent.topic $parent.task)
+    let aspects = (try { ls ($notes | path join "aspects") | where type == dir | get name | path basename } catch { [] })
+    | where {|name|
+        let state = (try { open --raw ($notes | path join "aspects" $name "aspect.json") | from json | get -o state } catch { null })
+        $state != "closed"
+    }
+    | each {|name| { name: $name, dir: (hcdev-aspect-worktree $parent.project $parent.topic $parent.task $name), claude: "haspect" } }
+    let subtasks = (try { open --raw ($notes | path join "subtasks.json") | from json } catch { [] })
+    | where {|e| $e.tab? == true }
+    | each {|e| {
+        name: $e.task
+        dir: ($WORKTREE_BASE | path join ($e.project? | default $parent.project) ($e.topic? | default $parent.topic) $e.task)
+        claude: "chobby"
+    } }
+    $aspects | append $subtasks | where {|t| $t.dir | path exists }
+}
+
+def hcdev-task-layout [task: string, tabs: list, focus?: string] {
+    let rest = ($tabs | each {|t|
+        let focused = if $t.name == $focus { " focus=true" } else { "" }
+        $"    tab name=($t.name | to json) cwd=($t.dir | to json)($focused) {
+        (hcdev-dev-panes $t.claude)
+    }"
+    } | str join "\n")
+    let main_focus = if $focus == null { " focus=true" } else { "" }
     $"layout {
-    tab name=($task | to json) {
+    tab name=($task | to json)($main_focus) {
         (hcdev-dev-panes 'chobby')
     }
-    tab name=($name | to json) cwd=($dir | to json) focus=true {
-        (hcdev-dev-panes $claude)
-    }
+($rest)
 }
 "
+}
+
+def --env hcdev-launch-task [found: record, focus?: string, extra?: record] {
+    let session = (hcdev-session-name $found.project $found.topic $found.task)
+    let known = (hcdev-task-tabs $found)
+    let tabs = if $extra != null and ($extra.name not-in ($known | get -o name | default [])) { $known | append $extra } else { $known }
+    if ($tabs | is-empty) {
+        hcdev-launch $found.path $session
+        return
+    }
+    let layout_file = (hcdev-runtime-dir | path join $"hobby-tabs-($session).kdl")
+    hcdev-task-layout $found.task $tabs $focus | save -f $layout_file
+    hcdev-launch $found.path $session $layout_file
 }
 
 def hcdev-open-tab [session: string, name: string, dir: string, claude: string] {
@@ -606,7 +642,11 @@ export def main [] {
     print $"Account: ($HOBBY_CONFIG_DIR)  \(via chobby in the Claude pane\)"
 }
 
-# Start a session in an existing worktree
+# Start a session in an existing worktree, or attach to its running one. A new
+# session opens with the task's tab first and one more tab per research aspect
+# that is not closed and per subtask worked as a tab (`tab: true` in its
+# `subtasks.json`), each whose worktree is checked out — so a session closed or
+# lost comes back as it was.
 export def --env "hcdev wt" [
     task: string@hcdev-task-completions               # Task name
     --project (-p): string@hcdev-project-completions  # Disambiguate across projects
@@ -616,7 +656,7 @@ export def --env "hcdev wt" [
     if $found == null {
         error make { msg: $"Task '($task)' not found in ($WORKTREE_BASE)" }
     }
-    hcdev-launch $found.path (hcdev-session-name $found.project $found.topic $found.task)
+    hcdev-launch-task $found
 }
 
 # Create a worktree from the current git repo and start a session
@@ -783,9 +823,7 @@ export def --env "hcdev tab" [
         }
         return
     }
-    let layout_file = (hcdev-runtime-dir | path join $"hobby-tabs-($session).kdl")
-    hcdev-task-with-tab-layout $parent.task $name $target.dir $target.claude | save -f $layout_file
-    hcdev-launch $parent.path $session $layout_file
+    hcdev-launch-task $parent $name { name: $name, dir: $target.dir, claude: $target.claude }
 }
 
 # Start a session in the current directory
@@ -893,9 +931,10 @@ export def "hcdev claude-pane" [
 }
 
 # Close a task's session: kill and delete its zellij session, stop every process
-# still running out of its worktree, and take its window with them (the window
-# dies with its pane process once the session is gone). Idempotent — a session
-# and worktree already gone is `Nothing to close`, not an error.
+# still running out of its worktree or its research aspects' worktrees, and
+# take its window with them (the window dies with its pane process once the
+# session is gone). Idempotent — a session and worktree already gone is
+# `Nothing to close`, not an error.
 #
 # Refuses a coordinator (the reserved topic) and refuses the session you are
 # currently in, so this can never be the thing that kills its own caller —
@@ -922,7 +961,10 @@ export def "hcdev close" [
     do -i { ^zellij kill-session $session } | complete | ignore
     do -i { ^zellij delete-session --force $session } | complete | ignore
 
-    let killed = if ($found.path | path exists) { hcdev-close-processes $found.path } else { 0 }
+    let aspects_dir = ($ASPECT_BASE | path join $found.project $found.topic $found.task)
+    let killed = ([$found.path $aspects_dir]
+        | where { $in | path exists }
+        | reduce -f 0 {|d, acc| $acc + (hcdev-close-processes $d) })
 
     if not $had_session and $killed == 0 {
         print "Nothing to close"

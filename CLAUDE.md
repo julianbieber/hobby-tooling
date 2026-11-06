@@ -543,9 +543,10 @@ aspect worktree to the aspect's notes dir. `@` is in the branch name only;
 
 **A tab, not a session.** `hcdev tab <name>` opens the aspect with
 `zellij --session <task's> action new-tab`, or switches to it; with the
-session down it starts it from a layout rendered with both tabs.
-`hcdev-dev-panes` spells the two panes for the rendered layouts, which
-duplicates `hobby-dev.kdl` until `hcdev wt` renders its layout too.
+session down it starts it from a rendered layout. `hcdev-dev-panes` spells the
+two panes for the rendered layouts; `hobby-dev.kdl` stays the layout of a
+session with no tabs to restore and of `hcdev here`/`dir`/`new`, so the two
+have to stay alike.
 
 `/aspect` refuses under `auto: true`: an unattended run is one session watched
 through one `build-task.json`, and a tab it cannot see would hold a gate
@@ -571,9 +572,19 @@ The subtask is still a whole task — `task.json`, card, PR — so nothing that
 reads tasks changed; hdash adds `tab`/`postponed` and the child's badge to the
 parent's subtask line, and a click on a tab subtask opens its tab.
 
-Not yet done, and planned (`plan-2026-11-06-task-aspects.md` in the
-`task_aspects` notes): `hwt rm`/`done`/`restore` cascading to aspect
-worktrees.
+**The tabs outlive the session and the checkout.** `hcdev wt` starting a new
+session renders a layout with the task's tab first and one tab per research
+aspect that is not closed and per `tab: true` subtask, each whose worktree is
+checked out — the zellij session is scratch like the worktree, and `hcdev
+close`, a reboot or a second machine would otherwise lose which tabs a task
+had. `hwt rm` removes the task's aspect worktrees before its own (a dirty one
+stops it, unless `-f`) and keeps their state; `hwt restore` re-creates every
+one not closed, also for a task already present. `hcdev close` sweeps the
+processes under the task's aspect root as well as its worktree. `hwt done`
+does not touch aspects, because it does not touch the task's own worktree
+either. Subtasks are tasks of their own and are not cascaded; `hwt sync`
+never sees `~/fun_aspects`, so research scratch is never wip-committed or
+pushed.
 
 ## Opening a session from a dashboard: two things that kill the terminal
 
