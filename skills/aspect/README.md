@@ -23,8 +23,9 @@ The aspect appears on the task's hdash card under **Aspects** with its state.
 
 A subtask is a deliverable with its own card, session, branch and PR, and it
 can wait for weeks. A research question ends in a file the task reads, and it
-belongs to the task: it has no card, closes with it, and runs in its session
-as a tab. The research context — sources, spikes, dead ends — stays in the
+belongs to the task: it has no card, and runs in its session as a tab. It
+is closed on its own (`hwt aspect close <name>`) — `hwt done` leaves a task's
+aspects alone. The research context — sources, spikes, dead ends — stays in the
 tab's conversation instead of this one.
 
 ## Refused under `auto: true`

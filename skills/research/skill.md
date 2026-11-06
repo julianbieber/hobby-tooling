@@ -5,10 +5,10 @@ allowed-tools: Bash(hresearch:*), WebSearch, Read, Grep
 ---
 
 Answer $ARGUMENTS (or, when invoked by description rather than `/research`, my
-last message) as a fixed-shape markdown file, never prose. This is research on
-the side of a jam entry where LLM-written code and assets are prohibited, so
-nothing here may write code or copy text into the jam repo — only files in
-this task's `research/` dir.
+last message) as a fixed-shape markdown file, never prose — a concise,
+checkable result. Research writes no code: the only files it writes are in
+this task's `research/` dir. Reading the project is fine, and an item may
+refer to a part of it by `path:line`.
 
 ## 0. Pick the shape
 
@@ -77,8 +77,7 @@ the original `new` call is for.
    ```
    A `render:` error names the slot and the problem — fix the JSON (drop or
    re-copy the offending text, mark it unsourced, or empty the slot) and
-   render again. Never write `card.json` or the `.hresearch` by hand, and never
-   touch the jam repo checkout.
+   render again. Never write `card.json` or the `.hresearch` by hand.
 6. Reply in the pane with exactly one line: the card's path. Nothing else —
    the card is the answer, not a summary of it.
 
@@ -86,32 +85,32 @@ the original `new` call is for.
 
 4. Pick 2–5 techniques as columns — never more than 5; if more are genuinely
    candidates, keep the strongest ones and drop the rest.
-5. The four criteria are fixed and every cell must be filled for every
-   column, in a few words, never a sentence:
-   - **looks like** — what it produces or feels like in play.
-   - **cost per frame** — the shape of its runtime cost.
-   - **jam-sized** — whether it fits a jam's time and scope, and the catch if
-     any.
-   - **bevy precedent** — for each technique, `hresearch fetch` a Bevy
-     example, crate or repo that implements it and cite it as `{"src": k}`;
+5. Pick 1–4 **criteria** for this question — the ones the techniques
+   actually differ on and the choice turns on, each at most 4 words. They are
+   rows, chosen per question; nothing about a project fixes them. Every cell
+   must be filled for every column, in a few words, never a sentence. One
+   more row is always there and is not in `criteria`:
+   - **precedent** — for each technique, `hresearch fetch` an example, crate
+     or repo that implements it and cite it as `{"src": k}`;
      `{"none": true}` when no precedent was found. Never a `text` cell here.
 6. `verdict` names exactly one column — pick one, never "it depends".
 7. Render:
    ```
    hresearch render <dir> - <<'JSON'
    { "shape": "matrix",
+     "criteria": ["<criterion>", "<criterion>"],
      "options": [ {"name": "...", "cells": {
-         "looks like": {"text": "...", "src": 1},
-         "cost per frame": {"text": "..."},
-         "jam-sized": {"text": "..."},
-         "bevy precedent": {"src": 2} } }, ... ],
+         "<criterion>": {"text": "...", "src": 1},
+         "<criterion>": {"text": "..."},
+         "precedent": {"src": 2} } }, ... ],
      "verdict": {"option": "...", "text": "..."} }
    JSON
    ```
    A `render:` error names the cell and the problem (too many words, an
-   unknown criterion, a verdict naming no column, a precedent cell with no
-   `src` or `none`) — fix the JSON and render again. Never write `card.json`
-   or the `.hresearch` by hand.
+   unknown criterion, a criterion named `precedent` or `verdict`, a verdict
+   naming no column, a precedent cell with no `src` or `none`) — fix the
+   JSON and render again. Never write `card.json` or the `.hresearch` by
+   hand.
 8. Reply in the pane with exactly one line: the matrix's path.
 
 ## Mechanism-figure
@@ -141,6 +140,6 @@ the original `new` call is for.
    around a rejection; redraw it. Never write `card.json` or the `.hresearch` by
    hand.
 8. Reply in the pane with exactly one line: the figure's path. The figure is
-   a notes file — it never gets written into the jam repo — and a throwaway
-   interactive visual (a plot, a live viewer) is allowed alongside it but is
-   never the default medium; the figure is the answer.
+   a notes file, and a throwaway interactive visual (a plot, a live viewer) is
+   allowed alongside it but is never the default medium; the figure is the
+   answer.

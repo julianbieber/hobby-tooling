@@ -168,7 +168,7 @@ Per task:
 
 | field | value |
 |---|---|
-| `task` | `<blurb>-<slug>`, lowercase `[a-z0-9-]`, at most 40 characters — no issue is filed yet, so no `gh-<n>` |
+| `task` | `<blurb>_<slug>`, lowercase `[a-z0-9_]`, at most 40 characters — no issue is filed yet, so no `gh-<n>` |
 | `topic` | the blurb |
 | `title` | one line |
 | `scenarios` | the owned ids |

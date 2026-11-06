@@ -10,11 +10,11 @@
 
 ## Why
 
-During a game jam, code and asset generation with an LLM is prohibited but
-research on the side is fine. Reading LLM-generated prose as a research result
-isn't wanted either, so a question gets answered as a **card**: a fixed set of
-slots, each either filled with something checkable or explicitly left empty —
-never a paragraph.
+Research answers any question in any project with a concise result. Reading
+LLM-generated prose as a research result isn't wanted, so a question gets
+answered as a **card**: a fixed set of slots, each either filled with something
+checkable or explicitly left empty — never a paragraph. Research writes no
+code; it may read the project and refer to parts of it by `path:line`.
 
 ## Picking the shape
 
@@ -195,43 +195,45 @@ slots of prose:
 ```
 question: which techniques exist to simulate water flow
 
-                | heightfield pipes | shallow water eq | SPH particles |
-looks like      | rivers, pools     | waves, splash    | droplets      |
-cost per frame  | O(cells)          | O(cells), stiff  | O(n log n)    |
-jam-sized       | yes               | yes, careful dt  | small counts  |
-bevy precedent  | [1]               | [2]              | none found    |
-verdict         | start here        |                  |               |
+               | heightfield pipes | shallow water eq | SPH particles |
+looks like     | rivers, pools     | waves, splash    | droplets      |
+cost per frame | O(cells)          | O(cells), stiff  | O(n log n)    |
+precedent      | [1]               | [2]              | none found    |
+verdict        | start here        |                  |               |
 
 [1] <url>
 [2] <url>
 ```
 
-**Criteria (first set)**, fixed by the tool rather than chosen per question —
-so "one row per criterion" is checkable against a known set:
+**Criteria are chosen per question** — 1–4 of them, named in the matrix JSON's
+`criteria` list — because what techniques differ on depends on the question,
+not on the project. "One row per criterion" stays checkable against that list.
+Two rows are fixed and are never criteria:
 
-- **looks like** — what the technique produces or feels like in play.
-- **cost per frame** — the shape of its runtime cost.
-- **jam-sized** — whether it fits a jam's time and scope.
-- **bevy precedent** — a link to a Bevy example/crate/repo, or `none found`.
+- **precedent** — a link to an example/crate/repo implementing the technique,
+  or `none found`.
+- **verdict** — the one column to pick.
+
+A matrix written before `criteria` existed, with the old fixed jam/Bevy rows,
+no longer validates.
 
 ## Matrix JSON
 
 ```json
 { "shape": "matrix",
+  "criteria": ["looks like", "cost per frame"],
   "options": [
     { "name": "heightfield pipes",
       "cells": {
         "looks like": {"text": "rivers, pools", "src": 1},
         "cost per frame": {"text": "O(cells)"},
-        "jam-sized": {"text": "yes"},
-        "bevy precedent": {"src": 3}
+        "precedent": {"src": 3}
       } },
     { "name": "cellular automaton",
       "cells": {
         "looks like": {"text": "falling sand"},
         "cost per frame": {"text": "O(cells)"},
-        "jam-sized": {"text": "yes"},
-        "bevy precedent": {"none": true}
+        "precedent": {"none": true}
       } }
   ],
   "verdict": {"option": "heightfield pipes", "text": "start here"} }
@@ -240,11 +242,14 @@ so "one row per criterion" is checkable against a known set:
 Rules `render` enforces:
 
 - 2–5 options, unique `name`s, each ≤ 32 chars.
-- Every option's `cells` has exactly the four criteria, no extras.
+- `criteria` is a list of 1–4 unique names, each a single line of ≤ 4 words
+  and ≤ 32 chars, none of them `precedent` or `verdict`.
+- Every option's `cells` has exactly the listed criteria plus `precedent`, no
+  extras.
 - A non-precedent cell's `text` is a single line, ≤ 32 chars and ≤ 4 words
   (a cited `[k]` suffix doesn't count as a word); `src` is optional and must
   be in `sources.json`.
-- A `bevy precedent` cell is exactly `{"src": k}` (k in `sources.json`) or
+- A `precedent` cell is exactly `{"src": k}` (k in `sources.json`) or
   `{"none": true}` — never a `text` cell.
 - `verdict.option` must name exactly one option; `verdict.text` is a
   single line of ≤ 4 words.
