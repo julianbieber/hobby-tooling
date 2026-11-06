@@ -49,12 +49,9 @@ pub struct Annotation<'a> {
     pub span: Span,
 }
 
-/// Recognise a marker in a comment line's `content` (already trimmed, so it
-/// starts at the `#`). A repeated sign — `# --- divider ---`, `# +++` — is a
-/// rule line, not a marker.
 fn parse_marker(content: &str) -> Option<(Marker, &str)> {
     let rest = content.strip_prefix('#')?;
-    let rest = rest.trim_start_matches([' ', '\t']);
+    let rest = rest.strip_prefix(' ').unwrap_or(rest);
     let marker = match rest.as_bytes().first()? {
         b'+' => Marker::Added,
         b'-' => Marker::Removed,
@@ -118,11 +115,19 @@ pub fn added_lines(src: &str) -> BTreeSet<usize> {
     baseline(src).added
 }
 
-/// Which sections write their content as `- ` bullets, so a removed line —
-/// whose bullet the marker's own `-` stands in for — needs one restored.
-fn bulleted(section: Option<&str>, in_source_paths: bool, removed: &str) -> bool {
+fn opens_where_block(content: &str) -> bool {
+    content.trim() == "where:"
+}
+
+fn bulleted(
+    section: Option<&str>,
+    in_source_paths: bool,
+    in_where_block: bool,
+    removed: &str,
+) -> bool {
     match section {
-        Some("behavior") | Some("invariants") => true,
+        Some("behavior") => !in_where_block && !opens_where_block(removed),
+        Some("invariants") => true,
         // `## api` interleaves `fn` signature lines with the bullets nested
         // under them, so only the bullets need one restored (grammar §11).
         Some("api") => !removed.starts_with("fn "),
@@ -141,6 +146,7 @@ pub fn baseline(src: &str) -> Baseline {
     let mut added = BTreeSet::new();
     let mut section: Option<&str> = None;
     let mut in_source_paths = false;
+    let mut in_where_block = false;
     // What the active `# +` is still covering, if anything (grammar §10).
     let mut dropping: Option<Covered> = None;
     let mut awaiting_added_line = false;
@@ -195,6 +201,10 @@ pub fn baseline(src: &str) -> Baseline {
             LineKind::Section => {
                 section = Some(line.content.trim_start_matches('#').trim());
                 in_source_paths = false;
+                in_where_block = false;
+            }
+            LineKind::Content if section == Some("behavior") && line.indent == 0 => {
+                in_where_block = opens_where_block(line.content);
             }
             LineKind::Content if section.is_none() => {
                 in_source_paths = if line.content.starts_with('-') {
@@ -212,12 +222,16 @@ pub fn baseline(src: &str) -> Baseline {
                 continue;
             }
             Some((Marker::Removed, removed)) if !removed.is_empty() => {
-                let bullet =
-                    if bulleted(section, in_source_paths, removed) && !removed.starts_with("- ") {
-                        "- "
-                    } else {
-                        ""
-                    };
+                if section == Some("behavior") && line.indent == 0 {
+                    in_where_block = opens_where_block(removed);
+                }
+                let bullet = if bulleted(section, in_source_paths, in_where_block, removed)
+                    && !removed.starts_with("- ")
+                {
+                    "- "
+                } else {
+                    ""
+                };
                 text.push_str(&" ".repeat(line.indent));
                 text.push_str(bullet);
                 text.push_str(removed);

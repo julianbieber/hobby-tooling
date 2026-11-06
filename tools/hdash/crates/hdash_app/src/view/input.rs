@@ -185,6 +185,11 @@ impl DashView {
                     self.ui.pr_expanded.insert(id);
                 }
             }
+            Control::TodoToggle(id) => {
+                if !self.ui.todo_expanded.remove(&id) {
+                    self.ui.todo_expanded.insert(id);
+                }
+            }
             Control::PrLine(_, url) => return Some(Action::OpenUrl(url)),
             Control::Subtask(_, child) => {
                 self.ui.selected_project = Some(child.project);
@@ -292,6 +297,9 @@ impl DashView {
             .into_iter()
             .map(|b| Control::Card(id.clone(), b))
             .collect();
+        if !task.todo.is_empty() {
+            out.push(Control::TodoToggle(id.clone()));
+        }
         if !task.prs.is_empty() {
             out.push(Control::PrsToggle(id.clone()));
             if self.ui.pr_expanded.contains(id) {

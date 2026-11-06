@@ -31,7 +31,7 @@ pointer; the control under the pointer is drawn reversed.
 | --- | --- |
 | `q` / `Ctrl-C` | quit (`Ctrl-C` also while typing in the filter field) |
 | `↑` `ü` / `↓` `ä` | select the previous / next card; `PgUp` / `PgDn` by a screen |
-| `←` `ö` / `→` `#` | move along the selected card's buttons, then its PR toggle, PR lines and subtasks |
+| `←` `ö` / `→` `#` | move along the selected card's buttons, then its todo toggle, PR toggle, PR lines and subtasks |
 | `Enter` / `Space` | press the focused control (a newly selected card starts on its primary button) |
 | `/` | focus the project filter field |
 
@@ -123,6 +123,16 @@ started, removed, orphan), **PR** (awaiting review), **Repos** (dirty), **Phase*
 are alternatives; groups combine with AND. Each chip shows how many items the list would have
 with it on; a chip that would match nothing is hidden unless it is on, and **clear** turns
 them all off. Chips live in memory.
+
+## Live plan
+
+A task whose `build-task.json` carries a `todo` list or a `waiting_on` line gets one more
+card line: **`▸ Todo (3/7)`** with the active step beside it, and **`waiting: <line>`** in
+amber while a gate holds. Clicking the toggle (or focusing it and pressing `Enter`) expands
+the whole list — `✓` done, `▶` active, `○` pending, `✗` dropped. `/task:build` and
+`/task:auto` write both fields; a dropped item counts as done. It is the hobby half of the
+work `wt-overview`'s flow line: no aspects, because a second PR here is a subtask, which the
+card already lists.
 
 ## Session state
 

@@ -823,6 +823,50 @@ fn a_repeated_sign_is_a_comment_not_a_marker() {
     assert!(diags.is_empty(), "expected no diagnostics, got: {diags:#?}");
 }
 
+// Pins that a removed `where:` binding is restored without a bullet while a removed step keeps one.
+#[test]
+fn removals_in_a_where_block_reconstruct_the_baseline() {
+    let src = annotated(&[
+        "- do it N times",
+        "# - stop after it",
+        "where:",
+        "  # - N = 3",
+        "  # +",
+        "  N = 4",
+    ]);
+    let (_doc, diags) = analyze(&src);
+    assert!(
+        !diags.iter().any(|d| d.code == code::UNRECOVERABLE_BASELINE),
+        "{diags:#?}"
+    );
+    let baseline = mml_parser::annotations::baseline(&src).text;
+    assert!(baseline.contains("\n- stop after it\n"), "{baseline}");
+    assert!(baseline.contains("\n  N = 3\n"), "{baseline}");
+    assert!(!baseline.contains("N = 4"), "{baseline}");
+}
+
+// Pins that a removed `where:` opener and its bindings are all restored without a bullet.
+#[test]
+fn removed_where_block_reconstructs_the_baseline() {
+    let src = annotated(&["- do it N times", "# - where:", "  # - N = 3"]);
+    let (_doc, diags) = analyze(&src);
+    assert!(
+        !diags.iter().any(|d| d.code == code::UNRECOVERABLE_BASELINE),
+        "{diags:#?}"
+    );
+    let baseline = mml_parser::annotations::baseline(&src).text;
+    assert!(baseline.contains("\nwhere:\n  N = 3\n"), "{baseline}");
+}
+
+// Pins that a sign more than one space after `#` is a commented-out bullet, not a marker.
+#[test]
+fn spaced_out_comment_bullet_is_not_a_marker() {
+    let src = annotated(&["- do it", "#     - a/b.rs"]);
+    assert!(mml_parser::annotations::scan(&src).is_empty());
+    let (_doc, diags) = analyze(&src);
+    assert!(diags.is_empty(), "expected no diagnostics, got: {diags:#?}");
+}
+
 /// Marking as added a type the *baseline* already needs: the annotated spec is
 /// fine, but the baseline it reconstructs to references a type that is no
 /// longer defined — so the unannotated half does not stand on its own.

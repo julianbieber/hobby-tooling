@@ -245,6 +245,8 @@ mod tests {
             last_active: None,
             coordinator: None,
             phase: None,
+            todo: Vec::new(),
+            waiting_on: None,
             session_name: session.into(),
         }
     }

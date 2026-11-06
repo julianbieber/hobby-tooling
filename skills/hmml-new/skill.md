@@ -4,8 +4,8 @@ allowed-tools: Read, Grep, Glob, Write, Bash(ls:*), Bash(pwd:*), Bash(hobby-mml-
 ---
 
 Scaffold a skeleton `.hmml` spec for a **new** unit of behaviour — one that has
-no code yet — so I can edit it into the shape I want before
-`hmml-translate` turns it into code. This is the "building a new feature"
+no code yet — so I can edit it into the shape I want and think the design
+through. This is the "building a new feature"
 entry to the HMML loop (its sibling `hmml-extract` is the "adjusting an
 existing feature" entry: it goes code → `.hmml`; this skill goes idea → `.hmml`).
 
@@ -27,8 +27,9 @@ There are two paths, and you pick from what I give you:
   few behavior steps that I add to over an over-specified guess.
 
 Write the file and **stop** — reviewing, editing, and committing it are my job
-(same contract as extract and translate). The spec becomes real when I edit it
-and commit it as the baseline `hmml-translate` works from.
+(same contract as extract). The spec is a thinking aid: `/hmml-review` can
+pressure-test it, and once code exists `/hmml-extract --against` describes what
+was actually built.
 
 **Baseline first, even here.** A new unit still gets a current-version baseline
 — it is just sparse or empty. Two cases:
@@ -155,7 +156,7 @@ that is where the shapes with **no** ECS role go (grammar §4.6).
      yet, most of the draft is ordinary declarations — the references are for
      what the feature is built *on top of*. Grep the worktree before assuming a
      shape is new; a redeclared type is a second definition that will drift, and
-     `/hmml-translate` reads it as an instruction to create one.
+     reads as an instruction to create one.
    - **`## systems`** *(kind: plugin)* — guess ~2–4 systems, each a snake_case
      name, a one-line responsibility, and an access block. `schedule:` is
      required; add `after:` where the ordering is part of the idea, and the
@@ -185,9 +186,8 @@ that is where the shapes with **no** ECS role go (grammar §4.6).
 
 6. **`source` — only when the target is known.** A brand-new unit usually has no
    code yet, so leave `source` out. If the idea names the repo and files the new
-   code should live in, add the block with the **intended** new paths
-   (translate's full-generation mode creates files there); otherwise leave a
-   comment prompt:
+   code should live in, add the block with the **intended** new paths;
+   otherwise leave a comment prompt:
 
    ```
    # source: (add repo + intended paths once the target is decided)
@@ -216,9 +216,7 @@ that is where the shapes with **no** ECS role go (grammar §4.6).
    `unresolved-source-path` warning means the path is wrong — fix the path,
    don't drop the reference). If the binary is missing, validate by eye against
    the cheat-sheet. Do **not** run `git add` / `git commit` in the notes repo.
-   Report the path you wrote and the next step: **I** edit the draft, commit it
-   as the baseline, then run `/hmml-translate <unit>` to turn it into
-   code.
+   Report the path you wrote and stop: **I** edit the draft.
 
 ## Grammar cheat-sheet
 
@@ -396,7 +394,7 @@ kind: endpoint
 ```
 
 The bodies stay as comment prompts (behavior keeps the one placeholder bullet so
-the file is well-formed) — I fill them in, commit, then translate.
+the file is well-formed) — I fill them in.
 
 ### Draft from a rough idea — a Bevy `plugin`
 

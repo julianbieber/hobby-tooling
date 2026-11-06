@@ -55,7 +55,7 @@ kind: module
 #
 # Signatures stay faithful to the code — don't normalize an effect away, and
 # drop &, &mut and lifetimes. Leave out private functions and module state:
-# those are implementation, and /hmml-translate decides them.
+# those are implementation detail, not mental model.
 fn my_function(arg: u32) -> Option<String>
   - describe the first step here
 

@@ -130,6 +130,8 @@ pub struct UiState {
     pub hidden: HashSet<TaskId>,
     /// Tasks whose PR list is expanded (in-memory; collapsed by default).
     pub pr_expanded: HashSet<TaskId>,
+    /// Tasks whose todo list is expanded (in-memory; collapsed by default).
+    pub todo_expanded: HashSet<TaskId>,
     /// The sidebar's project filter text (in-memory).
     pub query: String,
     /// The filter chips that are on (in-memory).
@@ -325,6 +327,8 @@ mod tests {
             last_active: None,
             coordinator: None,
             phase: None,
+            todo: Vec::new(),
+            waiting_on: None,
             session_name: String::new(),
         }
     }

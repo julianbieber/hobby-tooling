@@ -337,6 +337,12 @@ pub struct Task {
     /// The `phase` recorded in the task's `build-task.json` by `/task:build` or `/task:auto`, if
     /// there is one.
     pub phase: Option<String>,
+    /// The session's live plan, `todo` in the same `build-task.json`, in the order it was written.
+    /// Empty when the file has none.
+    pub todo: Vec<Todo>,
+    /// What the session is waiting on me for, `waiting_on` in the same file; `None` while it is
+    /// working or has never stopped.
+    pub waiting_on: Option<String>,
     /// The zellij session name `hcdev` gives this task, as `hcdev.nu` spells it.
     pub session_name: String,
 }
@@ -724,7 +730,11 @@ fn build_task(id: TaskId, adopted: bool, done: bool, block: Option<Block>) -> Ta
         git: GitInfo::default(),
     }];
     let prs = read_prs(&id);
-    let phase = read_phase(&id);
+    let BuildState {
+        phase,
+        todo,
+        waiting_on,
+    } = read_build_state(&id);
     let subtasks = read_subtasks(&id);
     let last_active =
         notes_path(&id).and_then(|p| std::fs::metadata(&p).ok().and_then(|m| m.modified().ok()));
@@ -753,6 +763,8 @@ fn build_task(id: TaskId, adopted: bool, done: bool, block: Option<Block>) -> Ta
         last_active,
         coordinator,
         phase,
+        todo,
+        waiting_on,
         session_name: String::new(),
     }
 }
@@ -762,11 +774,97 @@ pub fn build_state_path(id: &TaskId) -> PathBuf {
     notes_root().join(id.rel()).join("build-task.json")
 }
 
-fn read_phase(id: &TaskId) -> Option<String> {
-    let text = std::fs::read_to_string(build_state_path(id)).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let phase = clean(value.get("phase")?.as_str()?);
-    (!phase.is_empty()).then_some(phase)
+/// One step of a session's live plan, as `/task:build` and `/task:auto` record it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Todo {
+    pub text: String,
+    pub status: TodoStatus,
+}
+
+/// Where a [`Todo`] stands. An unknown or missing status reads as `Pending`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TodoStatus {
+    Pending,
+    Active,
+    Done,
+    Dropped,
+}
+
+impl TodoStatus {
+    fn parse(status: Option<&str>) -> Self {
+        match status {
+            Some("active") => TodoStatus::Active,
+            Some("done") => TodoStatus::Done,
+            Some("dropped") => TodoStatus::Dropped,
+            _ => TodoStatus::Pending,
+        }
+    }
+}
+
+/// How far a todo list has got. A dropped item counts as done.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TodoCount {
+    pub open: usize,
+    pub done: usize,
+}
+
+impl TodoCount {
+    pub fn of(todos: &[Todo]) -> Self {
+        todos.iter().fold(TodoCount::default(), |mut c, t| {
+            match t.status {
+                TodoStatus::Pending | TodoStatus::Active => c.open += 1,
+                TodoStatus::Done | TodoStatus::Dropped => c.done += 1,
+            }
+            c
+        })
+    }
+
+    pub fn total(self) -> usize {
+        self.open + self.done
+    }
+}
+
+#[derive(Default)]
+struct BuildState {
+    phase: Option<String>,
+    todo: Vec<Todo>,
+    waiting_on: Option<String>,
+}
+
+fn read_build_state(id: &TaskId) -> BuildState {
+    std::fs::read_to_string(build_state_path(id))
+        .ok()
+        .map(|text| parse_build_state(&text))
+        .unwrap_or_default()
+}
+
+fn parse_build_state(text: &str) -> BuildState {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+        return BuildState::default();
+    };
+    let line = |key: &str| {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(clean)
+            .filter(|s| !s.is_empty())
+    };
+    let todo = value
+        .get("todo")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            let text = clean(item.get("text")?.as_str()?);
+            let status = TodoStatus::parse(item.get("status").and_then(serde_json::Value::as_str));
+            (!text.is_empty()).then_some(Todo { text, status })
+        })
+        .collect();
+    BuildState {
+        phase: line("phase"),
+        todo,
+        waiting_on: line("waiting_on"),
+    }
 }
 
 /// Path to a task's `issue.md` in the notes tree: `notes/PROJECT/TOPIC/TASK/issue.md`.
@@ -1008,6 +1106,37 @@ fn set_backlog_at(path: &Path, backlog: bool) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Pins how build-task.json's todo list and waiting_on are read: statuses map, blank text and
+    // an unknown status degrade instead of failing, and a file without them yields nothing.
+    #[test]
+    fn build_state_reads_todo_and_waiting_on() {
+        let state = parse_build_state(
+            r#"{"phase":"implement","waiting_on":"answer GATE C",
+                "todo":[{"text":"write the test","status":"done"},
+                        {"text":"fix it","status":"active"},
+                        {"text":"","status":"pending"},
+                        {"text":"ship it","status":"later"},
+                        {"text":"old idea","status":"dropped"}]}"#,
+        );
+        assert_eq!(state.phase.as_deref(), Some("implement"));
+        assert_eq!(state.waiting_on.as_deref(), Some("answer GATE C"));
+        let statuses: Vec<_> = state.todo.iter().map(|t| t.status).collect();
+        assert_eq!(
+            statuses,
+            [
+                TodoStatus::Done,
+                TodoStatus::Active,
+                TodoStatus::Pending,
+                TodoStatus::Dropped
+            ]
+        );
+        assert_eq!(TodoCount::of(&state.todo), TodoCount { open: 2, done: 2 });
+
+        let bare = parse_build_state(r#"{"phase":"plan","waiting_on":null}"#);
+        assert!(bare.todo.is_empty());
+        assert_eq!(bare.waiting_on, None);
+    }
 
     #[test]
     fn scan_unions_across_projects() {

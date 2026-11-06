@@ -1,6 +1,6 @@
 ---
 description: Run a task unattended in two separate processes — a headless plan stage that reads the code once and writes plan.md, then a fresh build stage that implements from the plan alone and, unattended, runs the acceptance observation as commands before the PR opens, or hands me the running app when I am there to look
-argument-hint: 'plan | build [<description> | --issue]'
+argument-hint: 'plan | build [<description> | --issue] [--delta]'
 allowed-tools: Skill, Read, Write, Edit, Bash
 ---
 
@@ -46,6 +46,14 @@ the report because a failing command stops the pipeline and a report does not.
    `written` to the time of that write; `phase_since` is set to the same
    value only when the write changes the phase, and otherwise carried forward
    from what the file already held. Get the time with `date -u +%FT%TZ`.
+   `todo` and `waiting_on` are kept current the same way, because `hdash`
+   shows them on the task's card: the plan stage seeds `todo` from the plan's
+   `Steps`, one `pending` item each; the build stage keeps exactly one item
+   `active` and flips it to `done` in the write that starts the next (items
+   only change status — `active`, `done`, `dropped` — and a step found on the
+   way is inserted where it runs); every `await-*` write sets `waiting_on` to
+   one line naming what I decide or do, and the write that leaves it sets
+   `null`.
 3. **The build stage reads what the plan names, and nothing else.** No
    `journal:resume`, no directory listings, no neighbouring modules "for
    context", no git history. A symbol the plan did not mention is looked up
@@ -88,6 +96,8 @@ Task context from `pwd` (`~/fun_worktrees/PROJECT/TOPIC/TASK`). State file at
   "ci_result": { "checked": "<RFC 3339>", "outcome": "green|blocked", "rounds": 0,
     "case": "", "check": "", "run": "", "log": "", "pr": "" },
   "play": { "command": "", "log": "" }, "feedback": [], "rounds": 0,
+  "todo": [ { "text": "<plan step>", "status": "pending" } ],
+  "waiting_on": null, "delta": false, "hmml_units": [],
   "written": "<RFC 3339>", "phase_since": "<RFC 3339>" }
 ```
 
@@ -101,10 +111,13 @@ coordinator seeded it.** A state file this skill writes for itself sets
 **`merge`** is seeded by the coordinator from its `tasks.json`; **absent means
 `mine`**, so a hand-typed `hcdev auto` never merges. `merge_result` is written
 by the `merge` phase below. `goal` and `scenarios` are written by `hcoord seed`
-and absent otherwise.
+and absent otherwise. **`delta`** is false unless I ask for it — `--delta` on
+either stage, or a coordinator that seeded it — and turns on the `delta` phase
+below; it is on demand because this skill exists to spend as little context as
+a task allows.
 
 Phases: `acceptance`, `await-acceptance`, `plan`, `planned`, `build`,
-`implement`, `comments`, `standards`, then either `verify` and `await-fix`
+`implement`, `delta` (only when `delta` is true), `comments`, `standards`, then either `verify` and `await-fix`
 (unattended) or `play` and `await-play` (interactive), then `pr`, `merge`,
 `fix-ci`, `journal`, `done`.
 
@@ -214,8 +227,8 @@ needs: run            <- only when a check requires the application running
 Decisions in `Risks` are decisions, not reasons: a *why* goes in the plan only
 when the brief or `business-context.md` gave it.
 
-Copy the checks into the state file as `acceptance_checks` alongside
-`phase: planned` — `verify` runs them from there rather than re-reading prose.
+Copy the checks into the state file as `acceptance_checks`, and the plan's
+`Steps` into `todo`, alongside `phase: planned` — `verify` runs them from there rather than re-reading prose.
 Write the state file, print the plan path and its `Files` list, and end. The
 process exits; `hauto` starts the build.
 
@@ -237,7 +250,15 @@ the plan file is not edited.
 **No end-to-end run here.** The end-to-end run is the play gate, or `verify`
 when unattended. Build and test are the evidence.
 
-Set `phase: comments` and fall through.
+Set `phase: delta` when `delta` is true, `comments` otherwise, and fall through.
+
+**Delta** — only when `delta` is true. `/hmml-extract --against <ref>`, with
+`<ref>` the merge base of the worktree and the default branch: it writes the
+units the diff touches as the worktree leaves them, `# -` / `# +` marking what
+the change did, into the task's notes dir. Record `hmml_units`. It is derived,
+never edited, and rerun after any later behaviour change (feedback, a repair).
+The play gate prints it; unattended, `hcoord wait`'s reader finds it in the
+notes. `phase: comments`.
 
 **Comments.** `/comment-pass` over the branch diff, naming
 `business-context.md` when it exists. Carry its shape-decision notes, declined
@@ -323,13 +344,16 @@ what I am handed.
 3. Print:
    - **what to try** — the acceptance observation verbatim, and where the app is;
    - the diff, one line per file, and any deviation from the plan;
+   - when `delta` is on, the derived delta — every `# -` / `# +` line grouped
+     by section, with a count;
    - build and test evidence, truncated as run;
    - context gaps with `file:line`, declined comment-pass findings, standards
      delta and any regression, prior art from the plan;
    - the shape-decision notes and the `business-context.md` handles a commit
      body may cite;
    - *"Play with it. Say continue to commit and open the PR, or tell me what
-     to change and I'll do it and relaunch."*
+     to change and I'll do it and relaunch."* — and, when `delta` is off, that
+     `delta` derives the HMML delta first.
 
    End the turn.
 
@@ -337,7 +361,10 @@ what I am handed.
    gate on its own — a backstop for this write being missed, not a licence to
    skip it.
 
-**Feedback** is anything but `continue`. Record it verbatim as
+**`delta`** at the play gate sets `delta: true`, runs the `delta` step above,
+prints it, and returns to `await-play` without relaunching.
+
+**Feedback** is anything else but `continue`. Record it verbatim as
 `## feedback-<n>` in `business-context.md`, append to `feedback`, kill the
 running app (`pkill -f` on the recorded command), implement the change reading
 only the files it touches, build, test, comments, standards, play again. No

@@ -4,16 +4,14 @@ allowed-tools: Read, Grep, Glob, Bash(git -C * diff:*), Bash(git -C * show:*), B
 ---
 
 Validate that the **implementation still matches its `.hmml` spec** — a read-only
-**conformance / drift check**, the mirror of translate. This is the closing step
-of the HMML loop: `hmml-extract` turns code into a `.hmml`, the human edits
-the `.hmml`, `hmml-translate` turns that edit into a code change — and over
-time code and spec drift apart. This skill answers **"does the code still do
+**conformance / drift check**. `hmml-extract` turns code into a `.hmml`, the
+human edits it or the code moves on — and over time code and spec drift apart. This skill answers **"does the code still do
 what the current spec says?"** and reports *where and which way* they have
 diverged.
 
 It **never edits** — not the code, not the spec. Deciding which side is right is
-the human's call, and that is the point: if the spec is the intent, run
-`hmml-translate` to make the code match; if the code is now the truth,
+the human's call, and that is the point: if the spec is the intent, the code is
+changed to match; if the code is now the truth,
 re-run `hmml-extract` to refresh the spec. This skill only tells you
 *that* they diverged and *how*.
 
@@ -31,7 +29,7 @@ Every finding is one of four verdicts. Use them exactly:
   behavior step with no code, an invariant with no enforcement, a struct field
   or module `@ path` that no longer exists). *This is usually the real drift* —
   either the code changed and the spec was not updated, or a spec edit was never
-  translated.
+  implemented.
 - **CODE-AHEAD** — the code does something the spec does **not** mention. The
   spec is a **lossy mental-model view by design**, so most undescribed code is
   expected and **must not be reported**. Flag CODE-AHEAD *only* for a
@@ -59,15 +57,15 @@ for you. Map each finding to a verdict:
 - A field the code has and the reference body omits is **not** CODE-AHEAD. A
   reference body is partial by definition, so omission carries no claim.
 
-**Annotated specs.** A spec carries the task's intended change as annotations on
-top of the baseline — `# - <text>` for what the change removes, `# +` for the
+**Annotated specs.** A spec may carry a change as annotations on top of the
+baseline — derived from a diff by `/hmml-extract --against`, or written by hand — `# - <text>` for what the change removes, `# +` for the
 block it adds (grammar §10). Read them; they change what each verdict *means*:
 
 - an unannotated line is a claim about the code as it is → the verdicts above
   apply unchanged;
 - a `# +` claim is intent. Before implementation, its absence from the code is
-  **expected** — report it as SPEC-AHEAD and say plainly that the fix is
-  `hmml-translate`, not a code bug. After implementation it must be present, and
+  **expected** — report it as SPEC-AHEAD and say plainly that it is not yet
+  implemented, not a code bug. After implementation it must be present, and
   its absence is real unfinished work;
 - a `# -` line is behaviour the change **removes**. It is a comment, so it is not
   a claim about today's code: after implementation, finding that behaviour still
@@ -105,7 +103,7 @@ representing the change.
    - **Uncommitted spec edits present** → you are validating against a spec that
      *itself* has a pending change. That change is almost always a **planned**
      edit not yet in code — expect it to show up as SPEC-AHEAD, and say
-     explicitly that the fix is `hmml-translate`, not a code bug.
+     explicitly that the fix is its implementation, not a code bug.
 
    Then check the spec is **structurally well-formed**: run
    `hobby-mml-parser <path> --lint` (grammar + linkage — an `unresolved-source-path`
@@ -122,7 +120,7 @@ representing the change.
    Verify each `source.paths` entry resolves to a real file; a broken link is
    itself a **SPEC-AHEAD** conformance failure (record it under modules/linkage).
 
-3. **Check each section, routing to code exactly as translate does.** Route each
+3. **Check each section, routing each line to its code.** Route each
    `## modules` line via its **`@ path`** anchor, then pin symbols with
    `tree-extract` (`build_graph` if `.project-graph.json` is absent, then
    `get_symbol` / `get_neighbors` / `call_path`) and `lsp-mcp`
@@ -226,7 +224,7 @@ representing the change.
      - the function **exists** and is **public** in the routed code (a spec entry
        the code no longer exposes is **SPEC-AHEAD**);
      - its **signature** matches — parameter names/types in order and the return
-       type, read through the same type-mapping tables translate inverts, and
+       type, read through the type-mapping tables `hmml-extract` uses, and
        ignoring `&`, `&mut` and lifetimes. A renamed parameter is prose-level; a
        changed *type* or arity is **SPEC-AHEAD**;
      - its **bullets** still describe what the body does, at the altitude rule
@@ -238,8 +236,8 @@ representing the change.
        private helper of this module is **not** drift — see below;
      - **private helpers are never drift.** A module spec describes the public
        surface only, so a private function the code has and the spec does not is
-       correct by design: translate is allowed to factor a bullet (or a nested
-       tree) into a helper. Never report one as CODE-AHEAD; follow it and judge
+       correct by design: the code may factor a bullet (or a nested tree) into a
+       helper. Never report one as CODE-AHEAD; follow it and judge
        the *behaviour* it implements against the bullet that owns it;
      - **completeness is a warning, not a verdict on the code.** A public
        function in the code with no `## api` entry is **CODE-AHEAD** — the spec's
@@ -267,8 +265,7 @@ representing the change.
    count and the most important items first). For each drift, recommend the
    remediation **without performing it**:
 
-   - **SPEC-AHEAD** and the spec is the intent → `/hmml-translate <unit>`
-     to make the code match.
+   - **SPEC-AHEAD** and the spec is the intent → change the code to match.
    - **CODE-AHEAD** and the code is now the truth → re-run
      `/hmml-extract`, review, and recommit the refreshed spec as the new
      baseline.
@@ -381,8 +378,7 @@ The human extracts a unit, commits it, and later runs validate with no code
 changes since. Every module `@ path` resolves, structs/enums match, every
 behavior step maps to code, and every invariant has an enforcement site. Report
 **CONFORMS** for all four sections and an overall **CONFORMS** — the code still
-matches its mental model. Recommend nothing. (This mirrors translate's no-op
-guarantee, from the read side.)
+matches its mental model. Recommend nothing.
 
 ### SPEC-AHEAD — an invariant the code no longer upholds
 
@@ -392,7 +388,7 @@ frame"*, but the `MAX_MESHES_PER_FRAME` constant in `src/chunk/mesher.rs` is now
 mesh queue is drained, see `16 ≠ 4`. Report **SPEC-AHEAD** on that invariant
 (and note it also contradicts the `## behavior` "take at most 4 from the queue"
 step — a self-consistent spec that the *code* broke). Overall **DRIFTED**.
-Recommend: if 4 is still the intent, `/hmml-translate` to restore it; if the
+Recommend: if 4 is still the intent, change the code back to it; if the
 code intentionally moved to 16, re-extract to refresh the spec. Do not touch
 either.
 

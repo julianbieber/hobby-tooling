@@ -1,35 +1,42 @@
 ---
-description: Run a task end to end as one human-gated pipeline with a recorded stage — assess once whether it splits into standalone subtasks, brief, HMML baseline, the business context only I hold, annotated delta, spec review loop, implement and test, comment pass, code quality standards, my review, PR, journal
+description: Run a task end to end as one human-gated pipeline with a recorded stage and a live todo list — assess once whether it splits into standalone subtasks, brief, the business context only I hold, a short plan, implement and test, read the implemented change back as an HMML delta derived from the diff, comment pass, code quality standards, my review, PR, journal
 argument-hint: '[<description> | --issue | --notes] [<phase>] [--no-hmml] [--no-context] [--no-split] [--resume-deep]'
-allowed-tools: Skill, Read, Write, Edit, AskUserQuestion, Bash(hobby-struct-parser:*), Bash(pwd:*), Bash(date:*), Bash(ls:*), Bash(rg:*), Bash(git branch:*), Bash(git -C * status:*), Bash(git -C * diff:*), Bash(git -C * log:*), Bash(git -C * rev-parse:*), Bash(git -C * ls-files:*), Bash(git status:*), Bash(git diff:*), Bash(git log:*), Bash(gh pr list:*), Bash(gh pr view:*), Bash(gh issue view:*), Bash(gh issue list:*), Bash(gh repo view:*), Bash(hcoord ci:*), Bash(gh run list:*), Bash(gh run rerun:*)
+allowed-tools: Skill, Read, Write, Edit, AskUserQuestion, Bash(hobby-struct-parser:*), Bash(pwd:*), Bash(date:*), Bash(ls:*), Bash(rg:*), Bash(git branch:*), Bash(git -C * status:*), Bash(git -C * diff:*), Bash(git -C * log:*), Bash(git -C * rev-parse:*), Bash(git -C * ls-files:*), Bash(git -C * merge-base:*), Bash(git status:*), Bash(git diff:*), Bash(git log:*), Bash(git merge-base:*), Bash(gh pr list:*), Bash(gh pr view:*), Bash(gh issue view:*), Bash(gh issue list:*), Bash(gh repo view:*), Bash(hcoord ci:*), Bash(gh run list:*), Bash(gh run rerun:*)
 ---
 
 Run a task **end to end** as one predictable, human-gated pipeline. The individual
-skills already exist (`journal:resume`, the HMML suite, `comment-pass`,
+skills already exist (`journal:resume`, `hmml-extract`, `comment-pass`,
 `structure`, `journal:write`); this is
 the **thin orchestrator** that runs them in a fixed order, stops hard where I take over, and resumes in a
 later session exactly where it left off.
 
 **You are glue, not a reimplementation.** Never re-do what a sub-skill owns (HMML
-grammar, delta-vs-full-generation). Invoke it and trust its contract. Keep the sequential spine in *this* main-loop context so each
+grammar, how a delta is derived from a diff). Invoke it and trust its contract. Keep the sequential spine in *this* main-loop context so each
 phase reuses the last one's understanding — do not fan work out to subagents
 except where a sub-skill already does (`journal:resume`).
+
+**Only facts are settled before code**: what the task is, and the business
+context only I hold. Design is not reviewed up front. Once the change is
+implemented and tested, it is read back as an HMML delta derived from the diff —
+the HMML exists for me to understand what the code change is doing, so it
+represents the implemented change, never a plan.
 
 ## Four rules that override everything else
 
 1. **Hard-stop at every human gate** — GATE S (the subtask assessment, once per
-   task), GATE C (the business-context questions, before the delta is designed),
-   GATE 1 (after the HMML spec review), and GATE 2 (once the change is
-   implemented, tested and comment-passed). "Hard stop" means: finish the
-   phase, write the state file, print a compact summary of what I need to do, and
+   task), GATE C (the business-context questions, before anything is designed),
+   and GATE 2 (once the change is implemented, tested, read back as a delta and
+   comment-passed). "Hard stop" means: finish the
+   phase, set `waiting_on`, write the state file, print a compact summary of what I need to do, and
    **end your turn**. Do not start the next phase, do not touch code, **do not
    create a worktree**, until I say so. **Reading the
-   code is mine.** Nothing in this pipeline reviews the diff — `hmml-review` looks
-   at the spec and `/comment-pass` at the comments, and that is deliberately all of
-   it. Do not add a review pass of your own, and do not print a critique of your
-   own change at GATE 2; give me the diff and the evidence.
+   code is mine.** Nothing in this pipeline reviews the diff — the derived delta
+   is for me to read, `/comment-pass` looks at the comments and `/structure`
+   counts, and that is deliberately all of it. Do not add a review pass of your
+   own, and do not print a critique of your own change at GATE 2; give me the
+   diff, the delta and the evidence.
 2. **Never auto-commit** — not the source repo, not the notes repo where the
-   `.hmml` baseline lives. That is my call, same contract as every sub-skill.
+   `.hmml` delta lives. That is my call, same contract as every sub-skill.
    Read-only git and `gh pr list` are fine. You do write the
    commit *message* when I ask for one, to the rule in `~/.claude-hobby/CLAUDE.md`
    — terse, a record of the decisions, and **no justification you were not
@@ -75,7 +82,8 @@ except where a sub-skill already does (`journal:resume`).
 
    ```json
    { "phase": "assess-split", "brief_source": "issue|description|notes",
-     "brief": "<the brief>", "hmml_unit": "<unit>",
+     "brief": "<the brief>", "plan": "<plan file name>",
+     "hmml_units": ["<unit>"],
      "no_hmml": false, "no_context": false, "no_split": false,
      "is_subtask": false,
      "split": { "assessed": "<YYYY-MM-DD>", "outcome": "none|refused|split",
@@ -86,15 +94,17 @@ except where a sub-skill already does (`journal:resume`).
      ],
      "size_budget": "", "prior_art": "",
      "context_questions": [], "context_recorded": null, "context_gaps": [],
-     "rounds": 0, "ci_rounds": 0,
+     "todo": [ { "text": "<step>", "status": "pending" } ],
+     "waiting_on": null,
+     "ci_rounds": 0,
      "written": "<RFC 3339>", "phase_since": "<RFC 3339>" }
    ```
 
-   `phase` is one of `assess-split`, `plan`, `context`, `await-hmml-review`,
-   `revise`, `implement`, `comments`, `standards`, `review`, `await-review`,
-   `pr`, `ci`, `journal`, `handed-off` (this task became a coordinator and its
-   work lives in its subtasks), `done`. `context` and `await-hmml-review` are the two
-   waiting states: the pipeline has asked me something and stops until I answer.
+   `phase` is one of `assess-split`, `plan`, `context`, `implement`, `delta`,
+   `comments`, `standards`, `review`, `await-review`, `pr`, `ci`, `journal`,
+   `handed-off` (this task became a coordinator and its work lives in its
+   subtasks), `done`. `context` is the waiting state GATE C leaves: the pipeline
+   has asked me something and stops until I answer.
    Every write sets `written` to that write's time; `phase_since` moves with it
    only when the write also changes `phase`, and otherwise keeps its old value.
 
@@ -104,8 +114,12 @@ except where a sub-skill already does (`journal:resume`).
    it is never re-asked, and **`subtasks`** lists what it produced; both are
    absent until `assess-split` runs.
 
-   A leftover `dev-flow.json` in the same directory is read once for its `phase`
-   and `hmml_unit`, then ignored — never written to again. A state file with no
+   **Migrate an old record** before anything else, and say so in one line: a
+   phase of `await-hmml-review` or `revise` becomes `implement` (its annotated
+   `.hmml` and review plan stay in the notes dir as notes; nothing is
+   re-reviewed), `hmml_unit` becomes `hmml_units`, and `rounds` is dropped. A
+   leftover `dev-flow.json` in the same directory is read once for its `phase`,
+   then ignored — never written to again. A state file with no
    `split` record and a phase past `plan` gets
    `split: {"outcome": "refused", "reason": "task already in flight"}` rather
    than a back-filled assessment: the precondition below fails by construction
@@ -116,42 +130,52 @@ except where a sub-skill already does (`journal:resume`).
    is skipped only when `is_subtask` is true, `no_split` is set, or `split` is
    already recorded. Else an explicit phase argument forces it; else `phase`
    from the state file; else **infer** from artifacts and say what you inferred
-   — no `.hmml` → `plan`; an **unannotated** `.hmml` (baseline captured, no
-   `# +` / `# -` markers yet) → `plan` resuming at the context step when
-   `business-context.md` has no section for this task, or `context` resuming at
-   the annotate step when it does (my answers are on disk, the delta is not); an
-   **annotated** `.hmml` (`rg -c '^\s*# [+-]'` on it is non-zero) **and a clean
-   worktree** → `await-hmml-review` — annotations are never stripped, so an
-   annotated spec alone does not mean the change is unimplemented; uncommitted
-   code changes → `implement`; an open PR for the branch → `done`.
+   — `business-context.md` has no section for this task and there is no
+   `plan-*.md` → `plan`; a section but no plan file → `context`, resuming at the
+   plan step (my answers are on disk, the plan is not); uncommitted code changes
+   or commits ahead of the default branch → `implement`; an open PR for the
+   branch → `done`.
 
    **`phase: handed-off` is terminal.** This task's work lives in its subtasks
    now. Print the `subtasks` list with the `hcdev wt <task>` command for each,
    remind me that each one runs its own `/task:build`, and end the turn. Do not
    plan, implement, or open a PR here — this task owns no code.
 
-5. **Flags:** `--no-hmml` skips the spec phases entirely (plan the change inline in
-   a sentence or two, then ask the context questions off that inline plan instead
-   of off a delta). `--no-context` skips GATE C — for a change I have no domain
-   background to give; the comment pass then has nothing to write an unverifiable
-   *why* from, so it reports every such site as a gap. `--no-split` skips
-   `assess-split` for this task, for when I already know it is one thing.
-   `--resume-deep` uses `journal:resume-deep`. Record each as its state-file flag
-   so a resume does not silently re-add the phase.
+5. **Flags:** `--no-hmml` skips the `delta` phase, for a change I can read
+   straight from the diff. `--no-context` skips GATE C — for a change I have no
+   domain background to give; the comment pass then has nothing to write an
+   unverifiable *why* from, so it reports every such site as a gap.
+   `--no-split` skips `assess-split` for this task, for when I already know it
+   is one thing. `--resume-deep` uses `journal:resume-deep`. Record each as its
+   state-file flag so a resume does not silently re-add the phase.
 
 6. **Rehydrate before running a phase that is not `plan`.** A resumed session has
    none of the understanding the earlier phases built, and does not need to guess
-   — read, in this order: the state file's `brief`, `context_gaps` and `evidence`;
-   the annotated `.hmml` (**the delta is the intent**, `# +` / `# -` and all);
-   the `hmml-review` plan; `business-context.md` — the domain facts I dictated at
-   GATE C, in my own words, which are what the delta was designed from and the
-   only text the comment pass may write an unverifiable *why* from; and
-   `git status --short` / `git diff`. Then say in two lines what the task is
-   doing and where it stopped.
+   — read, in this order: the state file's `brief`, `todo`, `context_gaps` and
+   `evidence`; the plan file; `business-context.md` — the domain facts I
+   dictated at GATE C, in my own words, which are what the change was designed
+   from and the only text the comment pass may write an unverifiable *why* from;
+   the derived `.hmml` delta when `delta` has run; and `git status --short` /
+   `git diff`. Then say in two lines what the task is doing and where it stopped.
 
 Announce the resolved `{project, topic, task, brief_source, phase}` in one line,
 then run from that phase onward. Never redo an earlier phase. Write the
 state file at **every** transition; do not `git add`/`commit` it.
+
+## Live state
+
+`hdash` shows `todo` and `waiting_on` on the task's card, so keep both current
+while you work — they are how I see where a session is without opening it.
+
+- **`todo` is the plan.** Seed it from the plan file's steps when the plan is
+  written, one line each, every item `pending`. Items only change status —
+  `active`, `done`, `dropped`; a step found on the way is inserted where it
+  runs. Exactly one item is `active` while work is under way; flip it to `done`
+  in the same write that starts the next one. Open items that outlive the task
+  go to the journal at `journal`, never into `todo`.
+- **`waiting_on`** is one line naming what I decide or do, set at every hard
+  stop and when a sub-skill asks me something; `null` again in the write that
+  starts the next step.
 
 ______________________________________________________________________
 
@@ -256,7 +280,7 @@ Only after I approve the decomposition. Per approved subtask, in order:
    ```json
    { "phase": "plan", "is_subtask": true, "brief_source": "description",
      "brief": "<the full brief>", "no_hmml": false, "no_context": false,
-     "rounds": 0 }
+     "todo": [], "waiting_on": null }
    ```
    `is_subtask: true` is what bounds the depth at one — without it the subtask's
    own session would assess a split of its own.
@@ -283,7 +307,7 @@ ______________________________________________________________________
 
 ## Phase `plan` → GATE C
 
-**Gate 0 — prior art and size.** Before any spec or code. No sweeping changes
+**Gate 0 — prior art and size.** Before any code. No sweeping changes
 without prior discussion, and do not accelerate past someone else's active work.
 
 - `gh pr list --search "<keywords>" --state all` on the repo this task targets,
@@ -308,54 +332,35 @@ each:
 
 This is the cheap end of the loop. "This adds a module importing eight others and
 the standard says six" is a design choice at plan time and rework at review time.
-Carry the reading into the spec so GATE 1 sees it.
+Carry the reading into the plan file.
 
 A repo with no `structure.hstruct` skips this silently — most have none, and a
 task is not the place to argue for one.
 
-**The HMML baseline: spec the *current* version first.** Before working out what
-the change should be — before any design thinking at all — capture what the unit
-does **today**. That spec is the baseline the whole task is stated against;
-skipping it leaves the delta with nothing to be a delta *of*. Pick the entry from
-what the task is:
+**Read the code the change will touch.** Enough to know what it does today —
+the units, the data, the call paths the brief lands in. No spec is written here:
+the delta is derived from the diff once the change exists, and that is where the
+baseline comes from.
 
-- adjusting existing code → `hmml-extract` on that unit
-- new behaviour → still baseline first: `hmml-extract` on the code that will
-  **host** it (the plugin, the system, the endpoint it lands in), or `hmml-new`
-  asked for a blank template when there is genuinely nothing to extract. A sparse
-  baseline is a fine baseline.
-
-If genuinely unclear which unit to baseline, ask **one** question. The sub-skill
-writes
-`~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/<unit>.hmml` —
-**unannotated**, describing current behaviour only — and stops. Record
-`hmml_unit`.
-
-Do not think about the change while doing this, and do not let the intended
-behaviour leak into the baseline: a baseline that already contains the change
-cannot show what the change is.
-
-**Ask for the business context.** The baseline says what the code does; the
-change is not designed yet. This is the moment to collect what only I have — the
-context the delta has to be designed inside: which rule sets a bound, what an
-upstream system guarantees, what a later reader will break by tidying a shape
-away, why the obvious approach was rejected before. Ask now and the answers
-shape the delta, the plan, the code, the comments *and* the commit message. Ask
-after the code exists and they can only decorate it.
+**Ask for the business context.** The change is not designed yet. This is the
+moment to collect what only I have — the context the change has to be designed
+inside: which rule sets a bound, what an upstream system guarantees, what a
+later reader will break by tidying a shape away, why the obvious approach was
+rejected before. Ask now and the answers shape the plan, the code, the comments
+*and* the commit message. Ask after the code exists and they can only decorate
+it.
 
 Skip this step entirely on `--no-context`: set `phase: context` and carry on to
-the annotate step in the same turn.
+the plan step in the same turn.
 
-First **read what is already written down**: the brief, the baseline spec, the
-task's `issue.md`, and the task notes. Ask for nothing recoverable from those — quote
-it instead.
+First **read what is already written down**: the brief, the task's `issue.md`,
+and the task notes. Ask for nothing recoverable from those — quote it instead.
 
-Then derive the questions from the goal read against the baseline: what does
+Then derive the questions from the goal read against the code: what does
 building this need to know that the current code cannot tell you? **At most
 seven questions**, each
 
-- anchored to something named — a baseline line, a unit, a field, a rule in the
-  brief;
+- anchored to something named — a file, a unit, a field, a rule in the brief;
 - about the **system**: what produces this, what consumes it, which rule forces
   it, what goes wrong without it;
 - open, with no draft answer and no leading guess — a proposed sentence with a
@@ -365,29 +370,29 @@ seven questions**, each
 
 **Nothing worth asking?** Say so in one line (`the brief is self-contained — no
 business context needed`), set `phase: context`, and carry straight on to the
-annotate step **without** stopping. A gate with nothing behind it is friction.
+plan step **without** stopping. A gate with nothing behind it is friction.
 
 **→ GATE C: HARD STOP.** Otherwise set `phase: context`, write
 `context_questions` verbatim (so a resumed session re-asks *these* rather than
-inventing new ones) and the state file, then print the numbered questions and
-one line: *"Answer any of these in your own words — `N: skip` if there is
-nothing to say, and a skip is a real answer. Then say continue and I'll annotate
-the delta off your answers."* End your turn.
+inventing new ones), set `waiting_on` to `answer the GATE C questions`, write
+the state file, then print the numbered questions and one line: *"Answer any of
+these in your own words — `N: skip` if there is nothing to say, and a skip is a
+real answer. Then say continue and I'll plan and build off your answers."* End
+your turn.
 
 ______________________________________________________________________
 
-## Phase `context` → GATE 1
+## Phase `context` → `implement`
 
 The waiting state written at GATE C. Entered when my answers come back.
 
 **The `context` phase argument re-opens it at any point** — the pipeline's one
 loop, and how more of what I know gets in after I have seen something. Invoked
 later, it derives its questions from whatever prompted the top-up (the delta I
-just read at GATE 1, or the gaps the comment pass reported — each of those
+just read at GATE 2, or the gaps the comment pass reported — each of those
 carries its own question at a `file:line` you can now show me), appends the
-answers to the same section, and returns to the phase it interrupted: the
-annotate step when the top-up came from GATE 1, `comments` when the code is
-already written.
+answers to the same section, and returns to the phase it interrupted:
+`implement` when the code has to change, `comments` when only the comments do.
 
 **Record my answers, verbatim.** Append them to
 `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/business-context.md`
@@ -409,102 +414,35 @@ give` — which is what tells the comment pass to drop that site instead of
 hunting for a passage. A question I leave unanswered when I say continue is a
 skip: record it as one rather than asking again.
 
-Write `context_recorded` (today's date) and the state file, then carry on in the
+Write `context_recorded` (today's date), clear `waiting_on`, and carry on in the
 same turn.
 
-**Annotate the intended delta on top of the baseline.** *Now* think about the
-change, with my answers in hand. Edit the `.hmml` so it also expresses the behaviour **this task
-intends**, marking every difference with the annotation convention from grammar
-§10 — the same file then holds both versions:
-
-- `# - <text>` — a baseline line the change **removes**: comment it out in place,
-  keeping its text verbatim (the marker's `-` stands in for the bullet, where the
-  line had one) at its original indentation. **Never delete a baseline line
-  outright.**
-- `# +` — introduces **added** content: the line directly beneath it, plus any
-  lines nested deeper than that line. Adjacent added siblings each take their own
-  marker; a `struct`/`enum` head is covered through its closing brace.
-- A **modified** line is a `# -` immediately followed by a `# +` — never an
-  in-place rewrite.
-
-The binding rule: dropping every `# +` block and un-commenting every `# -` line
-must reproduce the baseline **exactly**. Re-lint with
-`hobby-mml-parser <path> --lint` — annotations are plain comments, so the file
-must still parse clean, and the linter checks recoverability directly, reporting
-`unrecoverable-baseline` when un-annotating no longer gives a coherent spec (plus
-`empty-change-removal` / `empty-change-addition` / `redundant-change-bullet` for
-a marker that says nothing).
-
-Cover every section the change touches, not just `## behavior` — an added
-component, a new `## systems` entry with its access block, a removed invariant.
-A `# +` step whose new component or new invariant is missing gives the review an
-incomplete delta.
-
-A recorded answer the delta has to honour belongs **in the spec**, as an
-invariant or a `# +` line — not carried in your head to be remembered at the
-comment pass. That is what makes GATE 1 able to check whether the design used
-what I said.
-
-**Review the delta.** Run `hmml-review` on the annotated `.hmml`: parallel
-lens reviewers over the delta and the current code, synthesized into a prioritized
-implementation plan in the task notes, scoped to what the annotations add and
-remove. Name the `business-context.md` path when you invoke it, so its lenses
-test the delta against the facts I gave rather than against their own
-assumptions. Not `hmml-validate` — the annotations are deliberately ahead of the code,
-so a conformance check would report the intended change as drift.
-
-**→ GATE 1: HARD STOP.** Set `phase: await-hmml-review`, write the state file,
-print:
-
-- the spec path;
-- **the annotated delta itself** — every `# -` and `# +` line, grouped by
-  section, with a count. This is the change I am approving, so show it rather
-  than describing it;
-- the implementation plan (path plus an inline summary);
-- **which recorded context the delta leaned on** — one line per handle I
-  answered and where it landed in the spec, plus any handle the delta ignored.
-  This is the check on the annotate step: I can see whether the design used what
-  I said, which is the whole reason the questions came before it;
-- *"Review the baseline, the `# +`/`# -` delta on it, and the plan. Refine any of
-  them, then say `continue` — or say `revise` and I'll re-review what you
-  changed. If reading it makes me want to tell you more, `/task:build context`
-  re-asks and rebuilds the delta off the fuller answers."*
-
-End your turn.
-
-## Phase `await-hmml-review` and `revise` — the loop
-
-- `revise` re-runs `hmml-review` on the edited spec, increments `rounds`, returns
-  to `await-hmml-review`, and stops again. No cap: this loops until I am happy.
-- Each round reports what changed in the **delta** since the previous one — which
-  markers were added, dropped or reworded — so I can see whether my edit did what
-  I meant.
-- `continue` moves to `implement`. Committing the annotated `.hmml` is mine to do;
-  if it is still uncommitted when I say continue, say so once and proceed.
-  Committing it does not erase the delta the way an unannotated in-place edit
-  would — the markers are in the file.
+**Write a short plan.** One file,
+`~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/plan-{YYYY-MM-DD}-{slug}.md`,
+in the plan format of `~/.claude-hobby/CLAUDE.md` — Goal, Approach, Steps, Key
+Files, Open Questions — and short: the steps are the order you will work in,
+one line each, naming files. A recorded answer the change has to honour is
+cited in the step it shapes by its `business-context.md` handle, so it is not
+carried in your head to be remembered at the comment pass. A new dated file per
+planning session; never overwrite an earlier one. Record its name as `plan` and
+seed `todo` from its steps (**Live state**). The plan is not a gate: say in one
+line where it is, set `phase: implement`, and carry on.
 
 ______________________________________________________________________
 
 ## Phase `implement`
 
-Entered when I say continue after GATE 1. The business context is already on
-disk — GATE C collected it before the delta was designed — so nothing is asked
-from here on.
+Entered from `context` in the same turn, or on a resume. Work from the plan
+file and keep `todo` moving as you go. A design question only I can answer is
+asked when it comes up, as one line with the options you see — set
+`waiting_on`, stop, and resume at the same `todo` item. It is not saved for a
+gate, and it is not answered on my behalf.
 
 Write comments to the rule as you go — a module header, a public element's
 contract, a test's justification, nothing else. The `comments` phase is a check,
 not a laundry: do not write comments expecting it to delete them. Where the
 contract you are writing needs a *why* the code cannot show, take it from
 `business-context.md` and from nowhere else.
-
-**Implement.** Unless `--no-hmml`, run `hmml-translate <unit>`: it reads the
-`# +` / `# -` annotations as the delta — the unannotated baseline around them is
-code that already exists — and applies the **minimal** code change, compiles,
-tests, and stops. It owns delta-vs-full-generation — do not second-guess it. A
-`# -` it declines to delete (the spec is lossy, so absence ≠ dead code) comes back
-as a flag for me, not as a silent skip: carry it into GATE 2. With `--no-hmml`,
-make the change directly.
 
 **Test.** Drive it end to end: run the app or the affected flow, plus the repo's
 own test command (`cargo test`, `cargo clippy`, `just test`, whatever it uses).
@@ -516,16 +454,27 @@ from the worktree root, with the job's `env:` and each step's
 container or another OS, and carry the skipped ones into GATE 2. A failing step
 is fixed here like a failing test, so the diff I review is one CI is expected to
 pass. No workflows → nothing to run.
-Then, unless `--no-hmml`, `hmml-validate` once more — the code should report
-**`CONFORMS`** to the annotated spec: every `# +` claim present in the code, every
-`# -` behaviour gone from it. Report residual `SPEC-AHEAD` as unfinished work.
 
-**Leave the annotations in place.** The `.hmml` keeps its `# +` / `# -` markers
-after the code lands — the spec is the record of *this* change, and stripping it
-back to a plain baseline would erase what the task did. Never edit the spec here
-at all; committing it stays my call at GATE 2.
+Record the evidence, then fall through to `delta` without stopping.
 
-Record the evidence, then fall through to `comments` without stopping.
+## Phase `delta`
+
+Skip with `--no-hmml`, and for a diff with no behaviour change — docs, tests
+only, config values, a mechanical rename — saying so in one line.
+
+Run `/hmml-extract --against <ref>`, with `<ref>` the merge base of the
+worktree and the default branch
+(`git merge-base HEAD "origin/$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)"`).
+It picks the units the diff touches, writes each as the worktree leaves it with
+what the change did marked `# -` / `# +`, and lints the set; if it asks which
+units, surface the question. Record `hmml_units`.
+
+The delta is **derived, never maintained**: do not edit it, and rerun this phase
+after any later change to the code's behaviour — a fix I ask for at GATE 2, a
+CI repair. It is for me to read; it is not a review of the change and it does
+not gate anything. Fall through to `comments`.
+
+______________________________________________________________________
 
 ## Phase `comments`
 
@@ -591,12 +540,15 @@ ______________________________________________________________________
 
 ## Phase `review` → GATE 2
 
-**→ GATE 2: HARD STOP.** Set `phase: await-review`, write the state file, print:
+**→ GATE 2: HARD STOP.** Set `phase: await-review`, set `waiting_on` to
+`read the change at GATE 2`, write the state file, print:
 
 - the diff summary — files, one line each on what changed;
-- the test evidence and the validate verdict, plus the spec's `# +` / `# -` delta
-  as it now stands — it keeps its annotations, so any marker validate still
-  reports as `SPEC-AHEAD` is outstanding work, not a leftover;
+- the test evidence, and the CI steps skipped locally;
+- **the derived delta** — each `.hmml` path, then every `# -` and `# +` line
+  grouped by section, with a count. This is the change at mental-model altitude,
+  so show it rather than describing it; a line of it that surprises me is the
+  cheapest place to catch a change that does something the brief did not ask;
 - what `/comment-pass` changed, each written comment with the context handle
   behind it where it had one, and what it declined to act on;
 - the **context gaps** with their `file:line` — a gap is a place the code
@@ -612,7 +564,8 @@ ______________________________________________________________________
 - the size against the Gate 0 budget, and by how much it was crossed;
 - *"Review the above. Say continue to open the PR, or tell me what to change."*
 
-End your turn.
+A change I ask for here goes back through `implement` and `delta` before the
+gate is printed again. End your turn.
 
 ______________________________________________________________________
 
@@ -654,15 +607,18 @@ and repair them; never hand me a red PR as finished.
    triggers on this PR.
 3. `outcome: fix` → the failure is the diff's own. Repair it reading the files
    `log` names, run the failing step locally, `/comment-pass` over what changed,
-   commit to the message rule, push. Increment `ci_rounds`, back to 1. The
-   repair is shown in the wrap-up, because it landed after GATE 2.
+   commit to the message rule, push, and rerun `delta` when the repair changed
+   behaviour. Increment `ci_rounds`, back to 1. The repair is shown in the
+   wrap-up, because it landed after GATE 2.
 4. `outcome: rerun` → `gh run rerun --failed <run>` only. Increment
    `ci_rounds`, back to 1.
 5. `outcome: blocked` (`not-mine`, `decision`, or the bound of three spent) →
-   print the PR, the case, the failing check and at most three log lines, and
-   **stop**: the next step is mine.
+   print the PR, the case, the failing check and at most three log lines, set
+   `waiting_on`, and **stop**: the next step is mine.
 
- — goal, what changed, evidence, open items, with the context
+## Phase `journal`
+
+Run `journal:write` — goal, what changed, evidence, open items, with the context
 gaps under the open items so they survive into the next session's resume. Set
 `phase: done`.
 Print a one-line wrap-up: task, PR link if any, anything still open. End.

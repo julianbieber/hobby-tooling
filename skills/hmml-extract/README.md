@@ -14,11 +14,23 @@ Analyzes one unit of an existing system — an endpoint, a message/queue workflo
 or a scheduled job — and emits a valid
 [`.hmml`](../../lsps/hobby-mml-lsp/grammar.md) (Mental Model Language)
 spec: the four sections **modules / data / behavior / invariants** that capture
-how the unit behaves at mental-model altitude. What it writes is the
-**baseline** — the *current* version of the unit, captured before anyone thinks
-about the change. The human then annotates that baseline with the intended delta
-(`# +` / `# -`, grammar §10), and `hmml-translate` turns the annotations into
-code — spec → code, not prose → code.
+how the unit behaves at mental-model altitude. Plain extraction writes the
+**baseline** — the *current* version of the unit, unannotated.
+
+With `--against <ref>` it writes the **review delta** instead: the unit as the
+branch leaves it, with what `git diff <ref>...HEAD` changed marked `# -` / `# +`
+(grammar §10), so a finished change can be read as a change to the mental model
+before merge. `/task:build` runs it after the code is implemented. The file is
+derived and regenerated whenever the diff moves, never maintained by hand.
+
+## Why the delta is derived, not designed
+
+The spec used to be annotated with the intended change *before* the code, then
+translated into code. Reviewing that plan and then the real diff was a double
+review, and the plan drifted from what was built — "reviewing the version that
+works seems more productive than the double review from before". The HMML
+exists so I understand what the code change is doing, so it represents the
+implemented change.
 
 You point at one unit ("the `/tiles/{z}/{x}/{y}` endpoint", "the shader reload batch
 consumer"); the skill traces the call graph with `tree-extract`, reads the
@@ -36,7 +48,7 @@ Produces:
 ## Why both layers come out of one run
 
 The overview names its collaborators and stops, so a change about a module's API
-rather than a unit's flow had nothing to translate from. The module specs are
+rather than a unit's flow had nothing to describe it in. The module specs are
 that missing layer.
 
 They cannot be a second run. A member ref into a spec that does not exist yet is
