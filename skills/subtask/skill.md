@@ -80,7 +80,7 @@ into its own module").
    ## Goal
    <the full brief>
 
-   Split from [TASK](../TASK/implementation.md).
+   Split from TASK.
 
    ## Taken over
    <commits moved here from TASK, or "nothing">

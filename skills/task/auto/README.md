@@ -143,8 +143,9 @@ blocks `label:@file` outright.
 
 ## What it commits, and why that is different from `/task:build`
 
-`/task:build` never commits; every sub-skill has that contract. This pipeline
-does, once, after the play gate — or after the acceptance checks pass, when
+`/task:build` commits only after GATE 2, where I have read the local changes and
+the proposed messages; no sub-skill commits. This pipeline commits once, after
+the play gate — or after the acceptance checks pass, when
 there is no play gate — because a PR cannot open without commits and nobody is
 at the keyboard between that point and the PR. The message rule is
 unchanged: terse, a record of decisions, justified only from the brief, the

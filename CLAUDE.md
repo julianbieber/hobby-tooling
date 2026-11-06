@@ -489,10 +489,11 @@ stops. The mechanism is inert in a repo with no CI, which is every repo here
 `hobby-tooling` would change the merge gate for every task behind it, so it
 is deliberately not part of this change.
 
-**`/task:auto` commits, which `/task:build` never does.** A PR cannot open
-without commits and nobody is at the keyboard between the last gate and the PR,
-so the pipeline commits once after it, to the same message rule. The notes repo
-stays uncommitted.
+**`/task:auto` commits once, after its last gate.** A PR cannot open without
+commits and nobody is at the keyboard between the last gate and the PR, so the
+pipeline commits once after it, to the same message rule. `/task:build` commits
+too, after GATE 2, where the proposed commit and PR messages are shown with the
+local changes. Neither commits the notes repo.
 
 **An unattended run has no play gate; it runs its own acceptance.** A gate is
 worth having because a person reads what it prints, and in a coordinator's task
@@ -1382,9 +1383,11 @@ default branch, never from the parent's, so its PR holds only its own work;
 what the parent already committed reaches it as whole commits (`hwt subtask
 --take`), with the parent rebased onto the subtask's branch so each commit lands
 in exactly one PR. That is what lets a split happen after work has started,
-where the gate used to refuse. Depth is bounded at one by `is_subtask`
-in the seeded state file rather than by asking the model to remember. Most tasks
-are one task, and the phase is expected to say so in a line.
+where the gate used to refuse. Depth is bounded at one by `is_subtask` in the
+state file `handed-off` seeds for the subtasks GATE S creates; a `/subtask` is a
+barebones task with no state file until someone writes its brief and runs
+`/task:build` there. Most tasks are one task, and the phase is expected to say
+so in a line.
 
 ## Installing
 

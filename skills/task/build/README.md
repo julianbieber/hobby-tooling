@@ -5,7 +5,7 @@
 | Type         | skill                                                                  |
 | Install path | `~/.claude-hobby/commands/task/build.md` → `/task:build`               |
 | Owner        | @julianbieber                                                          |
-| Dependencies | `journal:resume`, `hmml-extract`, `comment-pass`, `structure`, `subtask`, `journal:write` |
+| Dependencies | `journal:resume`, `hmml-extract`, `comment-pass`, `structure`, `journal:write`; nushell `hwt subtask`, `hcdev tab`; `hcoord ci`; `gh` |
 | Status       | experimental                                                           |
 | Supersedes   | `dev-flow`                                                             |
 
@@ -16,10 +16,11 @@ really one task; takes a brief from a description, the task's `issue.md`, or the
 task notes; collects the business context only I have; writes a short plan and
 works it as a todo list; implements and tests; reads the implemented change back
 as an HMML delta derived from the diff; runs `/comment-pass` and `/structure`;
-stops for me to read the diff and the delta; then the PR and the journal entry.
+stops for me to read the diff, the delta and the proposed commit and PR
+messages; then commits, pushes, opens the PR and writes the journal entry.
 
-Three hard stops: the subtask assessment, the business-context questions, and
-the PR.
+Three hard stops: the subtask assessment (GATE S), the business-context
+questions (GATE C), and the review of the local changes (GATE 2).
 
 ## The delta is read after the code, not reviewed before it
 
@@ -79,8 +80,11 @@ subtask's, so the commits appear in exactly one PR and drop out of this
 branch once it merges. A split therefore works on a branch that has commits;
 uncommitted work has to be committed first, which the gate asks for rather
 than does. Each subtask is worked now, as a tab of this session, or
-postponed on its own card. Depth is bounded at one by `is_subtask` in the seeded state file rather than by
-asking the model to remember.
+postponed on its own card. Depth is bounded at one by `is_subtask` in the
+state file `handed-off` seeds, rather than by asking the model to remember. A
+subtask cut later with `/subtask` gets no state file: it is a barebones task
+until someone writes its brief and runs `/task:build` there. Subtasks are
+recorded once, in the parent's `subtasks.json`, which `hdash` reads.
 
 Most tasks are one task, and the phase is expected to say so in a line.
 
@@ -123,16 +127,16 @@ belong here.)
 | phase | runs | ends |
 |---|---|---|
 | `assess-split` | precondition check, the cut tested against the shaping rules | hard stop |
-| `handed-off` | `/subtask` per approved cut, seeded state, `journal:write` | terminal |
+| `handed-off` | `hwt subtask` per approved cut, seeded state, `journal:write` | terminal |
 | `plan` | Gate 0 prior-art/size, Gate 0b the repo's standards, brief, reading the code, then the business-context questions | hard stop |
 | `context` | records my answers verbatim, writes the plan file, seeds `todo` | falls through |
 | `implement` | the change from the plan, run + test, the repo's CI workflows run locally | falls through |
 | `delta` | `/hmml-extract --against <merge-base>` over the units the diff touches | falls through |
 | `comments` | `/comment-pass` over the branch diff, matched against the recorded context | falls through |
 | `standards` | `/structure` on the target repo — ratchet a budget the change improved, try to fix one it broke | falls through |
-| `review` | prints the diff, evidence and comments for me to read | hard stop |
+| `review` | prints the diff, evidence, comments and the proposed commit and PR messages for me to read | hard stop |
 | `await-review` | nothing — I read the summary | `continue` |
-| `pr` | gathers the facts, opens the PR | falls through |
+| `pr` | commits the approved messages, pushes the task branch, opens the PR | falls through |
 | `ci` | `hcoord ci` on the PR, repairing a red check on the diff's own for at most three rounds | falls through, or stops when blocked |
 | `journal` | `journal:write` | `done` |
 
@@ -153,7 +157,7 @@ prunes stale symlinks on the next run.
 
 ```
 /task:build "make the spawner respect the wave budget"
-/task:build #42
+/task:build --issue
 /task:build --notes
 /task:build implement
 /task:build context          # re-open the questions and rebuild off fuller answers
@@ -167,6 +171,11 @@ prunes stale symlinks on the next run.
 - Inferring the starting phase from artifacts is a guess when a task was worked on
   outside the pipeline.
 
-## TODO(jb-doc): why the pipeline stops exactly where it does
+## It commits once the change has been read
 
-<!-- What it should cover: what makes those three points the ones worth a hard stop. -->
+The pipeline commits only after GATE 2, on the task branch, and never the notes
+repo — `hwt sync` carries those. GATE 2 is where I review the local changes
+before the PR opens, so it shows the proposed commits and PR alongside the
+diff, and `continue` approves the messages along with the change. Several
+commits in one PR are fine. Nothing goes to the default branch except through a
+PR, unless I say otherwise in chat.
