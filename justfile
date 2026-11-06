@@ -152,8 +152,9 @@ bootstrap-config: _root-notice
     @echo "  config dir ready: {{CONFIG_DIR}}"
 
 # The `chobby` wrapper — bare claude on the hobby account — `hauto`, the stage
-# driver the hobby-auto layout runs in its Claude pane, and `haspect`, the same
-# for a research aspect's tab
+# driver the hobby-auto layout runs in its Claude pane, `haspect`, the same
+# for a research aspect's tab, and `happ`, which starts and stops the app a
+# task session runs
 install-chobby: _root-notice
     #!/usr/bin/env bash
     set -euo pipefail
@@ -166,6 +167,8 @@ install-chobby: _root-notice
     echo "  linked haspect -> {{BIN_DIR}}/haspect"
     ln -sf "{{REPO_ROOT}}/bin/hresearch" "{{BIN_DIR}}/hresearch"
     echo "  linked hresearch -> {{BIN_DIR}}/hresearch"
+    ln -sf "{{REPO_ROOT}}/bin/happ" "{{BIN_DIR}}/happ"
+    echo "  linked happ -> {{BIN_DIR}}/happ"
     case ":$PATH:" in
         *":{{BIN_DIR}}:"*) ;;
         *) echo "  WARNING: {{BIN_DIR}} is not on PATH — add it or chobby won't resolve." ;;

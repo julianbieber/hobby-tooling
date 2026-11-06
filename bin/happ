@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Start and stop the application a task session runs for a person to try or for
+# its own checks — by process group, never by matching a command line, so the
+# shell that asks for the stop is never among what it stops.
+#
+#   happ start <dir> <command>   run `sh -c <command>` detached in a new session,
+#                                stdout and stderr to <dir>/play.log, its process
+#                                group id to <dir>/play.pid; prints the id. Refuses
+#                                while <dir>/play.pid names a group still running.
+#   happ stop <dir>              SIGTERM the group in <dir>/play.pid, SIGKILL what
+#                                is left after five seconds, remove the file. No
+#                                file, or a group already gone, is success.
+#
+# Everything the command starts stays in its group unless it calls setsid itself,
+# so `cargo run` and the game it spawns stop together. Exit 2 on a usage error, 1
+# when start finds a running group or cannot record the new one.
+
+set -uo pipefail
+
+usage() {
+  echo "usage: happ start <dir> <command> | happ stop <dir>" >&2
+  exit 2
+}
+
+recorded() {
+  local pg
+  pg=$(cat "$1" 2>/dev/null) || return 1
+  [[ "$pg" =~ ^[0-9]+$ ]] && [ "$pg" -gt 1 ] || return 1
+  printf '%s\n' "$pg"
+}
+
+alive() { kill -0 -- "-$1" 2>/dev/null; }
+
+start() {
+  local dir=$1 cmd=$2 pidfile="$1/play.pid" pg
+  mkdir -p "$dir"
+  if pg=$(recorded "$pidfile") && alive "$pg"; then
+    echo "happ: group $pg from $pidfile is still running — happ stop $dir first" >&2
+    exit 1
+  fi
+  rm -f "$pidfile"
+  setsid -f sh -c 'echo $$ > "$1"; exec sh -c "$2"' happ "$pidfile" "$cmd" \
+    > "$dir/play.log" 2>&1 < /dev/null
+  for _ in $(seq 40); do
+    pg=$(recorded "$pidfile") && { printf '%s\n' "$pg"; exit 0; }
+    sleep 0.05
+  done
+  echo "happ: the command started but $pidfile was never written" >&2
+  exit 1
+}
+
+stop() {
+  local pidfile="$1/play.pid" pg
+  pg=$(recorded "$pidfile") || { rm -f "$pidfile"; exit 0; }
+  kill -TERM -- "-$pg" 2>/dev/null
+  for _ in $(seq 50); do
+    alive "$pg" || break
+    sleep 0.1
+  done
+  alive "$pg" && kill -KILL -- "-$pg" 2>/dev/null
+  rm -f "$pidfile"
+  exit 0
+}
+
+case "${1:-}" in
+  start) [ $# -eq 3 ] || usage; start "$2" "$3" ;;
+  stop) [ $# -eq 2 ] || usage; stop "$2" ;;
+  *) usage ;;
+esac
