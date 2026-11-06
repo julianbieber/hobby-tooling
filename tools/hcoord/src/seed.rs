@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use crate::clock;
 use crate::goal::{self, Decision, Goal};
-use crate::model::{Coordinator, MergeBy, STATE_FILE, TaskEntry};
+use crate::model::{Coordinator, STATE_FILE, TaskEntry};
 
 const CONTEXT_FILE: &str = "business-context.md";
 
@@ -26,7 +26,7 @@ pub struct Seeded {
 struct State<'a> {
     phase: &'a str,
     auto: bool,
-    merge: MergeBy,
+    merge: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     model: Option<&'a str>,
     coordinator: String,
@@ -92,7 +92,7 @@ pub fn seed(
     let state = State {
         phase: "acceptance",
         auto: true,
-        merge: coord.merge,
+        merge: "coordinator",
         model: entry.model.as_deref().or(coord.model.as_deref()),
         coordinator: dir.display().to_string(),
         goal: goal_path.display().to_string(),
@@ -497,6 +497,19 @@ mod tests {
         )
         .unwrap_err();
         assert!(e.contains("open question"), "{e}");
+    }
+
+    // An unattended task merges its own PR on green checks, so every seed hands it the
+    // merge — even from a list still carrying the retired `merge: "mine"`.
+    #[test]
+    fn every_seed_hands_the_session_its_merge() {
+        let legacy = Coordinator::parse(
+            r#"{"project":"p","blurb":"b","merge":"mine","goal":"g.md","tasks":[{"task":"b-one","title":"One","scenarios":["S1","S2","S10"]}]}"#,
+        )
+        .unwrap();
+        let seeded = state(&seeded(&legacy, 0).unwrap());
+        assert_eq!(seeded["merge"], "coordinator");
+        assert_eq!(seeded["auto"], true);
     }
 
     // Pins `model` as the task's, else the list's, else omitted (`hauto` then passes no

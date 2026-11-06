@@ -5,7 +5,7 @@
 | Type         | skill                                                              |
 | Install path | `~/.claude-hobby/commands/task/coordinate.md` → `/task:coordinate` |
 | Owner        | @julianbieber                                                      |
-| Dependencies | `task-split`, `hwt`, `hcdev auto`, `hcoord` and `gh` on PATH, `task:auto` in each spawned session |
+| Dependencies | `task-split`, `hcoord` and `gh` on PATH, the `hwt` / `hcdev` nushell modules, `task:auto` in each spawned session |
 | Status       | experimental                                                       |
 
 ## Description
@@ -14,8 +14,8 @@ The session in the right pane of `hcdev coordinator`. Given a description, it
 carves the work into tasks with `/task-split`, records them in `tasks.json`,
 and then works the list: one task at a time, each in its own `hcdev auto`
 window, blocking on `hcoord wait` until the task stops for a person or
-finishes, and then on `hcoord merged` until its PR has landed. I hear from it
-once per task — when its PR is waiting for me to merge. A task it started is
+finishes — which, for an unattended task, is after it has merged its own PR. I
+hear from it only when a task needs something only I can give. A task it started is
 unattended (`auto: true`), so it runs its own acceptance rather than stopping to
 show me the application; it interrupts me only when it cannot write acceptance
 criteria, or when its own checks would not pass.
@@ -48,28 +48,32 @@ simplifications:
 
 ## Who merges, and what stops the list
 
-`merge` in `tasks.json` is `mine` by default: the coordinator reports the green
-PR once, and holds. Told to (`go, you merge`, or a later `merge:
-"coordinator"`), each task's **own session** merges its own PR: it is seeded
-with `merge: coordinator` in its `build-task.json`, watches its checks itself,
-and reports `done` with the merge already landed — the coordinator's W4 reads
-that off the `hcoord wait` line and skips straight to
-moving on, making no merge call of its own. That is a per-coordinator
-decision, made when I trust how the run is going, and it is in the file rather
-than in the conversation so a resumed session still knows.
-
-`merge: mine` is unchanged: the task session reports its PR and stops at
-`done` without touching it, and the coordinator's W5 is what waits on the
-merge and makes it.
+Each task's **own session** merges its own PR, once its checks are green and
+its acceptance passed, and there is no other option (`## one-merge-option` in
+`notes/hobby-tooling/skills/coord-contract/business-context.md`: *"there should only be 1 option,
+the task session should merge itself on green cicd and reached acceptence
+criteria."*). Every seed says `merge: coordinator` in the task's
+`build-task.json`; the session watches its checks itself, merges, marks its
+`task.json` done (`## task-done-owner`: *"in auto mode, the task session
+itself on merge"*), and reports `done` with the merge already landed. The
+coordinator's W4 reads that off the `hcoord wait` line and moves on, making no
+merge call of its own. W5 survives only for a session that finished without
+merging, and there it waits for a person, never merges.
 
 **Green is decided by `gh`, not by the coordinator.** `hcoord merged` reads
 `statusCheckRollup` and reports `green`, `pending`, `failing` or `none` — and
 `none`, a repository that runs no checks at all, counts as green, because most
 hobby repos have no CI and the alternative is a list that never moves.
 
-Everything that is not a wait is a **stop**: a failing check, a conflict with
-the base, a PR closed unmerged. None of those resolve by waiting longer, and
-the tasks behind them would be branched off work that is not landing.
+A decision the session cannot make — a red check it may not repair, a
+conflict, an acceptance that would not pass — is `await-fix`. `hcoord wait`
+puts its `decision` on the line, the card reads `requires decision: <…>`, and
+the list **holds** on that task: I answer in its window, the session carries
+on to a merged PR, and the list moves (`## leave-await-fix`). A block no
+session holds — a PR closed unmerged — stops the loop, and a resumed
+coordinator re-checks every `blocked` entry, so a PR I merged by hand releases
+what depends on it. The tasks behind a block wait either way, since they would
+branch off work that has not landed.
 
 ## The coordinator knows nothing about any task
 
@@ -109,13 +113,11 @@ observation itself and records every check; `hcoord wait` puts `{passed, checks,
 failed}` on the line, each failure naming its command and exit status. This is
 what replaces looking at the window, and it is why the coordinator can judge a
 task it has read no code for. A task that could not make its checks pass reaches
-`await-fix` with no PR, and that is a **stop** — the same treatment as a red
-check on a PR, and for the same reason: waiting longer does not resolve it.
+`await-fix`, with or without a PR, and is held as a decision like any other.
 
 ## What it deliberately does not do
 
 - Write issues: `/issue-create` is an editing session.
-- Push to the default branch, or merge a PR it was not handed the merges for.
-- Run `/task-split` itself: that skill owns the shaping rules and their re-cuts.
+- Push to the default branch, or merge any PR.
 - Answer a task's gate on my behalf: an `awaiting-human` task is reported and
   waited on, never continued from here.

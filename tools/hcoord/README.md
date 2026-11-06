@@ -53,7 +53,6 @@ scroll, `r` forces a reload, `q` quits.
   "blurb": "food-economy",
   "description": "verbatim, what the coordinator was started with",
   "created": "2026-09-11",
-  "merge": "mine | coordinator",
   "tasks": [
     {
       "task": "food-economy-fields",
@@ -70,8 +69,9 @@ scroll, `r` forces a reload, `q` quits.
 }
 ```
 
-Only `task` and `title` are required; `status` defaults to `todo` and `merge` to
-`mine`.
+Only `task` and `title` are required; `status` defaults to `todo`. A `merge` key
+from an older list is ignored: every task merges its own PR, and `seed` writes
+`merge: coordinator` into each task's state file.
 
 ## `wait` is how the coordinator spends its time
 
@@ -119,6 +119,24 @@ carries that too:
  "name": "switch documents"}], "passed": false},
  "outcome": "human", "phase": "await-fix"}
 ```
+
+At `await-fix` the line also says what the session is blocked on. `decision` is one
+line naming the first of three that applies — a CI block, then a merge block, then
+the failing acceptance checks — because a later stage's block is the one still
+standing; `ci` carries the recorded `{outcome, case, check, reason}` and `pr` the PR
+when one was opened:
+
+```json
+{"ci": {"case": "not-mine", "check": "build", "outcome": "blocked"},
+ "decision": "CI not-mine: build", "outcome": "human", "phase": "await-fix",
+ "pr": "https://github.com/…/pull/7"}
+```
+
+Before `ci` existed a CI block reached the line with nothing but an empty
+`acceptance`, so a coordinator reported it as a failed acceptance and lost the PR.
+
+A state file seeded `auto: true` waits on `await-*` alone. Without it, `context` and
+`assess-split` — the two waiting states `/task:build` writes — also count as `human`.
 
 A scenario the goal marks `hand` is not in `failed` and is not counted as a pass:
 the object then carries `hand`, the number of checks nobody ran, and the tui tally
@@ -176,9 +194,8 @@ Four outcomes, and the split between them is the whole design:
   unmerged, with `reason` saying which. None of these resolve by waiting longer,
   so they are reported rather than waited out.
 - **`mergeable`** — only with `--ready`: the checks pass and GitHub reports no
-  conflict, so `gh pr merge` would go through now. A coordinator that was handed
-  the merges passes the flag; without it a green PR is waited on, because merging
-  is mine by default.
+  conflict, so `gh pr merge` would go through now. A task session passes the flag
+  before merging its own PR; the coordinator never does, because it never merges.
 - **`timeout`** — nothing resolved. Call again.
 
 **A repo with no checks counts as green.** `statusCheckRollup` comes back empty,
@@ -235,8 +252,7 @@ failing the call.
 ## Not part of the hdash workspace
 
 `hcoord` is its own workspace, and `hdash` reads the `status` field of
-`tasks.json` with `serde_json::Value` rather than depending on this crate — it
-reads `merge` the same way.
+`tasks.json` with `serde_json::Value` rather than depending on this crate.
 
 ## `goal` reads the UX spec a run is judged against
 
