@@ -54,7 +54,7 @@ record_pane || true
 while :; do
   before=$(phase)
   case "$before" in
-    acceptance|plan|context)
+    acceptance|plan)
       echo "hauto: planning $TASK (phase $before) — headless, this pane shows the result"
       chobby -p "/task:auto plan"
       if [ "$(phase)" = "$before" ]; then
