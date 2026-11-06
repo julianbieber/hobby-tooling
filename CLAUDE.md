@@ -551,11 +551,17 @@ duplicates `hobby-dev.kdl` until `hcdev wt` renders its layout too.
 through one `build-task.json`, and a tab it cannot see would hold a gate
 nobody answers.
 
+**Every tab shares the task's zellij session name**, so two things that keyed
+on it alone had to learn the tab. hdash credits a session-state record whose
+project dir lies in an aspect worktree to that aspect *before* trying the
+session name, and badges the aspect's line; a task's ordering counts its
+aspects, so an aspect waiting on you raises the card. The ctrl-g dump keys on
+the session name plus `$ZELLIJ_PANE_ID`. That the pane id is distinct per tab
+and reaches the hooks and the ctrl-g editor was established by the first
+research aspect run (`aspects/pane-id-reach/findings.md` in the task notes).
+
 Not yet done, and planned (`plan-2026-11-06-task-aspects.md` in the task
-notes): a per-tab idle/busy badge — every tab shares the task's zellij session
-name, so the session-state attribution credits an aspect's Claude to the task
-— and ctrl-g per tab, since the conversation dump is keyed on the session name
-too; `hwt rm`/`done`/`restore` cascading to aspect worktrees; and subtasks
+notes): `hwt rm`/`done`/`restore` cascading to aspect worktrees, and subtasks
 opened as tabs.
 
 ## Opening a session from a dashboard: two things that kill the terminal
@@ -1402,8 +1408,10 @@ next prompt. Two pieces, and they only work as a pair:
 - `bin/hx-claude` is `$EDITOR`, and vsplits that file next to the prompt buffer
   ctrl-g hands it
 
-`<key>` is the sanitized `$ZELLIJ_SESSION_NAME`, so ctrl-g in one pane opens that
-pane's conversation and not a neighbour's. **The key derivation is duplicated in
+`<key>` is the sanitized `$ZELLIJ_SESSION_NAME-p$ZELLIJ_PANE_ID`, so ctrl-g in one
+pane opens that pane's conversation and not a neighbour's — the pane id is what
+separates a task's tab from its research aspects' tabs, which share the session
+name. **The key derivation is duplicated in
 both scripts and must stay identical** — diverge and each silently uses a
 different file.
 

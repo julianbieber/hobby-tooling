@@ -35,6 +35,11 @@ pub fn worktrees_root() -> PathBuf {
     home().join("fun_worktrees")
 }
 
+/// `~/fun_aspects` — research aspect worktrees, laid out `<project>/<topic>/<task>/<name>`.
+pub fn aspects_root() -> PathBuf {
+    home().join("fun_aspects")
+}
+
 /// `~/fun_repos` — the main repo checkouts that worktrees are derived from.
 pub fn projects_root() -> PathBuf {
     home().join("fun_repos")

@@ -16,15 +16,16 @@ event=$(echo "$input" | jaq -r '.hook_event_name // empty' 2>/dev/null)
 # last_assistant_message; fold it back in below.
 last_msg=$(echo "$input" | jaq -r '.last_assistant_message // empty' 2>/dev/null)
 
-# Session-scoped key: prefer the zellij session (so ctrl-g in one pane opens that
-# pane's conversation), fall back to a per-directory hash outside zellij.
+# Pane-scoped key: the zellij session plus the pane id, so ctrl-g in one pane opens
+# that pane's conversation even when several Claude panes (a task's tab and its
+# aspects' tabs) share one session; a per-directory hash outside zellij.
 #
 # hcdev names its sessions `hcdev-<project>-<topic>-<task>`, so a hobby dump can
 # never land on the same path as a work `cdev-…` one even though both accounts
 # use the /tmp/claude-conversation-*.md namespace. That is deliberate: one
 # viewer reads either account's conversation, and nothing has to be prefixed.
 if [ -n "$ZELLIJ_SESSION_NAME" ]; then
-    key=$(printf '%s' "$ZELLIJ_SESSION_NAME" | tr -c 'A-Za-z0-9._-' '_')
+    key=$(printf '%s' "${ZELLIJ_SESSION_NAME}${ZELLIJ_PANE_ID:+-p$ZELLIJ_PANE_ID}" | tr -c 'A-Za-z0-9._-' '_')
 else
     key=$(printf '%s' "$PWD" | md5sum | cut -c1-8)
 fi

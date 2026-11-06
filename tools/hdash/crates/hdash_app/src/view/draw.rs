@@ -434,7 +434,7 @@ impl DashView {
             .listed()
             .into_iter()
             .map(|(item, _)| {
-                let session = self.sessions.0.get(&item.task.id).copied();
+                let session = self.sessions.tasks.get(&item.task.id).copied();
                 (
                     item.task.id.clone(),
                     self.card_lines(&item, session, now, content_w),
@@ -702,8 +702,17 @@ impl DashView {
                 width,
                 2,
             ));
+            let now = now_secs();
             for aspect in &task.aspects {
-                lines.extend(flow(vec![aspect_line(&task.id, aspect)], width, 2));
+                let mut items = vec![aspect_line(&task.id, aspect)];
+                if let Some(session) = self.sessions.aspect(&task.id, &aspect.name) {
+                    let bg = match session.state {
+                        SessionState::Idle => AMBER,
+                        SessionState::Busy => DIM,
+                    };
+                    items.push(badge(&session_label(&session, now), bg));
+                }
+                lines.extend(flow(items, width, 2));
             }
         }
         lines

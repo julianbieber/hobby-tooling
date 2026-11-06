@@ -152,6 +152,12 @@ every second. Every Claude process of the hobby account counts — a plain hcdev
 newest live record per task decides. A session busy for 30 seconds whose `claude` process used
 under 60 CPU ticks over that window reads idle since its last hook event.
 
+A research aspect's Claude runs in a tab of its task's session and shares its session name, so
+a record whose directory lies in an aspect worktree (`~/fun_aspects/…/<task>/<name>`) is
+matched to that aspect first: its badge sits on the aspect's line, not on the card header. For
+ordering, the chips and the header count a task's aspects count with it — an aspect waiting on
+you makes the task idle.
+
 The sidebar lists the projects with a `notes/<project>/` directory — an upstream clone
 under `~/fun_repos` with no notes gets no row — plus any project an orphan worktree sits
 in. Counts ignore the project selection and session hides (a dismissal should not make a

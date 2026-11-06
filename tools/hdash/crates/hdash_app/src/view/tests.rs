@@ -226,7 +226,7 @@ fn selection_follows_its_task_across_a_resort() {
     let hcdev =
         |view: &DashView, name: &str| Some(Action::Hcdev(view.task(&id(name)).unwrap().clone()));
 
-    view.sessions.0.insert(
+    view.sessions.tasks.insert(
         id("n3"),
         Session {
             state: SessionState::Idle,
@@ -283,8 +283,8 @@ fn the_primary_button_follows_the_stage() {
     assert_eq!(click(&mut view, open), Some(Action::Coordinator(coord)));
 }
 
-// Pins that a task's research aspects are listed on its card with their state, and that clicking
-// one asks for that aspect's tab rather than the task's session.
+// Pins that a task's research aspects are listed on its card with their state and their own
+// session badge, and that clicking one asks for that aspect's tab rather than the task's session.
 #[test]
 fn aspect_lines_show_state_and_open_their_tab() {
     let mut a = task("task-a");
@@ -294,9 +294,26 @@ fn aspect_lines_show_state_and_open_their_tab() {
         goal: Some("which limits apply".into()),
     }];
     let mut view = view(vec![a.clone()]);
+    view.sessions.aspects.insert(
+        (a.id.clone(), "wgpu-limits".into()),
+        Session {
+            state: SessionState::Idle,
+            since: 0,
+        },
+    );
 
     let buf = frame(&mut view);
     assert!(screen(&buf).contains("Aspects (1)"), "{}", screen(&buf));
+    let (_, line_y) = find(&buf, "⌕ wgpu-limits", None, 0);
+    assert!(
+        row(&buf, line_y).contains("idle "),
+        "the aspect line carries its own badge: {}",
+        row(&buf, line_y)
+    );
+    assert!(
+        !screen(&buf).contains("task-a  idle"),
+        "the task's own badge stays empty"
+    );
     let line = find(
         &buf,
         "⌕ wgpu-limits · reported · which limits apply",

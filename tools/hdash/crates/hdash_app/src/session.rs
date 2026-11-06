@@ -39,19 +39,48 @@ pub struct Session {
     pub since: u64,
 }
 
-/// The live session of each task that has one. Replaced only when a poll finds a change.
+/// Whose Claude session a record is: a task's own, or one of its research aspects', named.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum Owner {
+    Task(TaskId),
+    Aspect(TaskId, String),
+}
+
+/// The live sessions: each task's own, and each research aspect's, keyed by its task and name.
+/// Replaced only when a poll finds a change.
 #[derive(Default, PartialEq, Debug)]
-pub struct Sessions(pub HashMap<TaskId, Session>);
+pub struct Sessions {
+    pub tasks: HashMap<TaskId, Session>,
+    pub aspects: HashMap<(TaskId, String), Session>,
+}
 
 impl Sessions {
-    /// Each task's state alone, for the display order and the chips.
+    /// Each task's state counting its aspects, for the display order and the chips: idle when its
+    /// own session or any aspect's waits on you, else busy when any of them runs.
     pub fn states(&self) -> HashMap<TaskId, SessionState> {
-        self.0.iter().map(|(id, s)| (id.clone(), s.state)).collect()
+        let mut out: HashMap<TaskId, SessionState> = HashMap::new();
+        let all = self
+            .tasks
+            .iter()
+            .map(|(id, s)| (id, s.state))
+            .chain(self.aspects.iter().map(|((id, _), s)| (id, s.state)));
+        for (id, state) in all {
+            let slot = out.entry(id.clone()).or_insert(state);
+            if state == SessionState::Idle {
+                *slot = SessionState::Idle;
+            }
+        }
+        out
     }
 
-    /// The state of one task's session, if it has one.
+    /// The session of research aspect `name` of task `id`, if one runs.
+    pub fn aspect(&self, id: &TaskId, name: &str) -> Option<Session> {
+        self.aspects.get(&(id.clone(), name.to_owned())).copied()
+    }
+
+    /// The state of one task counting its aspects, as [`Sessions::states`] decides it.
     pub fn state_of(&self, id: &TaskId) -> Option<SessionState> {
-        self.0.get(id).map(|s| s.state)
+        self.states().get(id).copied()
     }
 }
 
@@ -111,26 +140,63 @@ pub fn task_of(project_dir: &Path, root: &Path) -> Option<TaskId> {
     })
 }
 
+/// The research aspect a project dir lies in: `<root>/<project>/<topic>/<task>/<name>[/...]`,
+/// compared by whole components.
+pub fn aspect_of(project_dir: &Path, root: &Path) -> Option<(TaskId, String)> {
+    let rest = project_dir.strip_prefix(root).ok()?;
+    let mut parts = rest.components();
+    let (Some(Component::Normal(project)), Some(Component::Normal(topic))) =
+        (parts.next(), parts.next())
+    else {
+        return None;
+    };
+    let (Some(Component::Normal(task)), Some(Component::Normal(name))) =
+        (parts.next(), parts.next())
+    else {
+        return None;
+    };
+    if parts.any(|c| !matches!(c, Component::Normal(_))) {
+        return None;
+    }
+    Some((
+        TaskId {
+            project: project.to_string_lossy().into_owned(),
+            topic: topic.to_string_lossy().into_owned(),
+            name: task.to_string_lossy().into_owned(),
+        },
+        name.to_string_lossy().into_owned(),
+    ))
+}
+
 /// Keep, per task, the newest record whose Claude process still runs (same pid and start time, so
-/// a reused pid does not count). A record belongs to the task whose zellij session it ran in —
-/// which is how a coordinator's pane, whose directory is the main checkout, is found — and
-/// otherwise to the task whose worktree its project dir lies in. Every Claude process counts,
+/// a reused pid does not count). A record whose project dir lies in a research aspect's worktree
+/// under `aspects` belongs to that aspect — every aspect tab shares its task's zellij session, so
+/// this is checked first. Otherwise it belongs to the task whose zellij session it ran in — which
+/// is how a coordinator's pane, whose directory is the main checkout, is found — and otherwise to
+/// the task whose worktree under `root` its project dir lies in. Every Claude process counts,
 /// whatever pane or stage started it.
 pub fn attribute(
     records: impl IntoIterator<Item = (Record, u64)>,
     by_session: &HashMap<String, TaskId>,
     root: &Path,
+    aspects: &Path,
     proc_stat: impl Fn(u32) -> Option<ProcStat>,
-) -> HashMap<TaskId, Observed> {
-    let mut out: HashMap<TaskId, Observed> = HashMap::new();
+) -> HashMap<Owner, Observed> {
+    let mut out: HashMap<Owner, Observed> = HashMap::new();
     for (record, last_event) in records {
         let Some(stat) = proc_stat(record.pid).filter(|s| s.start == record.pid_start) else {
             continue;
         };
-        let Some(id) = by_session
-            .get(&record.zellij_session)
-            .cloned()
-            .or_else(|| task_of(Path::new(&record.project_dir), root))
+        let dir = Path::new(&record.project_dir);
+        let Some(id) = aspect_of(dir, aspects)
+            .map(|(id, name)| Owner::Aspect(id, name))
+            .or_else(|| {
+                by_session
+                    .get(&record.zellij_session)
+                    .cloned()
+                    .map(Owner::Task)
+            })
+            .or_else(|| task_of(dir, root).map(Owner::Task))
         else {
             continue;
         };
@@ -310,9 +376,13 @@ impl SessionReader {
                 let _ = std::fs::remove_file(path.with_extension("lock"));
             }
         }
-        let observed = attribute(records, by_session, &worktrees_root(), |pid| {
-            stats.get(&pid).copied().flatten()
-        });
+        let observed = attribute(
+            records,
+            by_session,
+            &worktrees_root(),
+            &hwt_core::aspects_root(),
+            |pid| stats.get(&pid).copied().flatten(),
+        );
         let live: Vec<(u32, u64)> = observed
             .values()
             .map(|o| (o.record.pid, o.record.pid_start))
@@ -322,12 +392,18 @@ impl SessionReader {
             self.heartbeat
                 .record((o.record.pid, o.record.pid_start), now, o.cpu_ticks);
         }
-        let next = Sessions(
-            observed
-                .iter()
-                .map(|(id, o)| (id.clone(), effective(o, &self.heartbeat, now)))
-                .collect(),
-        );
+        let mut next = Sessions::default();
+        for (owner, o) in &observed {
+            let session = effective(o, &self.heartbeat, now);
+            match owner {
+                Owner::Task(id) => {
+                    next.tasks.insert(id.clone(), session);
+                }
+                Owner::Aspect(id, name) => {
+                    next.aspects.insert((id.clone(), name.clone()), session);
+                }
+            }
+        }
         if *sessions == next {
             return false;
         }
@@ -430,11 +506,12 @@ mod tests {
             ],
             &by_session,
             Path::new("/w"),
+            Path::new("/asp"),
             alive,
         );
         assert_eq!(out.len(), 2);
-        assert_eq!(out[&coordinator].record.pid, 1);
-        assert_eq!(out[&id("p", "t", "a")].record.pid, 2);
+        assert_eq!(out[&Owner::Task(coordinator)].record.pid, 1);
+        assert_eq!(out[&Owner::Task(id("p", "t", "a"))].record.pid, 2);
     }
 
     // Pins the rule when several Claude processes run for one task (an auto run's stages, a
@@ -458,10 +535,74 @@ mod tests {
             ],
             &HashMap::new(),
             Path::new("/w"),
+            Path::new("/asp"),
             stat,
         );
-        let a = &out[&id("p", "t", "a")];
+        let a = &out[&Owner::Task(id("p", "t", "a"))];
         assert_eq!((a.record.pid, a.last_event), (2, 20));
+    }
+
+    // Pins that an aspect tab's Claude, which shares its task's zellij session name, is credited
+    // to that aspect by its worktree and not to the task; the task's own pane stays the task's.
+    #[test]
+    fn attribute_credits_aspect_tabs_to_their_aspect() {
+        let task = id("p", "t", "a");
+        let by_session = HashMap::from([("hcdev-p-t-a".to_owned(), task.clone())]);
+        let out = attribute(
+            [
+                (rec("/w/p/t/a", "hcdev-p-t-a", SessionState::Busy, 1), 10),
+                (
+                    rec("/asp/p/t/a/spike", "hcdev-p-t-a", SessionState::Idle, 2),
+                    10,
+                ),
+                (
+                    rec("/asp/p/t/a/spike/src", "hcdev-p-t-a", SessionState::Idle, 3),
+                    5,
+                ),
+                (rec("/asp/p/t/a", "hcdev-p-t-a", SessionState::Idle, 4), 1),
+            ],
+            &by_session,
+            Path::new("/w"),
+            Path::new("/asp"),
+            alive,
+        );
+        assert_eq!(out[&Owner::Task(task.clone())].record.pid, 1);
+        assert_eq!(out[&Owner::Aspect(task, "spike".into())].record.pid, 2);
+        assert_eq!(
+            out.len(),
+            2,
+            "a dir above an aspect falls back to the session name"
+        );
+    }
+
+    // Pins how a task's sessions and its aspects' combine for ordering: any idle one makes the
+    // task idle, and an aspect alone still makes it busy or idle.
+    #[test]
+    fn states_count_a_tasks_aspects() {
+        let s = |state| Session { state, since: 0 };
+        let mut sessions = Sessions::default();
+        sessions
+            .tasks
+            .insert(id("p", "t", "a"), s(SessionState::Busy));
+        sessions
+            .aspects
+            .insert((id("p", "t", "a"), "x".into()), s(SessionState::Idle));
+        sessions
+            .aspects
+            .insert((id("p", "t", "b"), "y".into()), s(SessionState::Busy));
+        assert_eq!(
+            sessions.state_of(&id("p", "t", "a")),
+            Some(SessionState::Idle)
+        );
+        assert_eq!(
+            sessions.state_of(&id("p", "t", "b")),
+            Some(SessionState::Busy)
+        );
+        assert_eq!(sessions.state_of(&id("p", "t", "c")), None);
+        assert_eq!(
+            sessions.aspect(&id("p", "t", "a"), "x").map(|s| s.state),
+            Some(SessionState::Idle)
+        );
     }
 
     // Pins the stuck-busy correction: busy for a whole window with almost no CPU reads idle,
