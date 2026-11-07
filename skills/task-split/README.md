@@ -10,7 +10,7 @@
 
 ## Description
 
-Carves a project, or an issue that turned out to be too big, into an ordered list
+Carves a project, or an issue that turned out to hold several tasks, into an ordered list
 of tasks that each satisfy the **Task shaping** rules in `CLAUDE.md`. It writes
 nothing — the output is a list to edit, and an accepted entry becomes an issue
 through `/issue-create`.
@@ -27,7 +27,7 @@ The division is: `CLAUDE.md` holds the rules, this skill holds the *procedure* f
 applying them, and the README holds the argument for why each rule is shaped the
 way it is. Duplicating the rules into the skill would create two copies that drift.
 
-## Why these six rules
+## Why these five rules
 
 **Rule 1 (verifiable user-visible impact)** is the anchor, and its stated
 justification — traceability to value — is the weak one. What it actually does is
@@ -52,25 +52,23 @@ on user behaviour" is a genre of sentence, and every task passes.
 only one checkable at merge time rather than at planning time. It catches splits
 that read as vertical and are entangled in practice.
 
-**Rule 4 (review-bounded size)** replaces estimation. "Can one person hold this
-diff in their head" produces agreement where effort estimates produce argument,
-and it handles mechanical churn correctly — a 40-file rename is large and
-reviewable, and any effort-based measure gets that case wrong.
-
-**Rule 5 (no unanswered questions)** separates discovery from execution. A task
+**Rule 4 (no unanswered questions)** separates discovery from execution. A task
 carrying an open decision has no meaningful done-condition, which is why those are
 the ones that sit open for weeks.
 
-**Rule 6 (no remembered state)** is rule 1's counterweight, and the one most
+**Rule 5 (no remembered state)** is rule 1's counterweight, and the one most
 likely to be argued with. A vertical slice frequently ships behind a flag, so
 rule 1 actively generates the debt this rule forbids leaving implicit. The rule
 does not ban the flag — it bans the flag existing without a task to remove it.
 
 ## What was deliberately left out
 
-**Estimates, points, any size field.** They constrain nothing about shape, rules
-3-5 bound size structurally by checkable properties, and a number is the field
-people optimise against rather than satisfy.
+**Estimates and points.** They constrain nothing about shape, and a number is the
+field people optimise against rather than satisfy.
+
+**A size rule.** It used to be rule 4, "size is bounded by review", and was
+dropped with every other size mention in the setup
+(`notes/hobby-tooling/skills/review_too_strict/business-context.md` `## no-size`).
 
 ## Related
 

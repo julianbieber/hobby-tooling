@@ -1095,102 +1095,55 @@ good prose from the other.
 The replacement is a quality question, not an authorship one, and it is the open
 work of this task.
 
-### Comments: what replaced it, and why the old shape was wrong
+### Comments: written for a caller, and the default is none
 
-The rule now lives in `dotfiles/claude-md/hobby.CLAUDE.md`. **Three places take a
-comment — the module, a public element, a test — and nothing else does.**
-`/comment-pass` enforces it, over a branch diff or a path, and runs as the
-`comments` phase of `/task:build`.
+The rule lives in `dotfiles/claude-md/hobby.CLAUDE.md`. **A module header, and a
+public element's comment when it tells the caller something the names and types
+do not. Nothing else** — no body comment, no comment on a private element or a
+test. Every comment has to read correctly to someone who never saw the
+conversation or the diff. `/comment-pass` enforces it, over a branch diff or a
+path, as the `comments` phase of `/task:build`.
 
-**The enforcement goes both ways, and that is the whole difference from what it
-replaces.** `comment-review` could only cut; `explain-back` did the writing; when
-the policy stack took both, nothing was left. One reading of the code decides
-whether a comment should go and whether one is missing, so it is one pass.
-`scripts/comment-candidates.py` finds the five states the rule can settle without
-reading the code — `BARE-COMMENT`, `PRIV-DOC`, `PUB-UNDOC`, `MOD-UNDOC`,
-`TEST-UNJUSTIFIED` — across Rust, nushell, shell and the justfile; judging whether
-a *legally placed* comment says the right thing needs the code, and stays the
-skill's job.
+**What I want a comment for** is recorded in
+`notes/hobby-tooling/skills/review_too_strict/business-context.md`
+(`## intent-comments`, `## module-headers`): on a public item, the abstracted
+behaviour at the level the caller cares about, carrying what the signature does
+not; and a module header as the highest-level public description of the module.
+The failure it names is the model's default output — comments that "served more
+as part of the llm conversation", went into too much detail, or said the obvious.
 
-The skill's governing constraint is not "cut what is not required" — that is what
-produced placeholders last time — but **never assert a reason you have not
-verified**. A confident, plausible, wrong comment is the worst output available
-here: it is load-bearing for the next reader and invisible, where a missing
-comment is merely missing.
+**The first replacement for the AI policy aimed at the wrong failure.** It kept
+three places — module, public element, test — made the pass write as well as
+cut ("a diff that comes out with fewer comments and no new ones has probably
+failed"), required a justification line above every test, and took any *why* it
+could not verify from `business-context.md`, reporting the rest as "context
+gaps". Its concern was where a reason came from. Measured on 2026-11-07, the
+findings it was meant to drive down had grown instead — undocumented public
+items 299 → 460, private doc comments 248 → 316 — and the comments it did write
+showed the failure: `/// The project the tasks belong to.` on
+`pub project: String`, and a `///` on `DEFAULT_BOUND` citing a
+`business-context.md` handle. The push to write produced the restatements, and
+matching reasons from the notes put the conversation into the code.
 
-The old tier table keyed on two things, and a survey of the 1098 inline and ~1800
-doc-comment lines in `tools/`, `lsps/` and `mcps/` falsified both.
+So the pass is now mostly a filter. `scripts/comment-candidates.py` finds four
+placement states — `BARE-COMMENT`, `PRIV-DOC`, `PUB-UNDOC`, `MOD-UNDOC` — and
+`PUB-UNDOC` is a candidate, not a defect: leaving a self-describing item
+uncommented is correct. A comment above a test is a `BARE-COMMENT`, because a
+test's name says what it pins. Whether a comment is conversational is not
+detected: here gates, issues and notes files are the domain, and a pattern over
+those words flags legitimate contracts.
 
-**Position does not predict value.** The tier table let a `///` through on a
-public item and banned a `//` in a body, so it kept
-
-```rust
-/// Check if two LSP ranges overlap
-fn ranges_overlap(a: &lsp_types::Range, b: &lsp_types::Range) -> bool {
-```
-
-and banned `// Err only if initialize is called twice; first workspace root
-wins.` The first restates its own signature; the second is the only statement of
-a contract that exists nowhere else.
-
-**Authorship does not predict it either.** 26 of the 28 pure-restatement comments
-in the tree (`// Parse URI` ×7, `// Convert position` ×4) are in `mcps/lsp-mcp`,
-vendored from the work checkout and never subject to the policy. Hobby-authored
-code contributed two. The policy was not holding back a flood of bad comments;
-there was no flood. What it produced was the doc/inline skew — 606 doc lines to
-250 inline in `hdash` — because doc comments on public items were the only tier
-that permitted words at all.
-
-**The replacement keys on responsibility instead, and mostly relocates rather
-than deletes.** Of the four most load-bearing comments in the tree, three survive
-the new rule by moving: two sit in test functions and become the test's
-justification, one sits in `async fn initialize` and is a caller-facing contract,
-so it moves into the `///`. Only the fourth dies — `// cheaper than repeated
-removes` in `pub fn replace_file`, which is about the body's shape and not about
-calling it.
-
-That class is the deliberate casualty, and it is not lost so much as moved out of
-the file: **a decision about why a body is shaped one way rather than the obvious
-one belongs in the commit message**, dated and attached to the diff that made it,
-where `git log -L` finds it. That couples the comment rule to the commit-message
-rule below, which is where those notes land.
+A comment states what the code does, so the code is its only source and the pass
+needs no recorded context. **A decision about why a body is shaped one way
+rather than the obvious one belongs in the commit message**, dated and attached
+to the diff that made it, where `git log -L` finds it; the pass hands those on as
+notes. `business-context.md` still feeds the plan, the code and the commit
+messages.
 
 The module clause carries the one constraint that is easy to violate: a module
 header sits far from what it describes and is read long after, so it may hold
 only what stays true as the contents change. Naming the responsibility survives a
 refactor; listing the contents is wrong the first time something moves.
-
-### The unverifiable half of a comment now has a source
-
-`/comment-pass`'s governing rule is "never assert a reason you have not
-verified". That is right, and on its own it caps what the pass can write: most
-of a caller's contract is in the code, but the part that is not — which rule
-sets the bound, what an upstream system guarantees, why the obvious shape was
-rejected — is not in the code by definition, so the rule silently forbids the
-most valuable sentence in the comment.
-
-The obvious fix, and the one the old policy stack tried, is to quiz the human
-marker by marker after the code is written. That fails for a reason worth
-recording: it asks for a judgment about code they did not author, at the moment
-where the only honest answer is often *you tell me*.
-
-So the questions moved **before** the code. `/task:build` asks them at GATE C,
-after reading the brief and the code it will touch and before anything is
-designed, and the answers are recorded **verbatim** in `business-context.md` in
-the task notes. They then reach the plan, the code, and only last a comment.
-
-`/comment-pass` becomes a **matcher**. Two sources for a sentence and no third:
-a fact verified in the code, or a passage in the recorded context, compressed to
-fit and never extended. A site neither covers is reported as a **context gap**
-with its `file:line` — closed by extending the context (`/task:build context`),
-never by writing the sentence.
-
-This is the same three-source rule the commit-message policy below already
-states — my prompts, what we settled, or a verified fact. What changed is that
-the first two are now written down somewhere a later session, and a sub-skill,
-can read them. A gap is a place the code carries no explanation and I gave none,
-which is a decision for me at GATE 2 rather than something to discover in
-review.
 
 ### Commit messages: the policy made them measurably worse
 
@@ -1301,21 +1254,17 @@ commits.
 
 The rule was written against the code, not applied to it. Outstanding:
 
-`comment-candidates.py .` reports **2165 findings across 239 files**:
+`comment-candidates.py .` reports, on 2026-11-07 after the rule changed:
 
 | category | count |
 |---|---|
-| `BARE-COMMENT` | 1192 |
-| `TEST-UNJUSTIFIED` | 377 |
-| `PUB-UNDOC` | 299 |
-| `PRIV-DOC` | 248 |
-| `MOD-UNDOC` | 49 |
+| `BARE-COMMENT` | 1536 (now including comments above tests) |
+| `PUB-UNDOC` | 460 — candidates only |
+| `PRIV-DOC` | 316 |
+| `MOD-UNDOC` | 50 |
 
-Deleting is mechanical. The 299 public contracts, 377 test justifications and 49
-module headers are real writing, and `TEST-UNJUSTIFIED` is the one that is not
-merely writing: the rule says a test whose justification cannot be written should
-not exist, so some fraction of those 377 is a question about the tests rather than
-about their comments.
+Deleting is mechanical. The 50 module headers are the real writing; the public
+candidates mostly want no comment.
 
 19 `TODO(jb-comment)` / `TODO(jb-doc)` markers also remain, in
 `tools/hdash/README.md`, `hooks/edit-before-execute/README.md`,
@@ -1385,7 +1334,7 @@ the scenarios it unlocks, marked as the other task's.
 
 ## Task shaping lives in CLAUDE.md, not in the skill that applies it
 
-The rules for carving a project into issues — six of them, with one labelled
+The rules for carving a project into issues — five of them, with one labelled
 escape — are in `dotfiles/claude-md/hobby.CLAUDE.md` under **Task shaping**. The
 skill that runs the pass is `/task-split`, and `/issue-create` checks the three
 text-decidable rules before it files anything.

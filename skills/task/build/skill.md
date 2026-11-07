@@ -46,14 +46,12 @@ represents the implemented change, never a plan.
    the decisions, and **no justification you were not given**. If a decision in
    the diff has no justification from my prompts or from what we settled, ask
    rather than inventing one.
-3. **Never write a reason I did not give you.** The comment rule and the
-   commit-message rule in `~/.claude-hobby/CLAUDE.md` both allow exactly three
-   sources for a justification: my prompts, what we settled in discussion, or a
-   fact you verified in the code. GATE C is where the first two get written
-   down, verbatim, in `business-context.md`. A *why* no recorded passage and no
-   verified fact supports is **reported as a gap**, never filled in: a missing
-   explanation is something I can fix by extending the context, an invented one
-   is wrong forever and nothing later contradicts it.
+3. **Never write a reason I did not give you.** The commit-message and PR rules
+   in `~/.claude-hobby/CLAUDE.md` allow exactly three sources for a
+   justification: my prompts, what we settled in discussion, or a fact you
+   verified in the code. GATE C is where the first two get written down,
+   verbatim, in `business-context.md`. A commit that needs a *why* none of them
+   supplies is **asked about at GATE 2**, never filled in.
 4. **No machine attribution** in anything you write — no `Co-Authored-By:
    Claude`, no `Claude-Session:` trailer, no `Generated with Claude Code` footer,
    no 🤖. It is advertising and these repos do not carry it. Comments, commit
@@ -108,8 +106,8 @@ represents the implemented change, never a plan.
      "is_aspect": false,
      "split": { "assessed": "<YYYY-MM-DD>", "outcome": "none|split",
                 "reason": "<one line>" },
-     "size_budget": "", "prior_art": "",
-     "context_questions": [], "context_recorded": null, "context_gaps": [],
+     "prior_art": "",
+     "context_questions": [], "context_recorded": null,
      "evidence": [ "<command run, and what it showed>" ],
      "commits": [ { "subject": "<subject>", "body": "<body>" } ],
      "pr": { "title": "<title>", "body": "<body>" },
@@ -168,18 +166,17 @@ represents the implemented change, never a plan.
 
 5. **Flags:** `--no-hmml` skips the `delta` phase, for a change I can read
    straight from the diff. `--no-context` skips GATE C — for a change I have no
-   domain background to give; the comment pass then has nothing to write an
-   unverifiable *why* from, so it reports every such site as a gap.
+   domain background to give.
    `--no-split` skips `assess-split` for this task, for when I already know it
    is one thing. `--resume-deep` uses `journal:resume-deep`. Record each as its
-   state-file flag so a resume does not silently re-add the phase.
+   state-file flag so a resume does not silently re-add the phase. A
+   `size_budget` or `context_gaps` key from an older record is dropped.
 
 6. **Rehydrate before running a phase that is not `plan`.** A resumed session has
    none of the understanding the earlier phases built, and does not need to guess
-   — read, in this order: the state file's `brief`, `todo`, `context_gaps` and
-   `evidence`; the plan file; `business-context.md` — the domain facts I
+   — read, in this order: the state file's `brief`, `todo` and `evidence`; the plan file; `business-context.md` — the domain facts I
    dictated at GATE C, in my own words, which are what the change was designed
-   from and the only text the comment pass may write an unverifiable *why* from;
+   from and the only text a commit message may take an unverifiable *why* from;
    the derived `.hmml` delta when `delta` has run; and `git status --short` /
    `git diff`. Then say in two lines what the task is doing and where it stopped.
 
@@ -243,7 +240,7 @@ list as the order in which a player or a caller gains capability, *before*
 looking at the code layout. Starting from the architecture is what produces
 layer tasks, and shaping rule 1 exists to reject exactly those.
 
-**S4 — Test every candidate against the six Task shaping rules** in
+**S4 — Test every candidate against the five Task shaping rules** in
 `~/.claude-hobby/CLAUDE.md`. That file is the standard and this skill
 deliberately does not restate it. State each failure rather than silently fixing
 it — a candidate that had to be re-cut is information about the shape of the
@@ -251,13 +248,10 @@ work, and I want to see it at the gate. The re-cuts that fix nearly everything:
 
 - **Layer candidate → vertical slice.** "Add the component" becomes one narrow
   thing that is visible in the running game.
-- **Too large → narrow the case, not the stack.** One enemy kind, one biome,
-  happy path only. Slicing by case keeps it end-to-end; slicing by layer does
-  not.
-- **Carries an open question (rule 5) → make the decision its own item,** and
+- **Carries an open question (rule 4) → make the decision its own item,** and
   make whatever depends on the answer wait. A question is not a deliverable —
   but one whose answer is a file is a research aspect.
-- **Leaves state to be remembered (rule 6) → pull the cleanup into the same
+- **Leaves state to be remembered (rule 5) → pull the cleanup into the same
   piece,** or make it an aspect that exists now.
 
 Then give each survivor its home: an aspect (code or research; now or later)
@@ -270,7 +264,7 @@ which files two pieces share.
 
 - **Every piece stands alone** — if backing one out forces another out, they
   are one piece cut on the wrong axis (rule 3).
-- **Nothing is left to remember** (rule 6) once every piece has merged — no
+- **Nothing is left to remember** (rule 5) once every piece has merged — no
   flag, no dual path, no half-done migration.
 
 **S6 — Decide whether to split at all.** Fewer than two surviving candidates
@@ -342,17 +336,15 @@ ______________________________________________________________________
 
 ## Phase `plan` → GATE C
 
-**Gate 0 — prior art and size.** Before any code. No sweeping changes
-without prior discussion, and do not accelerate past someone else's active work.
+**Gate 0 — prior art.** Before any code. No sweeping changes without prior
+discussion, and do not accelerate past someone else's active work.
 
 - `gh pr list --search "<keywords>" --state all` on the repo this task targets,
   and `rg -il "<keywords>" ~/fun_repos/hobby-mimisbrunnr/notes/<project>/*/*/issue.md`
   for the issues in the notes. Report anything overlapping, with its state.
-- State an expected size: files touched, rough lines changed.
-- **Stop and ask** if an open PR or active issue covers this work, or the expected
-  change exceeds **10 files or 500 lines**.
+- **Stop and ask** if an open PR or active issue covers this work.
 
-Record `size_budget` and `prior_art`. On my own repo this is usually one empty
+Record `prior_art`. On my own repo this is usually one empty
 search; on a repo I do not own it is the difference between a welcome PR and a
 closed one.
 
@@ -381,8 +373,8 @@ baseline comes from.
 moment to collect what only I have — the context the change has to be designed
 inside: which rule sets a bound, what an upstream system guarantees, what a
 later reader will break by tidying a shape away, why the obvious approach was
-rejected before. Ask now and the answers shape the plan, the code, the comments
-*and* the commit message. Ask after the code exists and they can only decorate
+rejected before. Ask now and the answers shape the plan, the code *and* the commit
+message. Ask after the code exists and they can only decorate
 it.
 
 Skip this step entirely on `--no-context`: set `phase: context` and carry on to
@@ -423,11 +415,9 @@ The waiting state written at GATE C. Entered when my answers come back.
 
 **The `context` phase argument re-opens it at any point** — the pipeline's one
 loop, and how more of what I know gets in after I have seen something. Invoked
-later, it derives its questions from whatever prompted the top-up (the delta I
-just read at GATE 2, or the gaps the comment pass reported — each of those
-carries its own question at a `file:line` you can now show me), appends the
-answers to the same section, and returns to the phase it interrupted:
-`implement` when the code has to change, `comments` when only the comments do.
+later, it derives its questions from whatever prompted the top-up (usually the
+delta I just read at GATE 2, at a `file:line` you can now show me), appends the
+answers to the same section, and returns to `implement`.
 
 **Record my answers, verbatim.** Append them to
 `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/business-context.md`
@@ -442,11 +432,9 @@ Steam Deck; a queue would hide the cap and stutter instead of dropping a wave.
 ```
 
 **Copy my wording. Never paraphrase, summarize, complete or tidy it.** This file
-is the only text the comment pass and the commit message may take an
-unverifiable *why* from, so a sentence you smoothed here becomes a claim I never
-made. Record a skip too — the handle with the body `skipped — no context to
-give` — which is what tells the comment pass to drop that site instead of
-hunting for a passage. A question I leave unanswered when I say continue is a
+is the only text a commit message may take an unverifiable *why* from, so a
+sentence you smoothed here becomes a claim I never made. Record a skip too — the
+handle with the body `skipped — no context to give`. A question I leave unanswered when I say continue is a
 skip: record it as one rather than asking again.
 
 Write `context_recorded` (today's date), clear `waiting_on`, and carry on in the
@@ -458,7 +446,7 @@ in the plan format of `~/.claude-hobby/CLAUDE.md` — Goal, Approach, Steps, Key
 Files, Open Questions — and short: the steps are the order you will work in,
 one line each, naming files. A recorded answer the change has to honour is
 cited in the step it shapes by its `business-context.md` handle, so it is not
-carried in your head to be remembered at the comment pass. A new dated file per
+carried in your head to be remembered at the commit. A new dated file per
 planning session; never overwrite an earlier one. Record its name as `plan` and
 seed `todo` from its steps (**Live state**). The plan is not a gate: say in one
 line where it is, set `phase: implement`, and carry on.
@@ -473,11 +461,10 @@ asked when it comes up, as one line with the options you see — set
 `waiting_on`, stop, and resume at the same `todo` item. It is not saved for a
 gate, and it is not answered on my behalf.
 
-Write comments to the rule as you go — a module header, a public element's
-contract, a test's justification, nothing else. The `comments` phase is a check,
-not a laundry: do not write comments expecting it to delete them. Where the
-contract you are writing needs a *why* the code cannot show, take it from
-`business-context.md` and from nowhere else.
+Write comments to the rule as you go — a module header, and a public element's
+comment only where it tells the caller something the signature does not. Write
+for a reader who never saw this conversation. The `comments` phase is a check,
+not a laundry: do not write comments expecting it to delete them.
 
 **Test.** Drive it end to end: run the app or the affected flow, plus the repo's
 own test command (`cargo test`, `cargo clippy`, `just test`, whatever it uses).
@@ -514,31 +501,20 @@ ______________________________________________________________________
 
 ## Phase `comments`
 
-Run `/comment-pass`, naming the `business-context.md` path (and passing
-`--no-context` when the task carries that flag, so the skill knows the missing
-file is deliberate). It enforces the comment rule over the branch diff in both
-directions — deletes what the rule disallows, relocates what carried real
-information, and writes the module headers, public contracts and test
-justifications that are missing, taking any *why* it cannot verify from the code
-out of the recorded context and from nowhere else.
+Run `/comment-pass` over the branch diff. It deletes what the comment rule
+disallows, cuts comments pitched at the wrong level or written for the
+conversation, and writes missing module headers and the public comments a caller
+needs.
 
-Three parts of its report are inputs to the next phase rather than side effects:
+Carry two parts of its report to GATE 2:
 
-- the **shape-decision notes** it pulled out of deleted body comments. Those are
-  facts about why the code looks the way it does, and their home is the commit
-  message. Carry them into the gate verbatim.
-- every finding it **declined to act on** — a test whose justification could not
-  be written, a module with no single responsibility, anything it could not verify
-  from the code. Each is a decision for me.
-- the **context gaps**: sites where the rule wants a comment, the code cannot
-  supply the reason, and no recorded passage covers it. Where a gap sits
-  somewhere a comment genuinely belongs, say so in one line and offer
-  `/task:build context`, which re-opens the questions for those sites and comes
-  back here to re-run the pass. Whether to take that is my call. **Never close a
-  gap by writing the comment yourself.**
+- the **shape-decision notes** it pulled out of deleted body comments — facts
+  about why the code looks the way it does, whose home is the commit message;
+- anything it **declined to act on** — a module with no single responsibility, a
+  name that needs changing, a behaviour it could not verify. Each is a decision
+  for me.
 
-Record all three — the gaps to `context_gaps` — then fall through to
-`standards`.
+Then fall through to `standards`.
 
 ______________________________________________________________________
 
@@ -577,36 +553,46 @@ ______________________________________________________________________
 ## Phase `review` → GATE 2
 
 **→ GATE 2: HARD STOP.** Set `phase: await-review`, set `waiting_on` to
-`read the change at GATE 2`, write the state file, print:
+`read the change at GATE 2`, write the state file.
 
-- the diff summary — files, one line each on what changed;
-- the test evidence, and the CI steps skipped locally;
-- **the derived delta** — each `.hmml` path, then every `# -` and `# +` line
-  grouped by section, with a count. This is the change at mental-model altitude,
-  so show it rather than describing it; a line of it that surprises me is the
-  cheapest place to catch a change that does something the brief did not ask;
-- what `/comment-pass` changed, each written comment with the context handle
-  behind it where it had one, and what it declined to act on;
-- the **context gaps** with their `file:line` — a gap is a place the code
-  carries no explanation and I gave none, so name it rather than burying it;
-  closing one means re-running `/task:build context`, which is a decision for
-  now, not after merge;
-- the standards delta — each budget before and after, any tightened by the ratchet,
-  and **any regression you could not fix**, with what you tried;
-- the shape-decision notes it extracted, verbatim, for the commit message, and
-  the `business-context.md` handles a commit body may cite — those are the
-  written form of "something I said" and "something we settled", the two sources
-  a justification may otherwise not be derived from;
-- the size against the Gate 0 budget, and by how much it was crossed;
-- **the proposed commits** — the uncommitted changes cut into one or more
-  commits, each with the files it takes and its full message, to the
-  commit-message rule in `~/.claude-hobby/CLAUDE.md`. Several commits in one PR
-  are fine; cut one per decision when the diff holds more than one. A commit
-  that needs a justification no context handle or verified fact gives is asked
-  about here, not written;
-- **the proposed PR** — title and body, written to the PR rule (see `pr`);
-- *"Review the local changes and the messages above. Say continue to commit,
-  push and open the PR, or tell me what to change."*
+GATE 2 is **layered**: it prints the overview, and I zoom in on request. The
+overview is what I read every time, so keep it short enough to read in one go.
+
+**The overview — printed:**
+
+- **what changes**, in two or three sentences, for a person using the program,
+  not in terms of files;
+- **the derived delta**, at behaviour level — each `.hmml` path, then every
+  `# -` and `# +` line in its behaviour, invariant and access sections, grouped
+  by section. It is the cheapest place to catch a change that does something the
+  brief did not ask; show it, do not describe it. With no delta (skipped, or
+  `--no-hmml`), say so in one line;
+- **evidence** in one line — what was run and that it passed — plus any CI step
+  skipped locally;
+- **what needs my decision**, and only that: a standards regression you could not
+  fix (what you tried), anything `/comment-pass` declined, a commit that needs a
+  justification no handle or verified fact gives. None → say `nothing to decide`;
+- **the proposed commits** — subject and the files each takes; the full bodies
+  are in the state file and shown on `messages`;
+- **the proposed PR title**;
+- *"Say `design` for the module and API level, `diff` for the files, `messages`
+  for the full commit and PR text. Say continue to commit, push and open the PR,
+  or tell me what to change."*
+
+**On request — printed only when I ask:**
+
+- `design` — the program's shape: per module touched, its header and every
+  public signature added, changed or removed, with its comment; how the modules
+  now depend on each other where that changed; and the `kind: module` `## api`
+  delta from the `.hmml` set when `delta` extracted one. Then the standards delta,
+  each budget before and after;
+- `diff` — the files, one line each on what changed, then whatever part of the
+  diff I name;
+- `messages` — every proposed commit message in full and the PR body, to the
+  rules (see `pr`), with the shape-decision notes and the `business-context.md`
+  handles they cite.
+
+After a zoom, end the turn again; the gate still holds.
 
 Record the proposals as `commits` and `pr` in the state file, so a resumed
 session opens exactly what I approved. A change I ask for here goes back
@@ -675,8 +661,7 @@ and repair them; never hand me a red PR as finished.
 
 ## Phase `journal`
 
-Run `journal:write` — goal, what changed, evidence, open items, with the context
-gaps under the open items so they survive into the next session's resume.
+Run `journal:write` — goal, what changed, evidence, open items.
 
 **In an aspect**, wait for the merge first: `hcoord merged <pr url>`, Bash
 `timeout: 600000`, again on `timeout`. `merged` → set `aspect.json` `state` to

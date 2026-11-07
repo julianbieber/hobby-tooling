@@ -1,5 +1,5 @@
 ---
-description: Carve a project or an oversized issue into a sequence of tasks that each satisfy the task-shaping rules, and hand back the list for me to edit before any of it is written up
+description: Carve a project or an issue that holds several tasks into a sequence of tasks that each satisfy the task-shaping rules, and hand back the list for me to edit before any of it is written up
 allowed-tools: Bash(git branch:*), Bash(git log:*), Bash(git remote:*), Bash(pwd:*), Bash(ls:*), Bash(rg:*), Bash(gh pr:*), Read, Grep, Glob
 ---
 
@@ -15,7 +15,7 @@ because the body, the topic and the task name are per-issue decisions.
 
 ## The rules this pass applies
 
-The six rules live in `CLAUDE.md` under **Task shaping** and are the standard, not
+The five rules live in `CLAUDE.md` under **Task shaping** and are the standard, not
 a summary of one. Read them there. What this skill adds is the procedure for
 applying them and the re-cuts to reach for when one fails.
 
@@ -41,18 +41,15 @@ applying them and the re-cuts to reach for when one fails.
    Starting from the architecture is what produces layer tasks, and rule 1 exists
    to reject exactly those.
 
-4. **Test every candidate against all six rules** and record which ones it fails.
+4. **Test every candidate against all five rules** and record which ones it fails.
    State the failure, do not silently fix it — a candidate that had to be re-cut
    is information about the shape of the work.
 
-5. **Re-cut what failed.** The four moves that fix nearly everything:
+5. **Re-cut what failed.** The three moves that fix nearly everything:
 
    - **Layer task -> vertical slice.** "Add the table / endpoint / UI" becomes one
      narrow thing a user can do end to end.
-   - **Too large -> narrow the user, not the stack.** One entity kind, one input
-     format, one code path, happy path only. Slicing by *case* keeps the task
-     end-to-end; slicing by *layer* does not.
-   - **Question inside the work -> decision task in front of it** (rule 5), whose
+   - **Question inside the work -> decision task in front of it** (rule 4), whose
      output is the decision and the tasks that follow from it.
    - **Enabler with no consumer -> either fold it forward or drop it.** An
      enabling task is legal only with a named consumer that exists (rule 1's
@@ -67,7 +64,7 @@ applying them and the re-cuts to reach for when one fails.
    - **Revert independence** (rule 3) holds pairwise for anything that touches
      shared code, not just for adjacent entries.
    - **Every `enabling` task's named consumer is in the list**, and later in it.
-   - **The last task leaves nothing to remember** (rule 6) — no flag, no dual code
+   - **The last task leaves nothing to remember** (rule 5) — no flag, no dual code
      path, no migration half-done. If it does, the cleanup is a task and it goes
      on the end.
 

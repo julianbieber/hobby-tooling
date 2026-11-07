@@ -55,11 +55,12 @@ designed.
 
 The answers are recorded verbatim in `business-context.md` in the task notes,
 and that file is then the only text — besides a fact verified in the code — that
-any later phase may take a *why* from. It reaches the plan, then the code, and
-only last a comment. `/comment-pass` becomes a **matcher**: it
-writes a comment where a recorded passage answers the site, and reports the rest
-as gaps rather than filling them in. A gap is closed by extending the context
-(`/task:build context`), never by inventing the sentence.
+any later phase may take a *why* from. It reaches the plan, the code and the
+commit messages. It no longer reaches comments: a comment says what a public
+item does for its caller, which the code itself verifies, and taking reasons
+into comments was what put the conversation into the code
+(`notes/hobby-tooling/skills/review_too_strict/business-context.md`
+`## intent-comments`).
 
 That is the same three-source rule the commit-message policy in
 `~/.claude-hobby/CLAUDE.md` already states — my prompts, what we settled, or a
@@ -72,7 +73,7 @@ session can read them.
 A piece cut off is an **aspect** when it is part of this task — worked in a tab
 of this task's session, now or later, and finished before the task is — and a
 **task** when it is work for some later point, with its own card and no tab.
-Both are judged by the six Task shaping rules in `~/.claude-hobby/CLAUDE.md`.
+Both are judged by the five Task shaping rules in `~/.claude-hobby/CLAUDE.md`.
 This pipeline is one branch: everything it does lands as one change.
 
 A code aspect is cut from the current tip of its base when it is started, not
@@ -117,6 +118,14 @@ carried one, transplanted from the work `dev-flow`, where `complete-review` fans
 six review skills over the diff. That is a work-context habit and it does not
 belong here.)
 
+**GATE 2 is layered.** It prints an overview — what changes for a user, the
+behaviour-level delta, a line of evidence, what needs a decision, the proposed
+commits — and `design`, `diff` and `messages` zoom in. I want to follow a change
+at different levels, sometimes only the high level and sometimes the program
+design more closely (`review_too_strict` `## intent-understanding`), and the
+gate used to print every level at once. On trial for the next few tasks
+(`## layered-gate`).
+
 
 ## Stages
 
@@ -124,13 +133,13 @@ belong here.)
 |---|---|---|
 | `assess-split` | precondition check, the cut tested against the shaping rules | hard stop |
 | `handed-off` | `hwt aspect new` per approved aspect, `/issue-create` per task, `journal:write`, the aspects worked now started | terminal |
-| `plan` | Gate 0 prior-art/size, Gate 0b the repo's standards, brief, reading the code, then the business-context questions | hard stop |
+| `plan` | Gate 0 prior art, Gate 0b the repo's standards, brief, reading the code, then the business-context questions | hard stop |
 | `context` | records my answers verbatim, writes the plan file, seeds `todo` | falls through |
 | `implement` | the change from the plan, run + test, the repo's CI workflows run locally | falls through |
 | `delta` | `/hmml-extract --against <merge-base>` over the units the diff touches | falls through |
-| `comments` | `/comment-pass` over the branch diff, matched against the recorded context | falls through |
+| `comments` | `/comment-pass` over the branch diff | falls through |
 | `standards` | `/structure` on the target repo — ratchet a budget the change improved, try to fix one it broke | falls through |
-| `review` | prints the diff, evidence, comments and the proposed commit and PR messages for me to read | hard stop |
+| `review` | prints the layered GATE 2 overview; `design`, `diff`, `messages` zoom in | hard stop |
 | `await-review` | nothing — I read the summary | `continue` |
 | `pr` | commits the approved messages, pushes the task branch, opens the PR | falls through |
 | `ci` | `hcoord ci` on the PR, repairing a red check on the diff's own for at most three rounds | falls through, or stops when blocked |

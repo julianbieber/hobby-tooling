@@ -1,16 +1,21 @@
 ---
-description: Enforce the comment rule over a diff or a path — delete comments the rule disallows, relocate the ones carrying real information, and write the module headers, public doc comments and test justifications that are missing
-argument-hint: '[<base> | <path>…] [--context <path>] [--no-context] [--report-only]'
+description: Enforce the comment rule over a diff or a path — delete comments the rule disallows, rewrite the ones pitched at the wrong level, and write the missing module headers and the public comments that say more than the signature
+argument-hint: '[<base> | <path>…] [--report-only]'
 allowed-tools: Bash(python3 */comment-candidates.py:*), Bash(git diff:*), Bash(git log:*), Bash(git -C:*), Bash(git rev-parse:*), Bash(git merge-base:*), Bash(pwd:*), Bash(ls:*), Read, Grep, Glob, Edit
 ---
 
-Make the comments match the rule in `~/.claude-hobby/CLAUDE.md`: **a module header,
-a public element's contract, a test's justification. Nothing else.**
+Make the comments match the rule in `~/.claude-hobby/CLAUDE.md`: **a module
+header, and a public element's comment when it tells the caller something the
+signature does not. Nothing else.**
 
-**This pass goes both ways.** Its predecessor only ever cut, which is why the tree
-ended up with placeholders instead of comments. Here, deleting a disallowed comment
-and writing a missing one are the same job — a diff that comes out of this pass with
-fewer comments and no new ones has probably failed.
+A comment is written for a caller, at the level they use the code. The failures
+this pass exists to remove are the ones a model produces by default: a comment
+that restates the name, one that walks through the body, and one that belongs to
+the conversation that wrote the code rather than to the code.
+
+**This pass is mostly a filter.** Coming out with fewer comments is the normal
+result. It writes only two things: a missing module header, and a public
+comment the caller actually needs.
 
 ## Stage 0 — Scope
 
@@ -22,8 +27,9 @@ fewer comments and no new ones has probably failed.
    python3 ~/fun_repos/hobby-tooling/scripts/comment-candidates.py <path>…
    ```
 
-   It emits `path:line<TAB>CATEGORY<TAB>detail` for the five states the rule can
-   detect mechanically. Report the counts per category before changing anything.
+   It emits `path:line<TAB>CATEGORY<TAB>detail` for the four placement states it
+   can detect mechanically. Report the counts per category before changing
+   anything.
 
 2. **Vendored crates are report-only**: `mcps/just-mcp`, `mcps/lsp-mcp`,
    `mcps/tree-extract`, `lsps/claude-lsp`, `lsps/claude-skills-lsp`,
@@ -31,114 +37,72 @@ fewer comments and no new ones has probably failed.
    every rewrite here widens the drift a re-sync has to reconcile. List their
    findings, change nothing, unless I say otherwise.
 
-3. **Load the recorded business context.** `--context <path>` names it; with no
-   flag, look for `business-context.md` beside the task's notes
-   (`~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/`). It is a
-   file of `## <handle>` blocks holding the human's own words about why the
-   change is shaped as it is — collected before the code existed, by
-   `/task:build` at GATE C. Read it whole before writing anything.
-
-   It is the **only** source, besides the code itself, for a sentence you write
-   here. Everything in Stage 1 and Stage 2 that needs a reason may take it from
-   the code you verified or from a passage in this file, compressed to fit and
-   never extended, and from nowhere else.
-
-   With `--no-context`, or when the file is absent, the pass runs on verified
-   facts alone: the sites that would have needed it become gaps in the report
-   rather than sentences.
-
-4. `--report-only` stops after the report everywhere. It is this skill's flag —
+3. `--report-only` stops after the report everywhere. It is this skill's flag —
    never pass it through to the detector, which rejects unknown flags.
 
 ## Stage 1 — What the detector found
 
-Work the categories in this order. The first two remove, the last three add.
-
-**`BARE-COMMENT` — a comment where the rule allows none.** Do not reflexively
-delete. Read what it says, then pick one:
+**`BARE-COMMENT` — a comment where the rule allows none**: in a body, a banner,
+above a test. Read it, then:
 
 | the comment carries | do |
 |---|---|
-| nothing the code doesn't already say (`// Parse URI` above `Url::parse`) | delete |
-| a contract a caller needs — preconditions, what an error case really is, observable state change | move it into the enclosing item's `///`, rewritten as a contract; delete the inline |
-| a fact about the enclosing test | move it above the test as its justification |
-| why the body is shaped this way rather than the obvious way | **delete, and list it in the report as a commit-message note** — it is a decision, and decisions live in the commit that made them |
-| a section banner (`// ----`) | delete; if the file needed them to be navigable, say so in the report — that is a split, not a comment |
+| nothing the code doesn't already say | delete |
+| something a caller needs — a precondition, what an error means, an observable effect | move it into the enclosing public item's comment at the caller's level; delete the inline |
+| why the body is shaped this way rather than the obvious way | delete, and list it in the report as a commit-message note |
+| what a test pins | delete; if the test's name does not say it, propose a better name in the report |
+| a section banner | delete; if the file needed them to be navigable, say so — that is a split, not a comment |
 
-The third and fourth rows are where the information actually is. A pass that
-resolves every `BARE-COMMENT` to "delete" has not read them.
+**`PRIV-DOC` — a doc comment on a private element.** Delete it. If losing it
+makes the element hard to follow, the fix is the name or the shape: report that.
 
-**`PRIV-DOC` — a doc comment on a private element.** Delete it. If losing it makes
-the element hard to follow, the fix is the name or the shape, not the comment:
-report that instead of quietly keeping the comment.
+**`MOD-UNDOC` — no module header.** Write one: the module's responsibility, for
+someone deciding whether and how to use it. Never list what is in the file. If
+you cannot state a single responsibility, report that instead of writing a header
+that lists two.
 
-**`MOD-UNDOC` — no module header.** Write what the module is *responsible for*.
-The constraint that matters: this comment is read long after, far from the code, so
-it may contain only what survives the contents changing. Name the responsibility.
-Never list what is currently in the file — that is wrong the first time something
-moves. If you cannot state a single responsibility, the finding is that the module
-does not have one; report it rather than writing a header that lists two.
-
-**`PUB-UNDOC` — a public element with no doc comment.** Write what the caller needs
-to use it correctly, and stop: preconditions, what the error cases actually are,
-what it does to state the caller can observe. Not how it works inside. Not the name
-again — if the doc comment would only restate the signature, the honest output is no
-comment, and the finding is that the item is self-describing. Say so.
-
-**`TEST-UNJUSTIFIED` — a test with no justification.** One line above the test: why
-it exists and which behaviour it pins. If you cannot write that line from the test's
-own body, **that is the finding** — the rule says the test should not exist. Report
-it for me to decide. Never invent a rationale to satisfy the check.
+**`PUB-UNDOC` — a public element with no comment.** A candidate, not a defect.
+**Leave it uncommented** unless you can name something the caller needs that the
+names and types do not say — a precondition, what an error case means, an effect
+on state the caller can see, a unit or range the type does not carry. Write only
+that, in a sentence or two. Do not count these as work left over.
 
 ## Stage 2 — What the detector cannot see
 
-A comment in a legal place can still be the wrong comment. Read every `//!`, `///`
-and test justification in scope against the code it sits on:
+Read every module header and public comment in scope against the code and the
+signature it sits on. Rewrite or delete:
 
-- a module header that lists contents rather than naming a responsibility, or that
-  is already false;
-- a `///` that describes the implementation instead of the contract;
-- a `///` that restates the signature — `/// Check if two LSP ranges overlap` on
-  `fn ranges_overlap(a: &Range, b: &Range) -> bool`;
-- a `///` that is simply wrong about what the code does;
-- a test justification that names no behaviour ("tests the parser").
+- **restatement** — the name or the types again in prose
+  (`/// The project the tasks belong to.` on `pub project: String`): delete;
+- **too much detail** — how the body works, the algorithm, the steps: cut to
+  what the caller sees, or delete;
+- **conversation** — anything that only makes sense to someone who saw the
+  task: history (`no longer`, `used to`, `instead of the old …`), references to a
+  task, issue, PR, gate, plan or notes file, who asked for it: rewrite as the
+  behaviour it describes, or delete;
+- **wrong** — says something the code does not do: fix it; a wrong comment is
+  worse than none.
 
-Rewrite these. A wrong comment is worse than a missing one, because the next reader
-stops checking.
+The test for every sentence that survives: it reads correctly to someone who
+never saw the conversation or the diff, it is at the caller's level, and the
+signature does not already say it.
 
-## The rule that governs every sentence you write here
-
-**Never assert a reason you have not verified in the code or read in the recorded
-context.** Those are the two sources, and there is no third. If you cannot establish
-why a function returns an error, what a precondition really is, or why a test exists
-— and no `## <handle>` block covers it — write what you can see or write nothing, and
-put the site in the report as a **context gap**. A confident, plausible, wrong
-comment is the single worst output of this pass: it is load-bearing for the next
-reader and it is invisible, where a missing comment is merely missing.
-
-When a passage does cover the site, use **the human's wording**, compressed to the
-length the comment wants. Never paraphrase it into something smoother, never extend
-it past what the passage says, and name the handle it came from in the report so the
-claim can be traced back to the sentence that licensed it. A `skipped — no context to
-give` block is an answer: that site is a gap, not a prompt to look harder.
-
-Same applies to the module headers: "responsible for X" is a claim. Verify it against
-what the file actually contains before writing it.
+**Never assert what you have not verified in the code.** A behaviour you cannot
+establish is not written; the site goes in the report.
 
 ## Stage 3 — Report
 
+Short:
+
 - counts per category, before and after;
-- every comment **relocated**, with where it went;
-- every comment written from the recorded context, with the handle behind it;
-- every **context gap**: a site the rule wants a comment at, where the code cannot
-  supply the reason and no recorded passage covers it, with its `file:line` and the
-  question it raises. A gap is closed by extending the context, never by writing the
-  comment;
-- every shape-decision note pulled out for the commit message, verbatim — this is
-  output I need, not a side effect;
-- every finding you deliberately did not act on, with the reason: a test whose
-  justification cannot be written, a module with no single responsibility, a public
-  item whose doc comment would only restate it, anything you could not verify;
+- comments written — module headers, and public comments with what they add over
+  the signature;
+- comments relocated, rewritten or deleted for level or conversation, as a count
+  with a few examples;
+- shape-decision notes pulled out for the commit message, verbatim;
+- anything not acted on, with the reason — a module with no single
+  responsibility, a private element that needs a better name, a test that needs a
+  better name, a behaviour you could not verify;
 - vendored-crate findings, listed and untouched.
 
 Never `git add` or commit. The edits are the deliverable; the decision to keep them

@@ -65,20 +65,19 @@ tags:
 
 ## Comments
 
-Three places take a comment. Nothing else does.
+A comment is written for a **caller**: someone using the code, at the level they
+use it. Two places take one, and nothing else does.
 
-**Modules** — what this module is responsible for. The comment sits far from the
-code it describes, so it may hold only what stays true as the contents change:
-name the responsibility, never the current contents. A header that lists what is
-in the file is wrong the first time something moves.
+**Modules** — the highest-level description of the module: what it is
+responsible for, for someone deciding whether and how to use it. Every module has
+one. It sits far from the code it describes, so it may hold only what stays true
+as the contents change: name the responsibility, never the current contents.
 
-**Public elements** — everything the caller needs to use it correctly, and
-nothing else. Preconditions, what the error cases actually are, what it does to
-state the caller can observe. Not how it works inside, and not a restatement of
-the name.
-
-**Tests** — one line **above the test**, saying why it exists and which behaviour
-it pins. If that line cannot be written, the test should not exist.
+**Public elements** — the behaviour at the level the caller cares about, and only
+what the signature (names and types) does not already say: preconditions, what
+the error cases mean, what it does to state the caller can observe. **No comment
+is the default.** A public item whose signature says everything carries none, and
+that is correct, not a gap.
 
 What counts as a module, and what counts as public:
 
@@ -89,10 +88,15 @@ What counts as a module, and what counts as public:
 | shell (`scripts/`, `hooks/`, `bin/`) | the file | functions called from outside the file, or meant to be invoked from a shell; the rest is private |
 | justfile | the whole file, one module | callable recipes |
 
-**Never:** an inline comment inside a body, a section banner, or a comment
-restating the line beneath it. **Private elements take no comment at all** — a
-private function that needs one to be understood is a naming or shape problem,
-and the comment hides it.
+**Every comment reads correctly to someone who never saw the conversation or the
+diff.** So never: history (`no longer`, `used to`, `instead of the old …`), a
+reference to a task, issue, PR, gate, plan or notes file, how the body works
+inside, or the name restated in prose.
+
+**Never:** an inline comment inside a body, a section banner, a comment on a
+private element, or a comment on a test — the test's name says which behaviour it
+pins. A private function that needs a comment to be understood is a naming or
+shape problem, and the comment hides it.
 
 A decision about *why* a body is shaped one way rather than the obvious one is
 not a comment. It belongs in the commit message, where it is dated and attached
@@ -103,15 +107,11 @@ Two exceptions: `// SAFETY:` on an `unsafe` block stays, because
 `#[error(...)]` strings are not comments at all, so this section says nothing
 about them.
 
-**`/comment-pass` enforces this**, over a branch diff or a path — it deletes what
-the rule disallows, relocates comments that carried real information, and writes
-the module headers, public contracts and test justifications that are missing. It
-runs as the `comments` phase of `/task:build`.
-
-It may assert a reason it verified in the code, or one it read in
-`business-context.md` — the same two written sources the commit-message rule
-below allows, and no third. A contract that needs a *why* neither supplies is
-reported as a gap with its `file:line`, never invented.
+**`/comment-pass` enforces this**, over a branch diff or a path. It is mostly a
+filter — it deletes what the rule disallows and rewrites what is pitched at the
+wrong level — and writes only the module headers that are missing and the
+public-element comments that carry something the signature does not. It runs as
+the `comments` phase of `/task:build`.
 
 ## Commit messages
 
@@ -240,25 +240,18 @@ with it, they were one task split on the wrong axis. This is checkable at merge
 time rather than planning time, which is what catches the splits that satisfy
 rule 1 on paper and are entangled in fact.
 
-**4. Size is bounded by review, not by effort.** Too big means the diff cannot be
-reviewed in one sitting. Effort estimates produce argument; "can one person hold
-this diff in their head" produces agreement, and it gets mechanical churn right —
-a 40-file rename is large and reviewable, and effort-based sizing misjudges it in
-both directions.
-
-**5. No task contains an unanswered question.** A decision that must be made first
+**4. No task contains an unanswered question.** A decision that must be made first
 is its own item, its output is the decision plus the tasks that follow from it,
 and it is explicitly exempt from rule 1. Mixing discovery into execution is what
 makes a half-done task sit open for three weeks.
 
-**6. No task leaves state that must be remembered.** No "remove the flag later",
+**5. No task leaves state that must be remembered.** No "remove the flag later",
 no "the old path stays until #9". Either the cleanup is inside this task or it is
 a task that exists now. Rule 1 generates these — a vertical slice often ships
 behind a flag — so this is its necessary counterweight.
 
-**No estimates, points, or size field.** Rules 3-5 already bound size by things
-that can be checked; a number constrains nothing about shape and is the one field
-people optimise against.
+**No estimates or points.** A number constrains nothing about shape and is the
+one field people optimise against.
 
 ## Issue text
 
@@ -270,8 +263,7 @@ unverified cause is a question in the body, not a claim.
 
 - Before starting anything substantial, search for prior art
   (`gh pr list --search`, and `rg` over the project's `issue.md` files in the
-  notes) and state the expected diff
-  size. No sweeping changes without prior discussion; do not accelerate past
+  notes). No sweeping changes without prior discussion; do not accelerate past
   someone else's active work.
 - Never be a direct pipe. Findings get verified before they are reported.
 

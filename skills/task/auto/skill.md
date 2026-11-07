@@ -34,10 +34,11 @@ the report because a failing command stops the pipeline and a report does not.
 
 ## Rules that override everything else
 
-1. **Never write a reason I did not give you.** Three sources: the brief, what
-   is recorded in `business-context.md`, a fact verified in the code. Nothing
-   is asked mid-run. A *why* none of them supplies is a **gap**, listed at the
-   play gate — unattended, in the journal — never filled in.
+1. **Never write a reason I did not give you** in a commit message or PR.
+   Three sources: the brief, what is recorded in `business-context.md`, a fact
+   verified in the code. Nothing is asked mid-run. A *why* none of them
+   supplies is left out and listed at the play gate — unattended, in the
+   journal — never filled in.
 2. **The state file is a contract.** Write `build-task.json` at every
    transition. The waiting phases are `await-acceptance`, `await-play`
    (interactive only) and `await-fix` (unattended, or CI that would not go
@@ -54,14 +55,15 @@ the report because a failing command stops the pipeline and a report does not.
    way is inserted where it runs); every `await-*` write sets `waiting_on` to
    one line naming what I decide or do, and the write that leaves it sets
    `null`.
-3. **The build stage reads what the plan names, and nothing else.** No
-   `journal:resume`, no directory listings, no neighbouring modules "for
-   context", no git history. A symbol the plan did not mention is looked up
-   with the `tree-extract` MCP, not by opening files.
+3. **The build stage starts from what the plan names.** No `journal:resume`
+   and no reading around "for context". When a step needs a file or symbol the
+   plan did not name, open it — guessing is worse than reading — and note the
+   deviation for the play gate or the journal.
 4. **Every build and test command is truncated.** Never let a full compiler or
-   test log into the conversation:
+   test log into the conversation, and never let warnings push an error out of
+   view — errors are printed, warnings only counted:
    ```bash
-   cargo build 2>&1 | grep -E "^(error|warning)" -A6 | head -80
+   cargo build --message-format=short 2>&1 | awk '/: warning/ {w++; next} /^(error|.*: error)/ {print} END {print w+0 " warning(s)"}' | head -40
    cargo test 2>&1 | grep -E "test result|FAILED|panicked|^error" -A4 | head -60
    ```
    The plan writes the exact commands for the repo; the build stage runs those.
@@ -264,9 +266,9 @@ it exists. Nothing else until a step names a file.
 before the first edit — until then the file reads `planned`, and that is what
 `hdash`, `hcoord status` and a coordinator would show for the whole
 implementation. Follow `Steps` in order, reading each file when its step comes.
-Write comments to the rule as you go — module header, public contract, test
-justification, nothing else — taking any *why* from the plan's `Goal` and
-`business-context.md` only. Run the plan's `build` command after each step
+Write comments to the rule as you go — a module header, and a public comment
+only where it tells the caller something the signature does not, written for a
+reader who never saw this session. Run the plan's `build` command after each step
 that compiles, `test` once at the end, both truncated. A plan step that turns
 out wrong is fixed in the code, and the deviation is noted for the play gate;
 the plan file is not edited.
@@ -284,9 +286,8 @@ never edited, and rerun after any later behaviour change (feedback, a repair).
 The play gate prints it; unattended, `hcoord wait`'s reader finds it in the
 notes. `phase: comments`.
 
-**Comments.** `/comment-pass` over the branch diff, naming
-`business-context.md` when it exists. Carry its shape-decision notes, declined
-findings and context gaps to the play gate. `phase: standards`.
+**Comments.** `/comment-pass` over the branch diff. Carry its shape-decision
+notes and declined findings to the play gate. `phase: standards`.
 
 **Standards.** Skip when the repo has no `structure.hstruct`. Otherwise
 `/structure`: ratchet a budget the change moved below, try to fix a regression,
@@ -374,7 +375,7 @@ what I am handed.
    - when `delta` is on, the derived delta — every `# -` / `# +` line grouped
      by section, with a count;
    - build and test evidence, truncated as run;
-   - context gaps with `file:line`, declined comment-pass findings, standards
+   - declined comment-pass findings, deviations from the plan, standards
      delta and any regression, prior art from the plan;
    - the shape-decision notes and the `business-context.md` handles a commit
      body may cite;
@@ -403,9 +404,8 @@ ______________________________________________________________________
 
 1. `happ stop <notes dir>` — a no-op when nothing was launched.
 2. **Run the repo's CI locally, before anything is pushed.** Read
-   `.github/workflows/*.yml` and `*.yaml` — the one read rule 3 allows that
-   the plan did not name, because the workflows are what the PR will be
-   judged by. For every job triggered by `pull_request` or `push`, run its
+   `.github/workflows/*.yml` and `*.yaml` — the workflows are what the PR
+   will be judged by. For every job triggered by `pull_request` or `push`, run its
    `run:` steps in order from the worktree root, with the job's `env:` and
    each step's `working-directory:`, output truncated per rule 4. A matrix
    runs once, on this machine's toolchain. Skip `uses:` steps, and any step
@@ -543,8 +543,8 @@ in this window is the person's answer.
 
 ## Phase `journal`
 
-`journal:write`: goal, what changed, evidence, feedback rounds, open items
-with the context gaps under them. Set `phase: done`, write the state file
+`journal:write`: goal, what changed, evidence, feedback rounds, open items,
+and any *why* left out of a commit. Set `phase: done`, write the state file
 (this is what releases the coordinator), print one line, end.
 
 ## Notes on scope
@@ -553,7 +553,7 @@ with the context gaps under them. Set `phase: done`, write the state file
   that needs me and fits neither gate becomes an `await-acceptance` with the
   question, and the turn ends.
 - A sub-skill's clarifying question is answered from the brief and the
-  recorded context, or it is a gap. It never becomes a third gate.
+  recorded context, or left open in the journal. It never becomes a third gate.
 - A task that turns out unimplementable — its done-when cannot be satisfied,
   or the split was wrong — writes `await-fix` with the reason at the point
   that becomes clear, rather than building to a PR and stopping anyway.
