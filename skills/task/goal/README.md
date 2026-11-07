@@ -9,7 +9,7 @@
 
 ## Description
 
-A goal file is the UX spec an unattended run is judged against. It is written
+A goal file is the UX spec an unattended run is built and accepted against. It is written
 once, at the front, in one sitting with me, and nothing downstream paraphrases
 it: an issue, a brief, an acceptance check and a PR's test bullets quote its
 scenarios by id. It lives at
@@ -54,6 +54,7 @@ tags:
 - what the app does today, as found in the code and on screen
 
 ## Project on disk            (optional: a directory tree is a screen too)
+### <name> (exists | target)
     <tree>
 
 ## Screens
@@ -82,7 +83,7 @@ tags:
 - <a bound or choice I do not care about; the build picks one and names it>
 
 ## Tunables
-- <a visual constant nobody can pre-specify; exposed live, set at judgement>
+- <a visual constant nobody can pre-specify; exposed live>
 
 ## Not this time
 - <deliberately out>
@@ -97,10 +98,10 @@ Each section closes one class of divergence:
 | **Current state** | the target is a delta against something captured, not against a guess |
 | **Screens** with `changes / unchanged / hides` | panel overlap, leftover chrome, a control placed as a sibling when a row was meant |
 | **Scenarios** with a gesture per step and one `->` | the phantom slider, the invisible drag, the redo nobody mentioned |
-| `hand` | an honest statement that a scenario cannot be scripted; it is never proxied by a check that passes while the observation fails. The plan stage writes it as a hand check with no command, `verify` captures the screen it names to `screens/<id>.png` in the task's notes dir, and `hcoord wait` / `hcoord tui` count it apart. Marking a scenario `hand` says its screen is worth a picture; it is not a way to opt out of acceptance. The picture is what `/task:judge` shows beside the sketch when the run is finished, so `hand` is also a statement about what I want to be shown at the end |
+| `hand` | an honest statement that a scenario cannot be scripted; it is never proxied by a check that passes while the observation fails. The plan stage writes it as a hand check with no command, `verify` captures the screen it names to `screens/<id>.png` in the task's notes dir, and `hcoord wait` / `hcoord tui` count it apart. Marking a scenario `hand` says its screen is worth a picture; it is not a way to opt out of acceptance |
 | **Widgets** | the affordance inventory, checked once for the whole goal instead of discovered twice in two builds |
 | **Left to the build** | the 16 / 24 / 128 bounds surfaced as choices, not buried |
-| **Tunables** | hillshade gain: exposed and set at judgement, not guessed and shipped |
+| **Tunables** | hillshade gain: exposed live, not guessed and shipped |
 
 A `?` anywhere outside backticks is an open question, except inside `Intent` and `Decisions`, where the words are mine and a question mark I wrote is not a guess. It is how the file is
 written — every guess is marked `?` and answered in my words — and a file with
@@ -116,11 +117,13 @@ hcoord goal show <goal.md> S1 S3               scenarios verbatim, for a brief
 
 Checks: the five required sections are present (`Intent`, `Decisions`,
 `Screens`, `Scenarios`, `Widgets`); every screen says `(exists)` or
-`(target)`; every scenario names a screen that is drawn, has a numbered step
+`(target)`; every scenario names a screen that is drawn — under `## Screens` or
+`## Project on disk` — has a numbered step
 and exactly one `->`, and names only widgets the table lists; a widget that
 does not exist names what provides it; no `?` remains. With `--tasks`, every
 scenario is owned by exactly one task's `scenarios` and every task owns at
-least one.
+least one, or is an `enabling` task whose `note` names a task in the list that
+has it in `depends_on`.
 
 What the lint cannot check is whether a scenario's `->` is reachable — whether
 `@range 0 2` can produce a value above 1 — and whether a `Depends on` agrees
@@ -139,7 +142,10 @@ with what the scenarios assume. Those are the split's job, against the code.
 5. **Read gate.** Hand the whole file over to be read once. `hcoord goal lint`
    must print `ok`.
 6. Split from the scenarios: each task owns a set of ids, and a widget with
-   `exists: no` becomes an `enabling` task naming its consumer. Write
+   `exists: no` becomes an `enabling` task that owns none, with
+   `enabling -> <consumer>` in its `note` and the consumer listing it in
+   `depends_on` — it is done before the consumer starts, and its PR's checks
+   going green is its acceptance. Write
    `tasks.json` in the coordinator's dir with `scenarios` per task and `goal`
    pointing at the file, and lint with `--tasks`.
 
@@ -148,9 +154,12 @@ Three choices in it:
 - **`hcoord capture` is the capture mechanism.** One command covers a window
   and a file, and it refuses an ambiguous window title instead of guessing.
 - **No `AskUserQuestion`.** An answer picked from options is not my words, and
-  Decisions are verbatim.
+  Decisions are verbatim. `disallowed-tools` in the skill removes the tool only
+  for the turn that invokes it, so past the first gate the skill's own rule is
+  what keeps it out.
 - **A decision task cannot appear in the split.** The lint requires every task
-  to own a scenario, so the decisions are made at the questions gate instead.
+  to own a scenario or be `enabling` for one that does, so the decisions are made
+  at the questions gate instead.
 
 ## First goal
 

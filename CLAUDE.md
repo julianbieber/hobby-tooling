@@ -382,7 +382,7 @@ them.** `/task:coordinate` writes the file at every change; `hcoord tui`
 re-reads it whenever its mtime moves; `hdash` counts its `status` fields. A
 resumed coordinator picks up from it after an interrupt, and editing it by hand
 between tasks is expected. The tasks it creates sit under the blurb as their
-topic (`~/fun_worktrees/<project>/<blurb>/<blurb>-<slug>`), so a coordinator's
+topic (`~/fun_worktrees/<project>/<blurb>/<blurb>_<slug>`), so a coordinator's
 work groups itself.
 
 **The coordinator waits on an idle notice, and falls back to a shell call.** A
@@ -489,10 +489,11 @@ stops. The mechanism is inert in a repo with no CI, which is every repo here
 `hobby-tooling` would change the merge gate for every task behind it, so it
 is deliberately not part of this change.
 
-**`/task:auto` commits, which `/task:build` never does.** A PR cannot open
-without commits and nobody is at the keyboard between the last gate and the PR,
-so the pipeline commits once after it, to the same message rule. The notes repo
-stays uncommitted.
+**`/task:auto` commits once, after its last gate.** A PR cannot open without
+commits and nobody is at the keyboard between the last gate and the PR, so the
+pipeline commits once after it, to the same message rule. `/task:build` commits
+too, after GATE 2, where the proposed commit and PR messages are shown with the
+local changes. Neither commits the notes repo.
 
 **An unattended run has no play gate; it runs its own acceptance.** A gate is
 worth having because a person reads what it prints, and in a coordinator's task
@@ -784,7 +785,7 @@ to be: `/task:build` annotated the intended change onto the baseline, reviewed
 it at GATE 1, and `/hmml-translate` implemented the markers. That was a double
 review — the plan, then the real diff — and the plan drifted from what was
 built, as it did at work. Now `/hmml-extract --against <ref>` writes the unit as
-the branch leaves it with what `git diff <ref>...HEAD` changed marked, after the
+the worktree leaves it with what `git diff --merge-base <ref>` changed marked, after the
 code exists, and `/hmml-translate` is gone. The HMML exists for me to understand
 what the code change is doing, so it represents the implemented change; the file
 is regenerated whenever the diff moves and never maintained by hand. `/hmml-new`
@@ -1325,7 +1326,7 @@ them. `just check-placeholders` no longer exists to find them:
 
 [bevy-website#2551]: https://github.com/bevyengine/bevy-website/pull/2551
 
-## A goal file is what an unattended run is judged against
+## A goal file is what an unattended run is built and accepted against
 
 Seven coordinator runs and 48 merged PRs produced work that matched its
 description and missed what I pictured. The description I write is three to
@@ -1355,17 +1356,32 @@ open.
 The first goal (`bevy_pbr_generator`, texture projects, 2026-09-19) added four
 sections the plan had not foreseen — Decisions inside the goal, Current state,
 a directory tree as a screen, Left to the build — which is why the format was
-written by writing one before any skill automates it. The four pieces that
-automate it now exist: the interview (`/task:goal`), the seed from scenarios
-(`hcoord seed`), `hand` in `verify`, and the judgement pass (`/task:judge`).
+written by writing one before any skill automates it. The three pieces that
+automate it exist: the interview (`/task:goal`), the seed from scenarios
+(`hcoord seed`), and `hand` in `verify`.
+
+A fourth, the judgement pass (`/task:judge`, `hcoord judge`), walked a finished
+run scenario by scenario and recorded `ok` / `wrong` / `tune` in
+`judgement.md`. It was dropped: it was meant to structure looking at the result,
+and in practice it was more cumbersome than that is.
 
 `/task:goal` encodes two decisions. **Its questions are asked open**, with no
-option list: `AskUserQuestion` is not in its `allowed-tools`, because an answer
-picked from offered options is the model's choosing and not my words, and
-Decisions are recorded verbatim. **Decisions are made at that gate and never
-become a task in the split**: `hcoord goal lint --tasks` requires every task to
-own a scenario, so a decision task would be rejected, and a question still open
-by the time of the split is a question the interview did not finish.
+option list, because an answer picked from offered options is the model's
+choosing and not my words, and Decisions are recorded verbatim. The skill lists
+`AskUserQuestion` under `disallowed-tools`, but that removes it only for the
+turn that invokes the skill — `allowed-tools` never restricted anything, it
+only pre-approves — so after the first gate the skill's own rule is what keeps
+it out. **Decisions are made at that gate and never become a task in the
+split**: `hcoord goal lint --tasks` requires every task to own a scenario, so a
+decision task would be rejected, and a question still open by the time of the
+split is a question the interview did not finish.
+
+The one task allowed to own no scenario is an **`enabling`** one — Task shaping
+rule 1's labelled escape. Its `note` says `enabling -> <task>`, the lint checks
+that the named task is in the list and has it in `depends_on`, because the
+enabling task is done before the next one starts, and `hcoord seed` gives it no
+acceptance checks: its PR's CI going green is the acceptance. Its brief quotes
+the scenarios it unlocks, marked as the other task's.
 
 ## Task shaping lives in CLAUDE.md, not in the skill that applies it
 

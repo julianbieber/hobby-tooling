@@ -1,6 +1,6 @@
 ---
 description: Review PR comments and work on thumbs-up marked items
-allowed-tools: Bash(gh:*)
+allowed-tools: Bash, Read, Grep, Edit, Write
 ---
 
 Review comments on the current PR and work on comments marked with a thumbs up.

@@ -94,8 +94,8 @@ ______________________________________________________________________
 2. Run `/task-split` with the description. It files nothing and hands back an
    ordered list with a `Done when`, `Depends on` and `Revert` per task, the
    decisions to make first, and the rejected cuts.
-3. **Turn the list into entries.** Per task: `task` is `<blurb>-<slug>` where
-   the slug is the title lowercased, `[a-z0-9-]` only, at most 40 characters;
+3. **Turn the list into entries.** Per task: `task` is `<blurb>_<slug>` where
+   the slug is the title lowercased, words joined by `_`, `[a-z0-9_]` only, at most 40 characters;
    `topic` is the blurb (so every task of this coordinator sits under
    `~/fun_worktrees/<project>/<blurb>/`); `title`, `done_when`, `depends_on`
    (by `task` name) from the split; `status: todo`. An `enabling` task keeps its
@@ -311,11 +311,6 @@ Every task `done` — every PR merged — or the loop stopped at a
 nothing is blocked (`task.json` → `done: true`), write the journal, and end. A
 blocked task is left blocked with its reason on the card; unblocking is a
 decision for me.
-
-When `tasks.json` names a `goal`, the last line printed names the pass: *"every
-task is done; `/task:judge` walks the goal's scenarios and records the verdict in
-`judgement.md`"*. This session does not run it. The judgement needs me, and this
-session is the one place I am already sitting.
 
 ## Journal
 

@@ -45,9 +45,8 @@ It used to be `pkill -f` on the command, which matches the calling shell too,
 since the pattern is in that shell's own command line — the same exit-144
 failure `hcdev close` records in `CLAUDE.md`. `happ` records the process group
 at launch and kills that, so `cargo run` and the binary it spawns stop together
-and nothing else does. It is a script rather than a paragraph so `/task:goal`
-and `/task:judge`, which launch an app the same way, can use the same
-mechanism — `## app-lifecycle` in the auto-stage notes asked for whichever
+and nothing else does. It is a script rather than a paragraph so `/task:goal`,
+which launches an app the same way, can use the same mechanism — `## app-lifecycle` in the auto-stage notes asked for whichever
 option "leads to more consistency and faster execution by the agent".
 
 ## Two processes, because context is the cost
@@ -143,8 +142,9 @@ blocks `label:@file` outright.
 
 ## What it commits, and why that is different from `/task:build`
 
-`/task:build` never commits; every sub-skill has that contract. This pipeline
-does, once, after the play gate — or after the acceptance checks pass, when
+`/task:build` commits only after GATE 2, where I have read the local changes and
+the proposed messages; no sub-skill commits. This pipeline commits once, after
+the play gate — or after the acceptance checks pass, when
 there is no play gate — because a PR cannot open without commits and nobody is
 at the keyboard between that point and the PR. The message rule is
 unchanged: terse, a record of decisions, justified only from the brief, the

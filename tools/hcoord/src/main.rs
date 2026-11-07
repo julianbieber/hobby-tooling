@@ -1,15 +1,13 @@
 //! `hcoord` — what a coordinator session needs from outside the Claude pane: a live
 //! view of its `tasks.json` in the pane next to it, a way to block on one task's
 //! pipeline state and on its pull request instead of polling them from a prompt, and
-//! the seeding of a task's brief from the goal file its list was split from, the
-//! capture of the screen a `hand` scenario names, and the judgement of a finished run
-//! against that goal.
+//! the seeding of a task's brief from the goal file its list was split from, and the
+//! capture of the screen a `hand` scenario names.
 
 mod capture;
 mod ci;
 mod clock;
 mod goal;
-mod judge;
 mod merged;
 mod model;
 mod seed;
@@ -43,12 +41,6 @@ usage:
   hcoord seed <coordinator notes dir> <task> [--force]
                                                 write the task's build-task.json and
                                                 business-context.md from tasks.json and its goal
-  hcoord judge list <coordinator notes dir>     the scenarios to judge, hand ones first
-  hcoord judge show <coordinator notes dir> <scenario>
-                                                one scenario verbatim, its screens and its capture
-  hcoord judge record <coordinator notes dir> <scenario> <ok|wrong|tune>
-            [--words <file|->] [--follow-up <text>]
-                                                write the verdict into judgement.md
 
 `wait` prints one JSON line {phase, outcome}, plus {acceptance} when the run recorded one
 and {phase_since, written, unchanged_for} when the state file recorded them, and exits 0
@@ -157,26 +149,6 @@ fn main() -> ExitCode {
             },
             _ => usage(),
         },
-        "judge" => match (args.get(1).map(String::as_str), args.get(2)) {
-            (Some("list"), Some(dir)) if args.len() == 3 => judge::run_list(&PathBuf::from(dir)),
-            (Some("show"), Some(dir)) if args.len() == 4 => {
-                judge::run_show(&PathBuf::from(dir), &args[3])
-            }
-            (Some("record"), Some(dir)) if args.len() > 4 => match parse_judge_flags(&args[5..]) {
-                Ok((words, follow_up)) => judge::run_record(
-                    &PathBuf::from(dir),
-                    &args[3],
-                    &args[4],
-                    words.as_deref(),
-                    follow_up.as_deref(),
-                ),
-                Err(e) => {
-                    eprintln!("hcoord judge: {e}");
-                    ExitCode::from(1)
-                }
-            },
-            _ => usage(),
-        },
         _ => usage(),
     }
 }
@@ -216,24 +188,6 @@ fn parse_capture_flags(rest: &[String]) -> Result<capture::Source, String> {
         }
     }
     source.ok_or_else(|| "give --window <name> or --text <file>".to_owned())
-}
-
-fn parse_judge_flags(rest: &[String]) -> Result<(Option<PathBuf>, Option<String>), String> {
-    let mut words = None;
-    let mut follow_up = None;
-    let mut it = rest.iter();
-    while let Some(flag) = it.next() {
-        let value = it.next().ok_or_else(|| format!("{flag} wants a value"))?;
-        let repeated = match flag.as_str() {
-            "--words" => words.replace(PathBuf::from(value)).is_some(),
-            "--follow-up" => follow_up.replace(value.clone()).is_some(),
-            other => return Err(format!("unexpected argument: {other}")),
-        };
-        if repeated {
-            return Err(format!("{flag} given twice"));
-        }
-    }
-    Ok((words, follow_up))
 }
 
 fn parse_seed_flags(rest: &[String]) -> Result<bool, String> {
@@ -354,25 +308,6 @@ mod tests {
         );
         assert!(parse_merged_flags(&args(&["--timeout"])).is_err());
         assert!(parse_merged_flags(&args(&["--bogus"])).is_err());
-    }
-
-    // `--words -` is how an answer reaches the file without a shell in between, so a
-    // flag that lost its value or was given twice must be an error, not a silent default.
-    #[test]
-    fn judge_flags_parse_words_and_follow_up() {
-        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert_eq!(parse_judge_flags(&args(&[])).unwrap(), (None, None));
-        assert_eq!(
-            parse_judge_flags(&args(&["--words", "-", "--follow-up", "add it"])).unwrap(),
-            (Some(PathBuf::from("-")), Some("add it".to_owned()))
-        );
-        assert_eq!(
-            parse_judge_flags(&args(&["--follow-up", "add it", "--words", "w.txt"])).unwrap(),
-            (Some(PathBuf::from("w.txt")), Some("add it".to_owned()))
-        );
-        assert!(parse_judge_flags(&args(&["--words"])).is_err());
-        assert!(parse_judge_flags(&args(&["--bogus", "x"])).is_err());
-        assert!(parse_judge_flags(&args(&["--words", "a", "--words", "b"])).is_err());
     }
 
     // `--force` is the one way to overwrite a seeded task, so anything else after the

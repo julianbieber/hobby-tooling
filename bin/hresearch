@@ -65,8 +65,10 @@ def classify_shape(question: str) -> str:
         return "figure"
     return "card"
 
-MATRIX_CRITERIA = ("looks like", "cost per frame", "jam-sized", "bevy precedent")
-PRECEDENT_CRITERION = "bevy precedent"
+PRECEDENT_CRITERION = "precedent"
+RESERVED_ROWS = (PRECEDENT_CRITERION, "verdict")
+MATRIX_MIN_CRITERIA = 1
+MATRIX_MAX_CRITERIA = 4
 MATRIX_MAX_OPTIONS = 5
 MATRIX_MIN_OPTIONS = 2
 CELL_MAX_WORDS = 4
@@ -654,10 +656,33 @@ def _validate_text_cell(prefix: str, cell, sources_by_id: dict, problems: list):
     return {"text": text, "src": src}
 
 
+def _validate_criteria(card: dict, problems: list):
+    criteria = card.get("criteria")
+    if not isinstance(criteria, list) or not (MATRIX_MIN_CRITERIA <= len(criteria) <= MATRIX_MAX_CRITERIA):
+        problems.append(f"criteria: must be a list of {MATRIX_MIN_CRITERIA}-{MATRIX_MAX_CRITERIA} names")
+        return None
+    ok = True
+    for i, crit in enumerate(criteria):
+        if (not isinstance(crit, str) or not crit.strip() or "\n" in crit
+                or len(crit) > CELL_MAX_CHARS or len(crit.split()) > CELL_MAX_WORDS):
+            problems.append(f"criteria[{i}]: must be a single line of at most {CELL_MAX_WORDS} words and {CELL_MAX_CHARS} chars")
+            ok = False
+        elif crit in RESERVED_ROWS:
+            problems.append(f"criteria[{i}]: '{crit}' is a fixed row, not a criterion")
+            ok = False
+    if ok and len(set(criteria)) != len(criteria):
+        problems.append("criteria: names must be unique")
+        ok = False
+    return list(criteria) + [PRECEDENT_CRITERION] if ok else None
+
+
 def validate_matrix(card: dict, sources_by_id: dict, problems: list):
+    rows = _validate_criteria(card, problems)
     options = card.get("options")
     if not isinstance(options, list) or not (MATRIX_MIN_OPTIONS <= len(options) <= MATRIX_MAX_OPTIONS):
         problems.append(f"options: must be a list of {MATRIX_MIN_OPTIONS}-{MATRIX_MAX_OPTIONS} entries")
+        return None
+    if rows is None:
         return None
 
     ok = True
@@ -678,8 +703,8 @@ def validate_matrix(card: dict, sources_by_id: dict, problems: list):
             problems.append(f"options[{i}].cells: must be an object")
             ok = False
             cells = {}
-        extra = set(cells) - set(MATRIX_CRITERIA)
-        missing = set(MATRIX_CRITERIA) - set(cells)
+        extra = set(cells) - set(rows)
+        missing = set(rows) - set(cells)
         if extra:
             problems.append(f"options[{i}].cells: unknown criteria {sorted(extra)}")
             ok = False
@@ -687,7 +712,7 @@ def validate_matrix(card: dict, sources_by_id: dict, problems: list):
             problems.append(f"options[{i}].cells: missing criteria {sorted(missing)}")
             ok = False
         parsed_cells = {}
-        for crit in MATRIX_CRITERIA:
+        for crit in rows:
             if crit not in cells:
                 continue
             prefix = f"options[{i}].cells.{crit}"
@@ -729,7 +754,7 @@ def validate_matrix(card: dict, sources_by_id: dict, problems: list):
 
     if not ok:
         return None
-    return {"options": parsed_options, "verdict": parsed_verdict}
+    return {"rows": rows, "options": parsed_options, "verdict": parsed_verdict}
 
 
 def _matrix_cell_text(crit: str, opt: dict) -> str:
@@ -747,10 +772,10 @@ def render_matrix(model: dict, sources_by_id: dict, question: str) -> str:
     options = model["options"]
     verdict = model["verdict"]
     col_names = [opt["name"] for opt in options]
-    row_labels = list(MATRIX_CRITERIA) + ["verdict"]
+    row_labels = model["rows"] + ["verdict"]
     label_width = max(len(l) for l in row_labels)
 
-    rows = [(crit, [_matrix_cell_text(crit, opt) for opt in options]) for crit in MATRIX_CRITERIA]
+    rows = [(crit, [_matrix_cell_text(crit, opt) for opt in options]) for crit in model["rows"]]
     verdict_cells = [verdict["text"] if opt["name"] == verdict["option"] else "" for opt in options]
     rows.append(("verdict", verdict_cells))
 
@@ -773,7 +798,7 @@ def render_matrix(model: dict, sources_by_id: dict, question: str) -> str:
 
     ids = set()
     for opt in options:
-        for crit in MATRIX_CRITERIA:
+        for crit in model["rows"]:
             src = opt["cells"][crit].get("src")
             if src is not None:
                 ids.add(src)
@@ -988,7 +1013,7 @@ def cmd_check_matrix(card_md: Path, dir_: Path, card: dict, sources_by_id: dict,
 
     output = ["shape: matrix"]
     if model is not None:
-        output.append(f"criteria: {', '.join(MATRIX_CRITERIA)}")
+        output.append(f"criteria: {', '.join(model['rows'][:-1])}")
         output.append(f"options: {len(model['options'])}")
         output.append(f"verdict: {model['verdict']['option']}")
 
