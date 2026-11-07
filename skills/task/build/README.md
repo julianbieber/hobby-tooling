@@ -73,7 +73,7 @@ session can read them.
 A piece cut off is an **aspect** when it is part of this task — worked in a tab
 of this task's session, now or later, and finished before the task is — and a
 **task** when it is work for some later point, with its own card and no tab.
-Both are judged by the six Task shaping rules in `~/.claude-hobby/CLAUDE.md`.
+Both are judged by the five Task shaping rules in `~/.claude-hobby/CLAUDE.md`.
 This pipeline is one branch: everything it does lands as one change.
 
 A code aspect is cut from the current tip of its base when it is started, not
@@ -125,7 +125,7 @@ belong here.)
 |---|---|---|
 | `assess-split` | precondition check, the cut tested against the shaping rules | hard stop |
 | `handed-off` | `hwt aspect new` per approved aspect, `/issue-create` per task, `journal:write`, the aspects worked now started | terminal |
-| `plan` | Gate 0 prior-art/size, Gate 0b the repo's standards, brief, reading the code, then the business-context questions | hard stop |
+| `plan` | Gate 0 prior art, Gate 0b the repo's standards, brief, reading the code, then the business-context questions | hard stop |
 | `context` | records my answers verbatim, writes the plan file, seeds `todo` | falls through |
 | `implement` | the change from the plan, run + test, the repo's CI workflows run locally | falls through |
 | `delta` | `/hmml-extract --against <merge-base>` over the units the diff touches | falls through |

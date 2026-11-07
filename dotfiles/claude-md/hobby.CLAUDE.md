@@ -240,25 +240,18 @@ with it, they were one task split on the wrong axis. This is checkable at merge
 time rather than planning time, which is what catches the splits that satisfy
 rule 1 on paper and are entangled in fact.
 
-**4. Size is bounded by review, not by effort.** Too big means the diff cannot be
-reviewed in one sitting. Effort estimates produce argument; "can one person hold
-this diff in their head" produces agreement, and it gets mechanical churn right —
-a 40-file rename is large and reviewable, and effort-based sizing misjudges it in
-both directions.
-
-**5. No task contains an unanswered question.** A decision that must be made first
+**4. No task contains an unanswered question.** A decision that must be made first
 is its own item, its output is the decision plus the tasks that follow from it,
 and it is explicitly exempt from rule 1. Mixing discovery into execution is what
 makes a half-done task sit open for three weeks.
 
-**6. No task leaves state that must be remembered.** No "remove the flag later",
+**5. No task leaves state that must be remembered.** No "remove the flag later",
 no "the old path stays until #9". Either the cleanup is inside this task or it is
 a task that exists now. Rule 1 generates these — a vertical slice often ships
 behind a flag — so this is its necessary counterweight.
 
-**No estimates, points, or size field.** Rules 3-5 already bound size by things
-that can be checked; a number constrains nothing about shape and is the one field
-people optimise against.
+**No estimates or points.** A number constrains nothing about shape and is the
+one field people optimise against.
 
 ## Issue text
 
@@ -270,8 +263,7 @@ unverified cause is a question in the body, not a claim.
 
 - Before starting anything substantial, search for prior art
   (`gh pr list --search`, and `rg` over the project's `issue.md` files in the
-  notes) and state the expected diff
-  size. No sweeping changes without prior discussion; do not accelerate past
+  notes). No sweeping changes without prior discussion; do not accelerate past
   someone else's active work.
 - Never be a direct pipe. Findings get verified before they are reported.
 

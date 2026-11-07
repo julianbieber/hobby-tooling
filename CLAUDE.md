@@ -1334,7 +1334,7 @@ the scenarios it unlocks, marked as the other task's.
 
 ## Task shaping lives in CLAUDE.md, not in the skill that applies it
 
-The rules for carving a project into issues — six of them, with one labelled
+The rules for carving a project into issues — five of them, with one labelled
 escape — are in `dotfiles/claude-md/hobby.CLAUDE.md` under **Task shaping**. The
 skill that runs the pass is `/task-split`, and `/issue-create` checks the three
 text-decidable rules before it files anything.

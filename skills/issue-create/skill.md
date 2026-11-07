@@ -81,7 +81,7 @@ issue against it and **report the result — do not rewrite the issue to pass.**
 badly shaped issue is usually a signal that the work is two issues, and that is my
 call to make, not a wording problem to fix in the body.
 
-Three of the six rules are checkable from the text alone and are the ones to run
+Three of the five rules are checkable from the text alone and are the ones to run
 here:
 
 - **Rule 1** — does the issue name a user-visible behaviour? If it does not, it
@@ -91,14 +91,14 @@ here:
 - **Rule 2** — is there a stated observation separating done from not-done? If the
   conversation has not established one, say so rather than composing a plausible
   one, and let me write it.
-- **Rule 5** — does the body contain an unanswered question? If it does, the
+- **Rule 4** — does the body contain an unanswered question? If it does, the
   decision belongs in its own issue in front of this one.
 
-Rules 3, 4 and 6 are about the diff and the sequence, so they are checked at
+Rules 3 and 5 are about the diff and the sequence, so they are checked at
 review and merge time, not here.
 
 For a **split**, say so plainly and propose the cut rather than writing one
-oversized issue. `/task-split` is the pass for that.
+issue that holds several tasks. `/task-split` is the pass for that.
 
 ## Instructions
 

@@ -106,8 +106,8 @@ represents the implemented change, never a plan.
      "is_aspect": false,
      "split": { "assessed": "<YYYY-MM-DD>", "outcome": "none|split",
                 "reason": "<one line>" },
-     "size_budget": "", "prior_art": "",
-     "context_questions": [], "context_recorded": null, "context_gaps": [],
+     "prior_art": "",
+     "context_questions": [], "context_recorded": null,
      "evidence": [ "<command run, and what it showed>" ],
      "commits": [ { "subject": "<subject>", "body": "<body>" } ],
      "pr": { "title": "<title>", "body": "<body>" },
@@ -169,7 +169,8 @@ represents the implemented change, never a plan.
    domain background to give.
    `--no-split` skips `assess-split` for this task, for when I already know it
    is one thing. `--resume-deep` uses `journal:resume-deep`. Record each as its
-   state-file flag so a resume does not silently re-add the phase.
+   state-file flag so a resume does not silently re-add the phase. A
+   `size_budget` or `context_gaps` key from an older record is dropped.
 
 6. **Rehydrate before running a phase that is not `plan`.** A resumed session has
    none of the understanding the earlier phases built, and does not need to guess
@@ -239,7 +240,7 @@ list as the order in which a player or a caller gains capability, *before*
 looking at the code layout. Starting from the architecture is what produces
 layer tasks, and shaping rule 1 exists to reject exactly those.
 
-**S4 — Test every candidate against the six Task shaping rules** in
+**S4 — Test every candidate against the five Task shaping rules** in
 `~/.claude-hobby/CLAUDE.md`. That file is the standard and this skill
 deliberately does not restate it. State each failure rather than silently fixing
 it — a candidate that had to be re-cut is information about the shape of the
@@ -247,13 +248,10 @@ work, and I want to see it at the gate. The re-cuts that fix nearly everything:
 
 - **Layer candidate → vertical slice.** "Add the component" becomes one narrow
   thing that is visible in the running game.
-- **Too large → narrow the case, not the stack.** One enemy kind, one biome,
-  happy path only. Slicing by case keeps it end-to-end; slicing by layer does
-  not.
-- **Carries an open question (rule 5) → make the decision its own item,** and
+- **Carries an open question (rule 4) → make the decision its own item,** and
   make whatever depends on the answer wait. A question is not a deliverable —
   but one whose answer is a file is a research aspect.
-- **Leaves state to be remembered (rule 6) → pull the cleanup into the same
+- **Leaves state to be remembered (rule 5) → pull the cleanup into the same
   piece,** or make it an aspect that exists now.
 
 Then give each survivor its home: an aspect (code or research; now or later)
@@ -266,7 +264,7 @@ which files two pieces share.
 
 - **Every piece stands alone** — if backing one out forces another out, they
   are one piece cut on the wrong axis (rule 3).
-- **Nothing is left to remember** (rule 6) once every piece has merged — no
+- **Nothing is left to remember** (rule 5) once every piece has merged — no
   flag, no dual path, no half-done migration.
 
 **S6 — Decide whether to split at all.** Fewer than two surviving candidates
@@ -338,17 +336,15 @@ ______________________________________________________________________
 
 ## Phase `plan` → GATE C
 
-**Gate 0 — prior art and size.** Before any code. No sweeping changes
-without prior discussion, and do not accelerate past someone else's active work.
+**Gate 0 — prior art.** Before any code. No sweeping changes without prior
+discussion, and do not accelerate past someone else's active work.
 
 - `gh pr list --search "<keywords>" --state all` on the repo this task targets,
   and `rg -il "<keywords>" ~/fun_repos/hobby-mimisbrunnr/notes/<project>/*/*/issue.md`
   for the issues in the notes. Report anything overlapping, with its state.
-- State an expected size: files touched, rough lines changed.
-- **Stop and ask** if an open PR or active issue covers this work, or the expected
-  change exceeds **10 files or 500 lines**.
+- **Stop and ask** if an open PR or active issue covers this work.
 
-Record `size_budget` and `prior_art`. On my own repo this is usually one empty
+Record `prior_art`. On my own repo this is usually one empty
 search; on a repo I do not own it is the difference between a welcome PR and a
 closed one.
 
