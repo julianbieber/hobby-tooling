@@ -118,6 +118,14 @@ carried one, transplanted from the work `dev-flow`, where `complete-review` fans
 six review skills over the diff. That is a work-context habit and it does not
 belong here.)
 
+**GATE 2 is layered.** It prints an overview — what changes for a user, the
+behaviour-level delta, a line of evidence, what needs a decision, the proposed
+commits — and `design`, `diff` and `messages` zoom in. I want to follow a change
+at different levels, sometimes only the high level and sometimes the program
+design more closely (`review_too_strict` `## intent-understanding`), and the
+gate used to print every level at once. On trial for the next few tasks
+(`## layered-gate`).
+
 
 ## Stages
 
@@ -131,7 +139,7 @@ belong here.)
 | `delta` | `/hmml-extract --against <merge-base>` over the units the diff touches | falls through |
 | `comments` | `/comment-pass` over the branch diff | falls through |
 | `standards` | `/structure` on the target repo — ratchet a budget the change improved, try to fix one it broke | falls through |
-| `review` | prints the diff, evidence, comments and the proposed commit and PR messages for me to read | hard stop |
+| `review` | prints the layered GATE 2 overview; `design`, `diff`, `messages` zoom in | hard stop |
 | `await-review` | nothing — I read the summary | `continue` |
 | `pr` | commits the approved messages, pushes the task branch, opens the PR | falls through |
 | `ci` | `hcoord ci` on the PR, repairing a red check on the diff's own for at most three rounds | falls through, or stops when blocked |

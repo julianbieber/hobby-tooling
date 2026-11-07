@@ -553,36 +553,46 @@ ______________________________________________________________________
 ## Phase `review` → GATE 2
 
 **→ GATE 2: HARD STOP.** Set `phase: await-review`, set `waiting_on` to
-`read the change at GATE 2`, write the state file, print:
+`read the change at GATE 2`, write the state file.
 
-- the diff summary — files, one line each on what changed;
-- the test evidence, and the CI steps skipped locally;
-- **the derived delta** — each `.hmml` path, then every `# -` and `# +` line
-  grouped by section, with a count. This is the change at mental-model altitude,
-  so show it rather than describing it; a line of it that surprises me is the
-  cheapest place to catch a change that does something the brief did not ask;
-- what `/comment-pass` changed, each written comment with the context handle
-  behind it where it had one, and what it declined to act on;
-- the **context gaps** with their `file:line` — a gap is a place the code
-  carries no explanation and I gave none, so name it rather than burying it;
-  closing one means re-running `/task:build context`, which is a decision for
-  now, not after merge;
-- the standards delta — each budget before and after, any tightened by the ratchet,
-  and **any regression you could not fix**, with what you tried;
-- the shape-decision notes it extracted, verbatim, for the commit message, and
-  the `business-context.md` handles a commit body may cite — those are the
-  written form of "something I said" and "something we settled", the two sources
-  a justification may otherwise not be derived from;
-- the size against the Gate 0 budget, and by how much it was crossed;
-- **the proposed commits** — the uncommitted changes cut into one or more
-  commits, each with the files it takes and its full message, to the
-  commit-message rule in `~/.claude-hobby/CLAUDE.md`. Several commits in one PR
-  are fine; cut one per decision when the diff holds more than one. A commit
-  that needs a justification no context handle or verified fact gives is asked
-  about here, not written;
-- **the proposed PR** — title and body, written to the PR rule (see `pr`);
-- *"Review the local changes and the messages above. Say continue to commit,
-  push and open the PR, or tell me what to change."*
+GATE 2 is **layered**: it prints the overview, and I zoom in on request. The
+overview is what I read every time, so keep it short enough to read in one go.
+
+**The overview — printed:**
+
+- **what changes**, in two or three sentences, for a person using the program,
+  not in terms of files;
+- **the derived delta**, at behaviour level — each `.hmml` path, then every
+  `# -` and `# +` line in its behaviour, invariant and access sections, grouped
+  by section. It is the cheapest place to catch a change that does something the
+  brief did not ask; show it, do not describe it. With no delta (skipped, or
+  `--no-hmml`), say so in one line;
+- **evidence** in one line — what was run and that it passed — plus any CI step
+  skipped locally;
+- **what needs my decision**, and only that: a standards regression you could not
+  fix (what you tried), anything `/comment-pass` declined, a commit that needs a
+  justification no handle or verified fact gives. None → say `nothing to decide`;
+- **the proposed commits** — subject and the files each takes; the full bodies
+  are in the state file and shown on `messages`;
+- **the proposed PR title**;
+- *"Say `design` for the module and API level, `diff` for the files, `messages`
+  for the full commit and PR text. Say continue to commit, push and open the PR,
+  or tell me what to change."*
+
+**On request — printed only when I ask:**
+
+- `design` — the program's shape: per module touched, its header and every
+  public signature added, changed or removed, with its comment; how the modules
+  now depend on each other where that changed; and the `kind: module` `## api`
+  delta from the `.hmml` set when `delta` extracted one. Then the standards delta,
+  each budget before and after;
+- `diff` — the files, one line each on what changed, then whatever part of the
+  diff I name;
+- `messages` — every proposed commit message in full and the PR body, to the
+  rules (see `pr`), with the shape-decision notes and the `business-context.md`
+  handles they cite.
+
+After a zoom, end the turn again; the gate still holds.
 
 Record the proposals as `commits` and `pr` in the state file, so a resumed
 session opens exactly what I approved. A change I ask for here goes back
