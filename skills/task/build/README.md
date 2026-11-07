@@ -55,11 +55,12 @@ designed.
 
 The answers are recorded verbatim in `business-context.md` in the task notes,
 and that file is then the only text — besides a fact verified in the code — that
-any later phase may take a *why* from. It reaches the plan, then the code, and
-only last a comment. `/comment-pass` becomes a **matcher**: it
-writes a comment where a recorded passage answers the site, and reports the rest
-as gaps rather than filling them in. A gap is closed by extending the context
-(`/task:build context`), never by inventing the sentence.
+any later phase may take a *why* from. It reaches the plan, the code and the
+commit messages. It no longer reaches comments: a comment says what a public
+item does for its caller, which the code itself verifies, and taking reasons
+into comments was what put the conversation into the code
+(`notes/hobby-tooling/skills/review_too_strict/business-context.md`
+`## intent-comments`).
 
 That is the same three-source rule the commit-message policy in
 `~/.claude-hobby/CLAUDE.md` already states — my prompts, what we settled, or a
@@ -128,7 +129,7 @@ belong here.)
 | `context` | records my answers verbatim, writes the plan file, seeds `todo` | falls through |
 | `implement` | the change from the plan, run + test, the repo's CI workflows run locally | falls through |
 | `delta` | `/hmml-extract --against <merge-base>` over the units the diff touches | falls through |
-| `comments` | `/comment-pass` over the branch diff, matched against the recorded context | falls through |
+| `comments` | `/comment-pass` over the branch diff | falls through |
 | `standards` | `/structure` on the target repo — ratchet a budget the change improved, try to fix one it broke | falls through |
 | `review` | prints the diff, evidence, comments and the proposed commit and PR messages for me to read | hard stop |
 | `await-review` | nothing — I read the summary | `continue` |

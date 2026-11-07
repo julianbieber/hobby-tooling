@@ -6,12 +6,14 @@ categories in dotfiles/claude-md/hobby.CLAUDE.md:
 
   BARE-COMMENT      a comment where the rule allows none (body, banner, stray)
   PRIV-DOC          a doc comment on a private element
-  PUB-UNDOC         a public element with no doc comment
+  PUB-UNDOC         a public element with no doc comment -- a candidate only:
+                    no comment is the default when the signature says it all
   MOD-UNDOC         a module with no header comment
-  TEST-UNJUSTIFIED  a test with no line saying why it exists
 
-Judging the *content* of a comment that is in a legal place is not done here --
-that needs the code, and it is the skill's job.
+A comment directly above a test is a BARE-COMMENT: the test's name says what it
+pins. Judging a legal comment's *content* -- its level, whether it says more
+than the signature, whether it reads without the conversation -- is not done
+here; that needs the code, and it is the skill's job.
 
 Usage: comment-candidates.py [--diff [BASE] | PATH...]
 """
@@ -28,7 +30,6 @@ RUST_ITEM = re.compile(
     r"(?P<kind>fn|struct|enum|trait|type|const|static|mod|union)\s+"
     r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
 )
-TEST_ATTR = re.compile(r"^\s*#\[\w*(::)?\w*test\b")
 
 
 def findings_rust(path, lines):
@@ -37,22 +38,9 @@ def findings_rust(path, lines):
     if not has_mod_doc:
         out.append((1, "MOD-UNDOC", f"no //! header in {path.name}"))
 
-    # A bare `//` is legal in exactly one place: directly above a test.
-    test_anchor = set()
-    for i, l in enumerate(lines):
-        if TEST_ATTR.match(l):
-            j = i - 1
-            while j >= 0 and (lines[j].lstrip().startswith("#[") or not lines[j].strip()):
-                j -= 1
-            while j >= 0 and lines[j].lstrip().startswith("//"):
-                test_anchor.add(j)
-                j -= 1
-
     for i, l in enumerate(lines):
         s = l.strip()
         if s.startswith("//") and not s.startswith("///") and not s.startswith("//!"):
-            if i in test_anchor:
-                continue
             if s.startswith("// SAFETY:"):   # required by clippy::undocumented_unsafe_blocks
                 continue
             out.append((i + 1, "BARE-COMMENT", s[:90]))
@@ -73,16 +61,6 @@ def findings_rust(path, lines):
             if documented:
                 out.append((i + 1, "PRIV-DOC", f"private {kind} {name} carries a ///"))
 
-    for i, l in enumerate(lines):
-        if not TEST_ATTR.match(l):
-            continue
-        j = i - 1
-        while j >= 0 and (lines[j].lstrip().startswith("#[") or not lines[j].strip()):
-            j -= 1
-        if j < 0 or not lines[j].lstrip().startswith("//"):
-            fn = next((lines[k].strip() for k in range(i, min(i + 4, len(lines)))
-                       if " fn " in lines[k]), "")
-            out.append((i + 1, "TEST-UNJUSTIFIED", fn[:90]))
     return out
 
 

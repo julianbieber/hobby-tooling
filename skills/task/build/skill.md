@@ -46,14 +46,12 @@ represents the implemented change, never a plan.
    the decisions, and **no justification you were not given**. If a decision in
    the diff has no justification from my prompts or from what we settled, ask
    rather than inventing one.
-3. **Never write a reason I did not give you.** The comment rule and the
-   commit-message rule in `~/.claude-hobby/CLAUDE.md` both allow exactly three
-   sources for a justification: my prompts, what we settled in discussion, or a
-   fact you verified in the code. GATE C is where the first two get written
-   down, verbatim, in `business-context.md`. A *why* no recorded passage and no
-   verified fact supports is **reported as a gap**, never filled in: a missing
-   explanation is something I can fix by extending the context, an invented one
-   is wrong forever and nothing later contradicts it.
+3. **Never write a reason I did not give you.** The commit-message and PR rules
+   in `~/.claude-hobby/CLAUDE.md` allow exactly three sources for a
+   justification: my prompts, what we settled in discussion, or a fact you
+   verified in the code. GATE C is where the first two get written down,
+   verbatim, in `business-context.md`. A commit that needs a *why* none of them
+   supplies is **asked about at GATE 2**, never filled in.
 4. **No machine attribution** in anything you write — no `Co-Authored-By:
    Claude`, no `Claude-Session:` trailer, no `Generated with Claude Code` footer,
    no 🤖. It is advertising and these repos do not carry it. Comments, commit
@@ -168,18 +166,16 @@ represents the implemented change, never a plan.
 
 5. **Flags:** `--no-hmml` skips the `delta` phase, for a change I can read
    straight from the diff. `--no-context` skips GATE C — for a change I have no
-   domain background to give; the comment pass then has nothing to write an
-   unverifiable *why* from, so it reports every such site as a gap.
+   domain background to give.
    `--no-split` skips `assess-split` for this task, for when I already know it
    is one thing. `--resume-deep` uses `journal:resume-deep`. Record each as its
    state-file flag so a resume does not silently re-add the phase.
 
 6. **Rehydrate before running a phase that is not `plan`.** A resumed session has
    none of the understanding the earlier phases built, and does not need to guess
-   — read, in this order: the state file's `brief`, `todo`, `context_gaps` and
-   `evidence`; the plan file; `business-context.md` — the domain facts I
+   — read, in this order: the state file's `brief`, `todo` and `evidence`; the plan file; `business-context.md` — the domain facts I
    dictated at GATE C, in my own words, which are what the change was designed
-   from and the only text the comment pass may write an unverifiable *why* from;
+   from and the only text a commit message may take an unverifiable *why* from;
    the derived `.hmml` delta when `delta` has run; and `git status --short` /
    `git diff`. Then say in two lines what the task is doing and where it stopped.
 
@@ -381,8 +377,8 @@ baseline comes from.
 moment to collect what only I have — the context the change has to be designed
 inside: which rule sets a bound, what an upstream system guarantees, what a
 later reader will break by tidying a shape away, why the obvious approach was
-rejected before. Ask now and the answers shape the plan, the code, the comments
-*and* the commit message. Ask after the code exists and they can only decorate
+rejected before. Ask now and the answers shape the plan, the code *and* the commit
+message. Ask after the code exists and they can only decorate
 it.
 
 Skip this step entirely on `--no-context`: set `phase: context` and carry on to
@@ -423,11 +419,9 @@ The waiting state written at GATE C. Entered when my answers come back.
 
 **The `context` phase argument re-opens it at any point** — the pipeline's one
 loop, and how more of what I know gets in after I have seen something. Invoked
-later, it derives its questions from whatever prompted the top-up (the delta I
-just read at GATE 2, or the gaps the comment pass reported — each of those
-carries its own question at a `file:line` you can now show me), appends the
-answers to the same section, and returns to the phase it interrupted:
-`implement` when the code has to change, `comments` when only the comments do.
+later, it derives its questions from whatever prompted the top-up (usually the
+delta I just read at GATE 2, at a `file:line` you can now show me), appends the
+answers to the same section, and returns to `implement`.
 
 **Record my answers, verbatim.** Append them to
 `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/business-context.md`
@@ -442,11 +436,9 @@ Steam Deck; a queue would hide the cap and stutter instead of dropping a wave.
 ```
 
 **Copy my wording. Never paraphrase, summarize, complete or tidy it.** This file
-is the only text the comment pass and the commit message may take an
-unverifiable *why* from, so a sentence you smoothed here becomes a claim I never
-made. Record a skip too — the handle with the body `skipped — no context to
-give` — which is what tells the comment pass to drop that site instead of
-hunting for a passage. A question I leave unanswered when I say continue is a
+is the only text a commit message may take an unverifiable *why* from, so a
+sentence you smoothed here becomes a claim I never made. Record a skip too — the
+handle with the body `skipped — no context to give`. A question I leave unanswered when I say continue is a
 skip: record it as one rather than asking again.
 
 Write `context_recorded` (today's date), clear `waiting_on`, and carry on in the
@@ -458,7 +450,7 @@ in the plan format of `~/.claude-hobby/CLAUDE.md` — Goal, Approach, Steps, Key
 Files, Open Questions — and short: the steps are the order you will work in,
 one line each, naming files. A recorded answer the change has to honour is
 cited in the step it shapes by its `business-context.md` handle, so it is not
-carried in your head to be remembered at the comment pass. A new dated file per
+carried in your head to be remembered at the commit. A new dated file per
 planning session; never overwrite an earlier one. Record its name as `plan` and
 seed `todo` from its steps (**Live state**). The plan is not a gate: say in one
 line where it is, set `phase: implement`, and carry on.
@@ -473,11 +465,10 @@ asked when it comes up, as one line with the options you see — set
 `waiting_on`, stop, and resume at the same `todo` item. It is not saved for a
 gate, and it is not answered on my behalf.
 
-Write comments to the rule as you go — a module header, a public element's
-contract, a test's justification, nothing else. The `comments` phase is a check,
-not a laundry: do not write comments expecting it to delete them. Where the
-contract you are writing needs a *why* the code cannot show, take it from
-`business-context.md` and from nowhere else.
+Write comments to the rule as you go — a module header, and a public element's
+comment only where it tells the caller something the signature does not. Write
+for a reader who never saw this conversation. The `comments` phase is a check,
+not a laundry: do not write comments expecting it to delete them.
 
 **Test.** Drive it end to end: run the app or the affected flow, plus the repo's
 own test command (`cargo test`, `cargo clippy`, `just test`, whatever it uses).
@@ -514,31 +505,20 @@ ______________________________________________________________________
 
 ## Phase `comments`
 
-Run `/comment-pass`, naming the `business-context.md` path (and passing
-`--no-context` when the task carries that flag, so the skill knows the missing
-file is deliberate). It enforces the comment rule over the branch diff in both
-directions — deletes what the rule disallows, relocates what carried real
-information, and writes the module headers, public contracts and test
-justifications that are missing, taking any *why* it cannot verify from the code
-out of the recorded context and from nowhere else.
+Run `/comment-pass` over the branch diff. It deletes what the comment rule
+disallows, cuts comments pitched at the wrong level or written for the
+conversation, and writes missing module headers and the public comments a caller
+needs.
 
-Three parts of its report are inputs to the next phase rather than side effects:
+Carry two parts of its report to GATE 2:
 
-- the **shape-decision notes** it pulled out of deleted body comments. Those are
-  facts about why the code looks the way it does, and their home is the commit
-  message. Carry them into the gate verbatim.
-- every finding it **declined to act on** — a test whose justification could not
-  be written, a module with no single responsibility, anything it could not verify
-  from the code. Each is a decision for me.
-- the **context gaps**: sites where the rule wants a comment, the code cannot
-  supply the reason, and no recorded passage covers it. Where a gap sits
-  somewhere a comment genuinely belongs, say so in one line and offer
-  `/task:build context`, which re-opens the questions for those sites and comes
-  back here to re-run the pass. Whether to take that is my call. **Never close a
-  gap by writing the comment yourself.**
+- the **shape-decision notes** it pulled out of deleted body comments — facts
+  about why the code looks the way it does, whose home is the commit message;
+- anything it **declined to act on** — a module with no single responsibility, a
+  name that needs changing, a behaviour it could not verify. Each is a decision
+  for me.
 
-Record all three — the gaps to `context_gaps` — then fall through to
-`standards`.
+Then fall through to `standards`.
 
 ______________________________________________________________________
 
@@ -675,8 +655,7 @@ and repair them; never hand me a red PR as finished.
 
 ## Phase `journal`
 
-Run `journal:write` — goal, what changed, evidence, open items, with the context
-gaps under the open items so they survive into the next session's resume.
+Run `journal:write` — goal, what changed, evidence, open items.
 
 **In an aspect**, wait for the merge first: `hcoord merged <pr url>`, Bash
 `timeout: 600000`, again on `timeout`. `merged` → set `aspect.json` `state` to
