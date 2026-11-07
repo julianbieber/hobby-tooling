@@ -55,14 +55,15 @@ the report because a failing command stops the pipeline and a report does not.
    way is inserted where it runs); every `await-*` write sets `waiting_on` to
    one line naming what I decide or do, and the write that leaves it sets
    `null`.
-3. **The build stage reads what the plan names, and nothing else.** No
-   `journal:resume`, no directory listings, no neighbouring modules "for
-   context", no git history. A symbol the plan did not mention is looked up
-   with the `tree-extract` MCP, not by opening files.
+3. **The build stage starts from what the plan names.** No `journal:resume`
+   and no reading around "for context". When a step needs a file or symbol the
+   plan did not name, open it — guessing is worse than reading — and note the
+   deviation for the play gate or the journal.
 4. **Every build and test command is truncated.** Never let a full compiler or
-   test log into the conversation:
+   test log into the conversation, and never let warnings push an error out of
+   view — errors are printed, warnings only counted:
    ```bash
-   cargo build 2>&1 | grep -E "^(error|warning)" -A6 | head -80
+   cargo build --message-format=short 2>&1 | awk '/: warning/ {w++; next} /^(error|.*: error)/ {print} END {print w+0 " warning(s)"}' | head -40
    cargo test 2>&1 | grep -E "test result|FAILED|panicked|^error" -A4 | head -60
    ```
    The plan writes the exact commands for the repo; the build stage runs those.
@@ -374,7 +375,7 @@ what I am handed.
    - when `delta` is on, the derived delta — every `# -` / `# +` line grouped
      by section, with a count;
    - build and test evidence, truncated as run;
-   - context gaps with `file:line`, declined comment-pass findings, standards
+   - declined comment-pass findings, deviations from the plan, standards
      delta and any regression, prior art from the plan;
    - the shape-decision notes and the `business-context.md` handles a commit
      body may cite;
@@ -403,9 +404,8 @@ ______________________________________________________________________
 
 1. `happ stop <notes dir>` — a no-op when nothing was launched.
 2. **Run the repo's CI locally, before anything is pushed.** Read
-   `.github/workflows/*.yml` and `*.yaml` — the one read rule 3 allows that
-   the plan did not name, because the workflows are what the PR will be
-   judged by. For every job triggered by `pull_request` or `push`, run its
+   `.github/workflows/*.yml` and `*.yaml` — the workflows are what the PR
+   will be judged by. For every job triggered by `pull_request` or `push`, run its
    `run:` steps in order from the worktree root, with the job's `env:` and
    each step's `working-directory:`, output truncated per rule 4. A matrix
    runs once, on this machine's toolchain. Skip `uses:` steps, and any step
