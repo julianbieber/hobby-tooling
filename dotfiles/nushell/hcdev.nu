@@ -9,7 +9,7 @@
 #   hcdev here                    - session in the current directory
 #   hcdev auto <task>             - session whose Claude pane starts /task:auto
 #   hcdev coordinator <blurb>     - coordinator session: task list + Claude, from a main checkout
-#   hcdev tab <name>              - open or focus an aspect's or subtask's tab in its task's session
+#   hcdev tab <name>              - open or focus a started aspect's tab in its task's session
 #   hcdev notes                   - cd to this task's notes
 #   hcdev code                    - cd to this task's worktree
 #   hcdev list / attach           - manage running sessions
@@ -136,14 +136,14 @@ def hcdev-task-context [] {
     { project: ($parts | get 0), topic: ($parts | get 1), task: ($parts | get 2) }
 }
 
-# The worktree of research aspect `name` of a task:
+# The worktree of aspect `name` of a task:
 # `~/fun_aspects/<project>/<topic>/<task>/<name>`. Outside `~/fun_worktrees` on
 # purpose, so nothing that reads the third component there as a task sees it.
 export def hcdev-aspect-worktree [project: string, topic: string, task: string, name: string] {
     $ASPECT_BASE | path join $project $topic $task $name
 }
 
-# The notes directory of research aspect `name` of a task, which holds its
+# The notes directory of aspect `name` of a task, which holds its
 # `aspect.json`, `brief.md` and `findings.md`.
 export def hcdev-aspect-notes [project: string, topic: string, task: string, name: string] {
     $NOTES_BASE | path join $project $topic $task "aspects" $name
@@ -179,38 +179,19 @@ def hcdev-aspect-completions [context?: string] {
     } catch { null })
     if $ctx == null { return [] }
     let notes = ($NOTES_BASE | path join $ctx.project $ctx.topic $ctx.task)
-    let aspects = (try { ls ($notes | path join "aspects") | where type == dir | get name | path basename } catch { [] })
-    let subtasks = (try { open --raw ($notes | path join "subtasks.json") | from json | get task } catch { [] })
-    $aspects | append $subtasks
-}
-
-def hcdev-subtasks-file [parent: record] {
-    $NOTES_BASE | path join $parent.project $parent.topic $parent.task "subtasks.json"
+    try { ls ($notes | path join "aspects") | where type == dir | get name | path basename } catch { [] }
 }
 
 def hcdev-tab-target [parent: record, name: string] {
-    let aspect_dir = (hcdev-aspect-worktree $parent.project $parent.topic $parent.task $name)
-    if ($aspect_dir | path exists) {
-        return { dir: $aspect_dir, claude: "haspect", subtask: false }
+    let notes = (hcdev-aspect-notes $parent.project $parent.topic $parent.task $name)
+    if not ($notes | path join "aspect.json" | path exists) {
+        error make { msg: $"($parent.task) has no aspect named '($name)' — 'hwt aspect new ($name)' adds one" }
     }
-    let file = (hcdev-subtasks-file $parent)
-    let entry = (try { open --raw $file | from json | where task == $name | get -o 0 } catch { null })
-    if $entry == null {
-        error make { msg: $"($parent.task) has no aspect worktree and no subtask named '($name)' — 'hwt aspect new ($name)' or 'hwt subtask ($name)' makes one" }
-    }
-    let topic = ($entry.topic? | default $parent.topic)
-    let dir = ($WORKTREE_BASE | path join ($entry.project? | default $parent.project) $topic $name)
+    let dir = (hcdev-aspect-worktree $parent.project $parent.topic $parent.task $name)
     if not ($dir | path exists) {
-        error make { msg: $"Subtask '($name)' is not checked out at ($dir) — run 'hwt restore ($name)'" }
+        error make { msg: $"Aspect '($name)' is not started — 'hwt aspect start ($name)' checks it out and opens its tab" }
     }
-    { dir: $dir, claude: "chobby", subtask: true }
-}
-
-def hcdev-mark-tab [parent: record, name: string] {
-    let file = (hcdev-subtasks-file $parent)
-    open --raw $file | from json
-    | each {|e| if $e.task == $name { $e | upsert tab true } else { $e } }
-    | to json --indent 2 | save -f $file
+    { dir: $dir, claude: "haspect" }
 }
 
 def hcdev-dev-panes [claude_cmd: string] {
@@ -238,14 +219,7 @@ def hcdev-task-tabs [parent: record] {
         $state != "closed"
     }
     | each {|name| { name: $name, dir: (hcdev-aspect-worktree $parent.project $parent.topic $parent.task $name), claude: "haspect" } }
-    let subtasks = (try { open --raw ($notes | path join "subtasks.json") | from json } catch { [] })
-    | where {|e| $e.tab? == true }
-    | each {|e| {
-        name: $e.task
-        dir: ($WORKTREE_BASE | path join ($e.project? | default $parent.project) ($e.topic? | default $parent.topic) $e.task)
-        claude: "chobby"
-    } }
-    $aspects | append $subtasks | where {|t| $t.dir | path exists }
+    $aspects | where {|t| $t.dir | path exists }
 }
 
 def hcdev-task-layout [task: string, tabs: list, focus?: string] {
@@ -630,7 +604,7 @@ export def main [] {
     print "  hcdev dir <path>                 Start session in a given directory"
     print "  hcdev auto <task> [-p] [-t] [-w] Session whose Claude pane starts /task:auto (-w: new window)"
     print "  hcdev coordinator <blurb> [-p]   Coordinator session (task list + Claude) from a main checkout"
-    print "  hcdev tab <name> [--task] [-a]   Open or focus an aspect's or subtask's tab in its task's session"
+    print "  hcdev tab <name> [--task] [-a]   Open or focus a started aspect's tab in its task's session"
     print "  hcdev notes                      cd to this task's notes directory"
     print "  hcdev code                       cd to this task's worktree"
     print "  hcdev list                       List running hobby sessions"
@@ -643,10 +617,9 @@ export def main [] {
 }
 
 # Start a session in an existing worktree, or attach to its running one. A new
-# session opens with the task's tab first and one more tab per research aspect
-# that is not closed and per subtask worked as a tab (`tab: true` in its
-# `subtasks.json`), each whose worktree is checked out — so a session closed or
-# lost comes back as it was.
+# session opens with the task's tab first and one more tab per aspect that is
+# not closed and whose worktree is checked out — so a session closed or lost
+# comes back as it was.
 export def --env "hcdev wt" [
     task: string@hcdev-task-completions               # Task name
     --project (-p): string@hcdev-project-completions  # Disambiguate across projects
@@ -701,8 +674,6 @@ export def --env "hcdev new" [
         print $"Worktree already exists: ($worktree_dir)"
     }
 
-    # Notes dir name must match the worktree task name so journals, prs.json, and
-    # subtasks.json line up with this worktree.
     let notes_dir = ($NOTES_BASE | path join $repo_name $resolved_topic $task)
     if not ($notes_dir | path exists) {
         mkdir $notes_dir
@@ -794,19 +765,17 @@ export def --env "hcdev coordinator" [
     hcdev-launch $main_repo $session $layout_file
 }
 
-# Open `name` — a research aspect or a subtask of the task — as a tab in the
-# task's session, or switch to that tab when it is already open. An aspect's tab
-# runs `haspect`; a subtask's runs `chobby` in the subtask's own worktree, and
-# opening it records the subtask as worked now (`tab: true` in the task's
-# `subtasks.json`). The task is the one the current directory lies in (its
-# worktree, or any of its aspect worktrees) unless `--task` names it. When the
-# task's session is not running it is started, in the foreground, with the new
-# tab focused. With `--attach`, a running session is also attached when the
-# caller is not already inside it. Errors when the task is unknown or not
-# checked out, when `name` is neither an aspect with a worktree nor a recorded
-# subtask, or when that subtask is not checked out.
+# Open started aspect `name` of the task as a tab in the task's session, or
+# switch to that tab when it is already open. The tab runs `haspect` in the
+# aspect's worktree, whatever the aspect's kind. The task is the one the current
+# directory lies in (its worktree, or any of its aspect worktrees) unless
+# `--task` names it. When the task's session is not running it is started, in
+# the foreground, with the new tab focused. With `--attach`, a running session
+# is also attached when the caller is not already inside it. Errors when the
+# task is unknown or not checked out, when it has no aspect `name`, or when the
+# aspect is not started (`hwt aspect start <name>` starts it).
 export def --env "hcdev tab" [
-    name: string@hcdev-aspect-completions             # Aspect or subtask name
+    name: string@hcdev-aspect-completions             # Aspect name
     --task: string@hcdev-task-completions             # Parent task (defaults to the current directory's)
     --project (-p): string@hcdev-project-completions  # Disambiguate the task across projects
     --topic (-t): string@hcdev-topic-completions      # Disambiguate the task across topics
@@ -814,7 +783,6 @@ export def --env "hcdev tab" [
 ] {
     let parent = (hcdev-aspect-parent $task $project $topic)
     let target = (hcdev-tab-target $parent $name)
-    if $target.subtask { hcdev-mark-tab $parent $name }
     let session = (hcdev-session-name $parent.project $parent.topic $parent.task)
     if (hcdev-session-live $session) {
         hcdev-open-tab $session $name $target.dir $target.claude
@@ -931,7 +899,7 @@ export def "hcdev claude-pane" [
 }
 
 # Close a task's session: kill and delete its zellij session, stop every process
-# still running out of its worktree or its research aspects' worktrees, and
+# still running out of its worktree or its aspects' worktrees, and
 # take its window with them (the window dies with its pane process once the
 # session is gone). Idempotent — a session and worktree already gone is
 # `Nothing to close`, not an error.

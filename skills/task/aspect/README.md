@@ -5,19 +5,25 @@
 | Type         | skill                                                          |
 | Install path | `~/.claude-hobby/commands/task/aspect.md` → `/task:aspect`     |
 | Owner        | @julianbieber                                                  |
-| Dependencies | `haspect` (starts it in the tab), `/research`                  |
+| Dependencies | `haspect` (starts it in the tab), `/research`, `/task:build`   |
 | Status       | experimental                                                   |
 
 ## Description
 
-What a research aspect's tab runs. `haspect` starts it while the aspect's
-`aspect.json` says `open`, and resumes the tab's conversation after that. It
-reads the brief `/aspect` wrote, answers the question with `/research` and
-spikes in the aspect's own worktree, and writes `findings.md` in a fixed
-shape: answer, evidence, consequence for the task, open questions, spikes.
+What every aspect's tab runs, whatever its kind. `haspect` starts it while the
+aspect's `aspect.json` says `open`, and resumes the tab's conversation after
+that. It reads the brief `/aspect` wrote and the task's recorded context, then
+works the aspect by its kind:
 
-`aspect.json` `state` moves `open` → `active` → `reported`; `hwt aspect close`
-sets `closed`. hdash shows the state on the task's card.
+- **research** — answers the question with `/research` and spikes in the
+  aspect's own worktree, and writes `findings.md` in a fixed shape: answer,
+  evidence, consequence for the task, open questions, spikes. State moves
+  `open` → `active` → `reported`.
+- **code** — runs the full `/task:build` pipeline in the aspect's worktree,
+  with every gate. State moves `open` → `active` → `pr` → `done`, the last
+  once the PR to the aspect's base has merged.
+
+`hwt aspect close` sets `closed`. hdash shows the state on the task's card.
 
 ## Why the findings have a fixed shape
 

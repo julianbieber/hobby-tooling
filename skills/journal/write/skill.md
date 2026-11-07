@@ -40,7 +40,7 @@ Document what was accomplished and what remains open for the current task.
     (lowercase)
 
     - The directory name must match the worktree task directory **exactly** (the
-      full third-subdir name, blurb and all) so journals/PRs/subtasks line up
+      full third-subdir name, blurb and all) so journals and PRs line up
       with the right worktree.
     - The project and topic are the **first** and **second** subdirectories under
       `~/fun_worktrees/`; the task is the **third**.

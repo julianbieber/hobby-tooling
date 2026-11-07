@@ -5,7 +5,7 @@
 | Type         | skill                                                                  |
 | Install path | `~/.claude-hobby/commands/task/build.md` → `/task:build`               |
 | Owner        | @julianbieber                                                          |
-| Dependencies | `journal:resume`, `hmml-extract`, `comment-pass`, `structure`, `journal:write`; nushell `hwt subtask`, `hcdev tab`; `hcoord ci`; `gh` |
+| Dependencies | `journal:resume`, `hmml-extract`, `comment-pass`, `structure`, `journal:write`; nushell `hwt aspect`; `hcoord ci`, `hcoord merged`; `gh` |
 | Status       | experimental                                                           |
 | Supersedes   | `dev-flow`                                                             |
 
@@ -19,7 +19,7 @@ as an HMML delta derived from the diff; runs `/comment-pass` and `/structure`;
 stops for me to read the diff, the delta and the proposed commit and PR
 messages; then commits, pushes, opens the PR and writes the journal entry.
 
-Three hard stops: the subtask assessment (GATE S), the business-context
+Three hard stops: the split assessment (GATE S), the business-context
 questions (GATE C), and the review of the local changes (GATE 2).
 
 ## The delta is read after the code, not reviewed before it
@@ -42,8 +42,8 @@ With no spec review, implement works from a short `plan-<date>-<slug>.md` in the
 notes, written right after GATE C, and its steps seed `todo` in
 `build-task.json`. `todo` and `waiting_on` are the hobby half of work's `flow`
 record: `hdash` shows them on the task's card, so where a session is can be read
-without opening it. Work's aspects did not come over — a second PR here is a
-subtask, decided at GATE S.
+without opening it. Work's aspects did not come over as they were — a second
+PR here is a code aspect, decided at GATE S or added later with `/aspect`.
 
 ## The questions come before the code, not after it
 
@@ -66,25 +66,21 @@ That is the same three-source rule the commit-message policy in
 verified fact — with the first two finally written down somewhere a later
 session can read them.
 
-## Subtasks and this pipeline are two different cuts
+## Aspects, tasks and this pipeline are three different cuts
 
-`assess-split` runs once, first, before any planning, and ends at a hard gate. A
-**subtask** is a separate deliverable with its own worktree, branch, PR and
-session, judged by the six Task shaping rules in `~/.claude-hobby/CLAUDE.md`.
+`assess-split` runs once, first, before any planning, and ends at a hard gate.
+A piece cut off is an **aspect** when it is part of this task — worked in a tab
+of this task's session, now or later, and finished before the task is — and a
+**task** when it is work for some later point, with its own card and no tab.
+Both are judged by the six Task shaping rules in `~/.claude-hobby/CLAUDE.md`.
 This pipeline is one branch: everything it does lands as one change.
 
-A subtask is cut from the default branch, so its PR holds only its own work.
-Work this branch already holds reaches a subtask by `hwt subtask --take`: whole
-commits are cherry-picked onto it and this branch is rebased onto the
-subtask's, so the commits appear in exactly one PR and drop out of this
-branch once it merges. A split therefore works on a branch that has commits;
-uncommitted work has to be committed first, which the gate asks for rather
-than does. Each subtask is worked now, as a tab of this session, or
-postponed on its own card. Depth is bounded at one by `is_subtask` in the
-state file `handed-off` seeds, rather than by asking the model to remember. A
-subtask cut later with `/subtask` gets no state file: it is a barebones task
-until someone writes its brief and runs `/task:build` there. Subtasks are
-recorded once, in the parent's `subtasks.json`, which `hdash` reads.
+A code aspect is cut from the current tip of its base when it is started, not
+when it is added, and its PR goes to that base. Commits never move between
+branches, so a task whose branch already holds work is not split at the gate;
+work found later is added with `/aspect`. A code aspect runs this same pipeline
+in its own worktree, with `is_aspect` skipping the split — an aspect does not
+split again.
 
 Most tasks are one task, and the phase is expected to say so in a line.
 
@@ -127,7 +123,7 @@ belong here.)
 | phase | runs | ends |
 |---|---|---|
 | `assess-split` | precondition check, the cut tested against the shaping rules | hard stop |
-| `handed-off` | `hwt subtask` per approved cut, seeded state, `journal:write` | terminal |
+| `handed-off` | `hwt aspect new` per approved aspect, `/issue-create` per task, `journal:write`, the aspects worked now started | terminal |
 | `plan` | Gate 0 prior-art/size, Gate 0b the repo's standards, brief, reading the code, then the business-context questions | hard stop |
 | `context` | records my answers verbatim, writes the plan file, seeds `todo` | falls through |
 | `implement` | the change from the plan, run + test, the repo's CI workflows run locally | falls through |

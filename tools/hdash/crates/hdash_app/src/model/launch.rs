@@ -50,10 +50,12 @@ const HCDEV_SCRIPT: &str =
 const RESTORE_SCRIPT: &str = "hwt restore $env.HDASH_TASK --no-cd | ignore; \
      hcdev wt $env.HDASH_TASK --project $env.HDASH_PROJECT --topic $env.HDASH_TOPIC";
 
-const TAB_SCRIPT: &str = "hcdev tab $env.HDASH_TAB --task $env.HDASH_TASK \
+const TAB_SCRIPT: &str = "hwt aspect start $env.HDASH_TAB --no-tab --task $env.HDASH_TASK \
+     --project $env.HDASH_PROJECT; hcdev tab $env.HDASH_TAB --task $env.HDASH_TASK \
      --project $env.HDASH_PROJECT --topic $env.HDASH_TOPIC";
 
-const TAB_ATTACH_SCRIPT: &str = "hcdev tab $env.HDASH_TAB --task $env.HDASH_TASK \
+const TAB_ATTACH_SCRIPT: &str = "hwt aspect start $env.HDASH_TAB --no-tab --task $env.HDASH_TASK \
+     --project $env.HDASH_PROJECT; hcdev tab $env.HDASH_TAB --task $env.HDASH_TASK \
      --project $env.HDASH_PROJECT --topic $env.HDASH_TOPIC --attach";
 
 const COORDINATOR_SCRIPT: &str = "hcdev coordinator $env.HDASH_TASK --project $env.HDASH_PROJECT";
@@ -124,16 +126,17 @@ pub fn launch_coordinator(spec: &LaunchSpec) {
     );
 }
 
-/// Open `name` — a research aspect or a subtask of the task — as a tab in the task's running
-/// session, with no terminal of its own; the session's window, if any, is the caller's to focus.
+/// Open aspect `name` of the task as a tab in the task's running session, starting the aspect
+/// first when it is not checked out, with no terminal of its own; the session's window, if any,
+/// is the caller's to focus.
 pub fn open_tab(spec: &LaunchSpec, name: &str) {
     let mut envs = spec.env().to_vec();
     envs.push(("HDASH_TAB", name));
     spawn_detached_with(&["-f", "nu", "--login", "-c", TAB_SCRIPT], &envs);
 }
 
-/// Open `name` — a research aspect or a subtask of the task — as a tab and attach to the task's
-/// session in a new terminal, starting the session first when it does not run.
+/// Open aspect `name` of the task as a tab and attach to the task's session in a new terminal,
+/// starting the aspect first when it is not checked out, and the session when it does not run.
 pub fn launch_tab(dir: &Path, spec: &LaunchSpec, name: &str) {
     let mut envs = spec.env().to_vec();
     envs.push(("HDASH_TAB", name));

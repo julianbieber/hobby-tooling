@@ -11,7 +11,7 @@ use ratatui::layout::Rect;
 use super::*;
 use crate::app::Action;
 use crate::model::project::Project;
-use crate::model::task::{AspectRef, GitInfo, Pr, PrStatus, Repo, SubtaskRef, Todo, TodoStatus};
+use crate::model::task::{AspectRef, GitInfo, Pr, PrStatus, Repo, Todo, TodoStatus};
 use crate::session::Session;
 use crate::testkit::{find, row, screen};
 use crate::widgets::{ACCENT, SIDEBAR_COLS};
@@ -39,7 +39,6 @@ pub(crate) fn task(name: &str) -> Task {
         title: None,
         has_branch: true,
         prs: Vec::new(),
-        subtasks: Vec::new(),
         aspects: Vec::new(),
         last_active: None,
         coordinator: None,
@@ -141,15 +140,6 @@ fn clicks_run_the_control_drawn_under_the_pointer() {
         status: PrStatus::Open,
         number: Some(1),
         live_title: Some("Fix it".into()),
-    }];
-    a.subtasks = vec![SubtaskRef {
-        task: "child".into(),
-        topic: None,
-        project: None,
-        blurb: None,
-        goal: None,
-        created: None,
-        tab: false,
     }];
     let mut b = task("task-b");
     b.present = false;
@@ -284,13 +274,14 @@ fn the_primary_button_follows_the_stage() {
     assert_eq!(click(&mut view, open), Some(Action::Coordinator(coord)));
 }
 
-// Pins that a task's research aspects are listed on its card with their state and their own
+// Pins that a task's aspects are listed on its card with their kind, state and their own
 // session badge, and that clicking one asks for that aspect's tab rather than the task's session.
 #[test]
 fn aspect_lines_show_state_and_open_their_tab() {
     let mut a = task("task-a");
     a.aspects = vec![AspectRef {
         name: "wgpu-limits".into(),
+        kind: "research".into(),
         state: "reported".into(),
         goal: Some("which limits apply".into()),
     }];
@@ -317,7 +308,7 @@ fn aspect_lines_show_state_and_open_their_tab() {
     );
     let line = find(
         &buf,
-        "⌕ wgpu-limits · reported · which limits apply",
+        "⌕ wgpu-limits · research · reported · which limits apply",
         None,
         0,
     );
@@ -325,41 +316,4 @@ fn aspect_lines_show_state_and_open_their_tab() {
         click(&mut view, line),
         Some(Action::Tab(a, "wgpu-limits".into()))
     );
-}
-
-// Pins that a subtask line says whether it is worked as a tab or postponed, carries the child's
-// session badge, and that clicking a tab subtask asks for its tab while a postponed one still
-// scopes the list to its project.
-#[test]
-fn subtask_lines_open_tabs_only_for_tab_subtasks() {
-    let sub = |name: &str, tab: bool| SubtaskRef {
-        task: name.into(),
-        topic: None,
-        project: None,
-        blurb: None,
-        goal: None,
-        created: None,
-        tab,
-    };
-    let mut a = task("task-a");
-    a.subtasks = vec![sub("now-child", true), sub("later-child", false)];
-    let mut view = view(vec![a.clone()]);
-    view.sessions.tasks.insert(
-        id("now-child"),
-        Session {
-            state: SessionState::Busy,
-            since: 0,
-        },
-    );
-
-    let buf = frame(&mut view);
-    let (_, now_y) = find(&buf, "now-child · tab", None, 0);
-    assert!(row(&buf, now_y).contains("busy "), "{}", row(&buf, now_y));
-    let later = find(&buf, "later-child · postponed", None, 0);
-    let now = find(&buf, "now-child · tab", None, 0);
-    assert_eq!(
-        click(&mut view, now),
-        Some(Action::Tab(a, "now-child".into()))
-    );
-    assert_eq!(click(&mut view, later), None);
 }

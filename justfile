@@ -153,7 +153,7 @@ bootstrap-config: _root-notice
 
 # The `chobby` wrapper — bare claude on the hobby account — `hauto`, the stage
 # driver the hobby-auto layout runs in its Claude pane, `haspect`, the same
-# for a research aspect's tab, and `happ`, which starts and stops the app a
+# for an aspect's tab, and `happ`, which starts and stops the app a
 # task session runs
 install-chobby: _root-notice
     #!/usr/bin/env bash

@@ -213,7 +213,7 @@ cover it (`cargo test -p hdash`, `just doctor`, CI).
 
 Rules for carving a project into issues. They bind wherever work is split —
 `/task-split` runs the pass, `/issue-create` checks the result before writing it,
-and `/subtask` and `/aspect` are subject to them too.
+and `/aspect` is subject to them too.
 
 **1. Every task has a verifiable impact on user-driven behaviour.** What this
 actually forbids is the *layer* task — "add the table", "add the endpoint", "wire

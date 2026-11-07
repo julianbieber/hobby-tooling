@@ -191,14 +191,6 @@ impl DashView {
                 }
             }
             Control::PrLine(_, url) => return Some(Action::OpenUrl(url)),
-            Control::Subtask(owner, child) => {
-                let task = self.task(&owner)?.clone();
-                if task.subtasks.iter().any(|s| s.tab && s.task == child.name) {
-                    return Some(Action::Tab(task, child.name));
-                }
-                self.ui.selected_project = Some(child.project);
-                self.reset_selection = true;
-            }
             Control::Aspect(id, name) => {
                 let task = self.task(&id)?.clone();
                 return Some(Action::Tab(task, name));
@@ -318,11 +310,6 @@ impl DashView {
                 );
             }
         }
-        out.extend(
-            task.subtasks
-                .iter()
-                .map(|s| Control::Subtask(id.clone(), s.resolved_id(&id.project, &id.topic))),
-        );
         out.extend(
             task.aspects
                 .iter()

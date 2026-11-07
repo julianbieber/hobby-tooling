@@ -56,17 +56,17 @@ hwt tree                                 project -> topic -> task overview
 hwt done | block | unblock               task state
 hwt orphans                              worktrees with no task.json
 hwt rm <task>                            remove the worktree and its aspects', keep the notes
-hwt restore <task>                       re-create a removed worktree and its open aspects'
-hcdev wt <task>                          zellij session: Helix + Claude, plus its aspect/subtask tabs
+hwt restore <task>                       re-create a removed worktree and its started aspects'
+hcdev wt <task>                          zellij session: Helix + Claude, plus its started aspects' tabs
 hcdev auto <task> [-w]                   the same, with Claude running /task:auto (plan, then build)
 hcdev coordinator <blurb>                from ~/fun_repos/<project>: task list + Claude
 hcdev close <task> [-p] [-t]             kill its session, stop its processes, close its window
 hcdev claude-pane <task> [-p] [-t]       resolve the Claude pane id of a running auto session
 hcdev notes                              cd to this task's notes dir
-hwt aspect new <name> [-g <question>]    research aspect of this task: worktree + notes
+hwt aspect new <name> [-k code|research] add an aspect of this task: notes only, started now or later
+hwt aspect start <name>                  cut its worktree from the current base, open its tab
 hwt aspect list | close <name>           a task's aspects / remove one's worktree, keep notes
-hwt subtask <name> [--take c…] [--tab]   split work out: a task off the default branch, owned by this one
-hcdev tab <name>                         open or focus an aspect or subtask as a tab in the task's session
+hcdev tab <name>                         open or focus a started aspect's tab in the task's session
 ```
 
 A task under the topic `coordinator` is a **coordinator**: notes, `task.json`

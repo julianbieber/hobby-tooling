@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# The Claude pane of a research aspect's tab: start /task:aspect while the aspect
-# is still `open`, and resume the aspect's last conversation after that.
+# The Claude pane of an aspect's tab, the same for every kind: start /task:aspect
+# while the aspect is still `open`, and resume the aspect's last conversation
+# after that.
 #
 # Runs from the aspect worktree (~/fun_aspects/<project>/<topic>/<task>/<name>)
 # and reads aspect.json in notes/<project>/<topic>/<task>/aspects/<name>/.

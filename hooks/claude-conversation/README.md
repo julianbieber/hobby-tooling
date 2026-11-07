@@ -46,7 +46,7 @@ just as invisible as no dump at all.
 Both derive the same path, `/tmp/claude-conversation-<key>.md`, where `<key>` is
 the sanitized `$ZELLIJ_SESSION_NAME-p$ZELLIJ_PANE_ID` — so ctrl-g in one pane
 opens that pane's conversation, not a neighbour's. The pane id is what separates
-a task's tab from its research aspects' tabs, which all share the task's session
+a task's tab from its aspects' tabs, which all share the task's session
 name. Outside zellij it falls back to an `md5(PWD)` hash.
 
 **That derivation is the entire contract between the two scripts.** Change it in

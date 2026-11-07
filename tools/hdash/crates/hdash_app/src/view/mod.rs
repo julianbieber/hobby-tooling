@@ -62,7 +62,6 @@ pub enum Control {
     PrsToggle(TaskId),
     TodoToggle(TaskId),
     PrLine(TaskId, String),
-    Subtask(TaskId, TaskId),
     Aspect(TaskId, String),
 }
 
@@ -74,7 +73,6 @@ impl Control {
             | Control::PrsToggle(id)
             | Control::TodoToggle(id)
             | Control::PrLine(id, _)
-            | Control::Subtask(id, _)
             | Control::Aspect(id, _) => Some(id),
             _ => None,
         }
