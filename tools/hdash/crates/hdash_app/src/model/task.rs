@@ -103,66 +103,16 @@ impl Pr {
     }
 }
 
-/// A subtask owned by a task: a sibling worktree the task spun off (via `hwt subtask`). Declared in the
-/// owning task's `subtasks.json`. `task` is the only required field; the rest is display metadata.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-pub struct SubtaskRef {
-    /// The child task's directory/branch name (third path level, under its topic).
-    pub task: String,
-    /// The child's topic, if it differs from the owner's. Defaults to the owner's topic when absent.
-    #[serde(default)]
-    pub topic: Option<String>,
-    /// Project, if recorded. A subtask always shares its parent's project, so this is
-    /// optional and defaults to the owner's — `hwt subtask` writes it to keep the entry
-    /// self-describing.
-    #[serde(default)]
-    pub project: Option<String>,
-    /// Short blurb (the new-name suffix), if present.
-    #[serde(default)]
-    pub blurb: Option<String>,
-    /// One-line goal/brief, if present.
-    #[serde(default)]
-    pub goal: Option<String>,
-    /// `YYYY-MM-DD` the subtask was created, if present.
-    #[serde(default)]
-    pub created: Option<String>,
-    /// Whether the subtask is worked now, as a tab of the owner's session; `false` when it is
-    /// postponed, and for every entry written before tabs existed.
-    #[serde(default)]
-    pub tab: bool,
-}
-
-impl SubtaskRef {
-    /// The child's stable id, resolving project and topic against the owner's when the
-    /// entry does not record them.
-    pub fn resolved_id(&self, owner_project: &str, owner_topic: &str) -> TaskId {
-        TaskId {
-            project: self
-                .project
-                .clone()
-                .unwrap_or_else(|| owner_project.to_owned()),
-            topic: self.topic.clone().unwrap_or_else(|| owner_topic.to_owned()),
-            name: self.task.clone(),
-        }
-    }
-
-    /// Best one-line label: the blurb or goal, else the task name.
-    pub fn display_label(&self) -> &str {
-        self.blurb
-            .as_deref()
-            .or(self.goal.as_deref())
-            .unwrap_or(&self.task)
-    }
-}
-
-/// A research aspect of a task: a question carved out into its own worktree and tab, recorded in
-/// `notes/PROJECT/TOPIC/TASK/aspects/NAME/aspect.json`. Never a task of its own.
+/// An aspect of a task: a piece of the task's own work, worked in a tab of the task's session,
+/// recorded in `notes/PROJECT/TOPIC/TASK/aspects/NAME/aspect.json`. Never a task of its own.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AspectRef {
     /// The aspect's directory name, which is also its tab name.
     pub name: String,
-    /// `open`, `active`, `reported` or `closed` as the file records it; `unreadable` when the
-    /// file could not be parsed.
+    /// `research` or `code` as the file records it; `research` when it records none.
+    pub kind: String,
+    /// `open`, `active`, `reported`, `pr`, `done` or `closed` as the file records it;
+    /// `unreadable` when the file could not be parsed.
     pub state: String,
     /// The question, if recorded.
     pub goal: Option<String>,
@@ -170,6 +120,8 @@ pub struct AspectRef {
 
 #[derive(Deserialize)]
 struct AspectFile {
+    #[serde(default)]
+    kind: Option<String>,
     #[serde(default)]
     state: Option<String>,
     #[serde(default)]
@@ -352,9 +304,7 @@ pub struct Task {
     pub repos: Vec<Repo>,
     /// Pull requests declared in the task's `prs.json` (live status loaded async).
     pub prs: Vec<Pr>,
-    /// Subtasks this task owns, declared in its `subtasks.json` (sibling worktrees spun off via `hwt subtask`).
-    pub subtasks: Vec<SubtaskRef>,
-    /// Research aspects recorded under the task's `aspects/` notes dir, by name, closed ones
+    /// Aspects recorded under the task's `aspects/` notes dir, by name, closed ones
     /// included.
     pub aspects: Vec<AspectRef>,
     /// Notes directory/file last-modified time, if any.
@@ -763,7 +713,6 @@ fn build_task(id: TaskId, adopted: bool, done: bool, block: Option<Block>) -> Ta
         todo,
         waiting_on,
     } = read_build_state(&id);
-    let subtasks = read_subtasks(&id);
     let aspects = read_aspects(&notes_root().join(id.rel()).join("aspects"));
     let last_active =
         notes_path(&id).and_then(|p| std::fs::metadata(&p).ok().and_then(|m| m.modified().ok()));
@@ -788,7 +737,6 @@ fn build_task(id: TaskId, adopted: bool, done: bool, block: Option<Block>) -> Ta
         has_branch: true,
         repos,
         prs,
-        subtasks,
         aspects,
         last_active,
         coordinator,
@@ -1012,11 +960,13 @@ fn read_aspects(dir: &Path) -> Vec<AspectRef> {
             match parsed {
                 Some(file) => AspectRef {
                     name: clean(&name),
+                    kind: clean(file.kind.as_deref().unwrap_or("research")),
                     state: clean(file.state.as_deref().unwrap_or("open")),
                     goal: file.goal.map(|g| clean(&g)).filter(|g| !g.is_empty()),
                 },
                 None => AspectRef {
                     name: clean(&name),
+                    kind: "research".into(),
                     state: "unreadable".into(),
                     goal: None,
                 },
@@ -1025,36 +975,6 @@ fn read_aspects(dir: &Path) -> Vec<AspectRef> {
         .collect();
     aspects.sort_by(|a, b| a.name.cmp(&b.name));
     aspects
-}
-
-/// Path to a task's `subtasks.json` in the notes tree: `notes/PROJECT/TOPIC/TASK/subtasks.json`.
-pub fn subtasks_path(id: &TaskId) -> PathBuf {
-    notes_root().join(id.rel()).join("subtasks.json")
-}
-
-fn read_subtasks(id: &TaskId) -> Vec<SubtaskRef> {
-    let path = subtasks_path(id);
-    let Ok(content) = std::fs::read_to_string(&path) else {
-        return Vec::new(); // missing or unreadable → no subtasks
-    };
-    if content.trim().is_empty() {
-        return Vec::new();
-    }
-    match serde_json::from_str::<Vec<SubtaskRef>>(&content) {
-        Ok(subs) => subs
-            .into_iter()
-            .map(|mut sub| {
-                sub.blurb = sub.blurb.map(|b| clean(&b));
-                sub.goal = sub.goal.map(|g| clean(&g));
-                sub.created = sub.created.map(|c| clean(&c));
-                sub
-            })
-            .collect(),
-        Err(e) => {
-            warn!("ignoring malformed {}: {e}", path.display());
-            Vec::new()
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1167,8 +1087,9 @@ fn set_backlog_at(path: &Path, backlog: bool) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
-    // Pins how a task's aspects are read: sorted by name, state and goal from aspect.json, an
-    // empty goal dropped, a missing state read as open, and a malformed file still listed.
+    // Pins how a task's aspects are read: sorted by name, kind, state and goal from aspect.json,
+    // an empty goal dropped, a missing kind read as research and a missing state as open, and a
+    // malformed file still listed.
     #[test]
     fn aspects_are_read_from_the_aspects_dir() {
         let dir = std::env::temp_dir().join(format!("hdash_aspects_{}", std::process::id()));
@@ -1179,6 +1100,7 @@ mod tests {
                 r#"{"kind":"research","state":"reported","goal":"why"}"#,
             ),
             ("a-fresh", r#"{"goal":""}"#),
+            ("d-code", r#"{"kind":"code","state":"pr"}"#),
             ("c-broken", "{not json"),
         ] {
             std::fs::create_dir_all(dir.join(name)).unwrap();
@@ -1191,17 +1113,26 @@ mod tests {
             vec![
                 AspectRef {
                     name: "a-fresh".into(),
+                    kind: "research".into(),
                     state: "open".into(),
                     goal: None
                 },
                 AspectRef {
                     name: "b-spike".into(),
+                    kind: "research".into(),
                     state: "reported".into(),
                     goal: Some("why".into())
                 },
                 AspectRef {
                     name: "c-broken".into(),
+                    kind: "research".into(),
                     state: "unreadable".into(),
+                    goal: None
+                },
+                AspectRef {
+                    name: "d-code".into(),
+                    kind: "code".into(),
+                    state: "pr".into(),
                     goal: None
                 },
             ]

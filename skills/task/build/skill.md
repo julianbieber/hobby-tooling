@@ -1,7 +1,7 @@
 ---
-description: Run a task end to end as one human-gated pipeline with a recorded stage and a live todo list — assess once whether it splits into standalone subtasks, brief, the business context only I hold, a short plan, implement and test, read the implemented change back as an HMML delta derived from the diff, comment pass, code quality standards, my review, PR, journal
+description: Run a task end to end as one human-gated pipeline with a recorded stage and a live todo list — assess once whether it splits into aspects of the task, brief, the business context only I hold, a short plan, implement and test, read the implemented change back as an HMML delta derived from the diff, comment pass, code quality standards, my review, PR, journal
 argument-hint: '[<description> | --issue | --notes] [<phase>] [--no-hmml] [--no-context] [--no-split] [--resume-deep]'
-allowed-tools: Skill, Read, Write, Edit, AskUserQuestion, Bash(hobby-struct-parser:*), Bash(pwd:*), Bash(date:*), Bash(ls:*), Bash(rg:*), Bash(git branch:*), Bash(git -C * status:*), Bash(git -C * diff:*), Bash(git -C * log:*), Bash(git -C * rev-parse:*), Bash(git -C * ls-files:*), Bash(git -C * merge-base:*), Bash(git status:*), Bash(git diff:*), Bash(git log:*), Bash(git merge-base:*), Bash(gh pr list:*), Bash(gh pr view:*), Bash(gh issue view:*), Bash(gh issue list:*), Bash(gh repo view:*), Bash(hcoord ci:*), Bash(gh run list:*), Bash(gh run rerun:*)
+allowed-tools: Skill, Read, Write, Edit, AskUserQuestion, Bash(hobby-struct-parser:*), Bash(pwd:*), Bash(date:*), Bash(ls:*), Bash(rg:*), Bash(git branch:*), Bash(git -C * status:*), Bash(git -C * diff:*), Bash(git -C * log:*), Bash(git -C * rev-parse:*), Bash(git -C * ls-files:*), Bash(git -C * merge-base:*), Bash(git status:*), Bash(git diff:*), Bash(git log:*), Bash(git merge-base:*), Bash(gh pr list:*), Bash(gh pr view:*), Bash(gh issue view:*), Bash(gh issue list:*), Bash(gh repo view:*), Bash(hcoord ci:*), Bash(hcoord merged:*), Bash(nu -c:*), Bash(gh run list:*), Bash(gh run rerun:*)
 ---
 
 Run a task **end to end** as one predictable, human-gated pipeline. The individual
@@ -23,7 +23,7 @@ represents the implemented change, never a plan.
 
 ## Four rules that override everything else
 
-1. **Hard-stop at every human gate** — GATE S (the subtask assessment, once per
+1. **Hard-stop at every human gate** — GATE S (the split assessment, once per
    task), GATE C (the business-context questions, before anything is designed),
    and GATE 2 (once the change is implemented, tested, read back as a delta and
    comment-passed). "Hard stop" means: finish the
@@ -64,6 +64,21 @@ represents the implemented change, never a plan.
    dir is the worktree. Fall back to `git branch --show-current`, skipping
    `master`/`main`/`develop`.
 
+   **A code aspect** runs this pipeline too, from its worktree
+   `~/fun_aspects/PROJECT/TOPIC/TASK/NAME` (started there by `/task:aspect`).
+   Then the task is TASK and the aspect is NAME, and for the whole run:
+   - **the notes dir** is `notes/PROJECT/TOPIC/TASK/aspects/NAME/` — the state
+     file, the plan, the journal and the `.hmml` delta go there, wherever this
+     skill says `notes/{project}/{topic}/{task}/`;
+   - `business-context.md` stays the **task's** — one per task, read and
+     appended to at `notes/PROJECT/TOPIC/TASK/`;
+   - the brief is the aspect's `brief.md`, with the task's `issue.md` as its
+     context;
+   - **the base** is `aspect.json` `base`, else the default branch — every
+     place below that says the default branch means the base, and the PR
+     targets it;
+   - `is_aspect: true` in the state file, which skips `assess-split`.
+
 2. **The brief**, from the first argument:
 
    | argument | brief |
@@ -71,6 +86,7 @@ represents the implemented change, never a plan.
    | free text | the text itself, recorded verbatim |
    | `--issue` | the task's `issue.md` — title, body, acceptance criteria, progress |
    | `--notes`, or nothing | `journal:resume` over the task's notes dir |
+   | nothing, in an aspect | the aspect's `brief.md` |
 
    With no argument and an `issue.md` in the task's notes dir, do both:
    `journal:resume` **and** the issue. Record `brief_source` and the brief itself in the state file, and
@@ -85,13 +101,14 @@ represents the implemented change, never a plan.
      "brief": "<the brief>", "plan": "<plan file name>",
      "hmml_units": ["<unit>"],
      "no_hmml": false, "no_context": false, "no_split": false,
-     "is_subtask": false,
+     "is_aspect": false,
      "split": { "assessed": "<YYYY-MM-DD>", "outcome": "none|split",
                 "reason": "<one line>" },
-     "subtasks": [
-       { "task": "<new task id>", "goal": "<one-line brief>",
-         "created": "<YYYY-MM-DD>" }
+     "aspects": [
+       { "name": "<aspect name>", "kind": "code|research",
+         "start": "now|later", "created": "<YYYY-MM-DD>" }
      ],
+     "tasks": [ "<project>/<topic>/<task> filed for later" ],
      "size_budget": "", "prior_art": "",
      "context_questions": [], "context_recorded": null, "context_gaps": [],
      "todo": [ { "text": "<step>", "status": "pending" } ],
@@ -102,17 +119,16 @@ represents the implemented change, never a plan.
 
    `phase` is one of `assess-split`, `plan`, `context`, `implement`, `delta`,
    `comments`, `standards`, `review`, `await-review`, `pr`, `ci`, `journal`,
-   `handed-off` (this task became a coordinator and its work lives in its
-   subtasks), `done`. `context` is the waiting state GATE C leaves: the pipeline
+   `handed-off` (this task's work lives in its aspects), `done`. `context` is the waiting state GATE C leaves: the pipeline
    has asked me something and stops until I answer.
    Every write sets `written` to that write's time; `phase_since` moves with it
    only when the write also changes `phase`, and otherwise keeps its old value.
 
-   **`is_subtask`** marks a task this pipeline created. It is written into the
-   seeded state file, never inferred, and it permanently skips `assess-split` —
-   the split depth is exactly one. **`split`** records the one-time assessment so
-   it is never re-asked, and **`subtasks`** lists what it produced; both are
-   absent until `assess-split` runs.
+   **`is_aspect`** marks a run in an aspect's worktree. It is set from the path
+   at Step 0, never inferred from anything else, and it permanently skips
+   `assess-split` — an aspect does not split. **`split`** records the one-time
+   assessment so it is never re-asked, and **`aspects`** and **`tasks`** list
+   what it produced; all three are absent until `assess-split` runs.
 
    **Migrate an old record** before anything else, and say so in one line: a
    phase of `await-hmml-review` or `revise` becomes `implement` (its annotated
@@ -122,12 +138,14 @@ represents the implemented change, never a plan.
    then ignored — never written to again. A state file with no
    `split` record and a phase past `plan` gets
    `split: {"outcome": "none", "reason": "task already in flight"}` rather
-   than a back-filled assessment: work already under way is split, when it
-   needs to be, by `/subtask` taking its commits.
+   than a back-filled assessment: work found once a task is under way is added
+   with `/aspect`. An `is_subtask` key from an older record is dropped, its
+   task treated as having `split` recorded, and a `subtasks` list is kept as
+   history and never acted on.
 
 4. **Starting phase**, in this precedence: `phase: assess-split` outranks
-   everything below — the subtask question is answered before any planning, and
-   is skipped only when `is_subtask` is true, `no_split` is set, or `split` is
+   everything below — the split question is answered before any planning, and
+   is skipped only when `is_aspect` is true, `no_split` is set, or `split` is
    already recorded. Else an explicit phase argument forces it; else `phase`
    from the state file; else **infer** from artifacts and say what you inferred
    — `business-context.md` has no section for this task and there is no
@@ -136,10 +154,12 @@ represents the implemented change, never a plan.
    or commits ahead of the default branch → `implement`; an open PR for the
    branch → `done`.
 
-   **`phase: handed-off` is terminal.** This task's work lives in its subtasks
-   now. Print the `subtasks` list with the `hcdev wt <task>` command for each,
-   remind me that each one runs its own `/task:build`, and end the turn. Do not
-   plan, implement, or open a PR here — this task owns no code.
+   **`phase: handed-off` is terminal.** This task's work lives in its aspects
+   now. Print `hwt aspect list` with `hwt aspect start <name>` beside each
+   still `open`, remind me that a code aspect runs its own `/task:build` and
+   that `hwt done` refuses this task until every aspect is finished, and end
+   the turn. Do not plan, implement, or open a PR here — this task owns no
+   code.
 
 5. **Flags:** `--no-hmml` skips the `delta` phase, for a change I can read
    straight from the diff. `--no-context` skips GATE C — for a change I have no
@@ -182,29 +202,32 @@ ______________________________________________________________________
 ## Phase `assess-split` → GATE S (once per task)
 
 The **first** phase of a new task, before any planning. Ask once whether this is
-really one task, or several deliverables that each want their own worktree,
-branch, PR and session. Then record the answer so it is never asked again.
+really one piece of work, or several that each want their own worktree, branch,
+PR and tab. Then record the answer so it is never asked again.
 
-Skip the phase entirely — set `phase: plan` and continue — when `is_subtask` is
+Two homes for a piece that is cut off, and no third:
+
+- **an aspect** — part of this task, worked in a tab of this task's session,
+  started **now** or **later** in the task, but before it is done (`hwt done`
+  refuses while one is unfinished). A code aspect is cut from the current tip
+  of its base when started and delivers through its own PR to that base.
+- **a task** — work planned for some later point that is not part of this
+  task. It gets its own card through `/issue-create`, and no tab.
+
+Skip the phase entirely — set `phase: plan` and continue — when `is_aspect` is
 true, `no_split` is set, or `split` is already recorded.
 
-**S1 — See what the branch already holds.** A subtask is cut from the default
-branch, so work this task has already done reaches a subtask only by being
-moved into it, as whole commits:
+**S1 — See whether the branch already holds work.**
 
 ```bash
-git status --short                              # uncommitted work
-git log --oneline "origin/$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)..HEAD"   # this branch's own commits
+git status --short
+git log --oneline "origin/$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)..HEAD"
 ```
 
-A dirty tree cannot be split: if the split goes ahead, its work has to be
-committed first, and that commit is mine to make or approve — say so at the
-gate rather than committing. Each commit the log lists either goes to exactly
-one subtask (`hwt subtask --take`) or stays here; this task ends at
-`handed-off` and implements nothing further, so a split leaves **no commit
-here** — one that belongs to no subtask means this task is one of the
-subtasks, and the cut has to say which. A commit that mixes two subtasks'
-work cannot be taken by either; name it.
+Commits are never moved between branches. A task whose branch already has
+commits or a dirty tree is in flight: record
+`split: {"outcome": "none", "reason": "task already in flight"}`, say so in one
+line, and continue to `plan`. Work found later is added with `/aspect`.
 
 **S2 — Read the whole task.** Step 0 already resolved the brief; if it came from
 a bare description, also run `journal:resume` over the notes dir. This is the
@@ -227,19 +250,22 @@ work, and I want to see it at the gate. The re-cuts that fix nearly everything:
   happy path only. Slicing by case keeps it end-to-end; slicing by layer does
   not.
 - **Carries an open question (rule 5) → make the decision its own item,** and
-  make whatever depends on the answer wait. A question is not a deliverable.
+  make whatever depends on the answer wait. A question is not a deliverable —
+  but one whose answer is a file is a research aspect.
 - **Leaves state to be remembered (rule 6) → pull the cleanup into the same
-  subtask,** or make it a subtask that exists now.
+  piece,** or make it an aspect that exists now.
 
-**S5 — Check the set, not just the items.** Three properties the list as a whole
-must have, all three printed at the gate:
+Then give each survivor its home: an aspect (code or research; now or later)
+when it is part of this task, a task when it is not.
 
-- **Disjoint commits.** Every commit from S1 is taken by exactly one subtask.
-  Overlapping *files* are allowed — each subtask has its own worktree and
-  conflicts are resolved at PR time — but say which files two subtasks share.
-- **Every subtask stands alone** — if backing one out forces another out, they
-  are one subtask cut on the wrong axis (rule 3).
-- **Nothing is left to remember** (rule 6) once every subtask has merged — no
+**S5 — Check the set, not just the items.** Two properties the list as a whole
+must have, both printed at the gate. Overlapping *files* are allowed — each
+aspect has its own worktree and conflicts are resolved at PR time — but say
+which files two pieces share.
+
+- **Every piece stands alone** — if backing one out forces another out, they
+  are one piece cut on the wrong axis (rule 3).
+- **Nothing is left to remember** (rule 6) once every piece has merged — no
   flag, no dual path, no half-done migration.
 
 **S6 — Decide whether to split at all.** Fewer than two surviving candidates
@@ -251,18 +277,18 @@ phase.
 **→ GATE S: HARD STOP.** Write the state file with `phase: assess-split` still
 set, then print:
 
-- the **end state** in one or two sentences: what is true once every subtask has
+- the **end state** in one or two sentences: what is true once every piece has
   landed;
-- a table of proposed subtasks — blurb, the user-visible behaviour, the
-  done-when observation (rule 2), the files it owns, the commits it takes,
-  whether it is worked **now** (a tab of this session) or **postponed**, and
-  any `enabling` label with the task it unlocks;
+- a table of proposed pieces — name, aspect (`code`/`research`, `now`/`later`,
+  base when not the default branch) or task, the user-visible behaviour, the
+  done-when observation (rule 2), the files it owns, and any `enabling` label
+  with the piece it unlocks;
 - the **rejected candidates**, with the rule each failed and how it was re-cut;
-- the three set-level checks from S5, each `pass` or the specific pair that
+- the two set-level checks from S5, each `pass` or the specific pair that
   fails;
 - the exact commands the approval will run, one line each, so I can see the
   blast radius before it happens;
-- *"Edit, merge or drop any subtask, then say continue and I'll create them. Say
+- *"Edit, merge or drop any piece, then say continue and I'll create them. Say
   `no split` and I'll carry on as one task."*
 
 End your turn. **Create no worktree, file no issue.**
@@ -271,48 +297,41 @@ ______________________________________________________________________
 
 ## Phase `handed-off` — on my go at GATE S
 
-Only after I approve the decomposition. Per approved subtask, in order:
+Only after I approve the decomposition. Per approved aspect, in order:
 
-1. **Create it** — the decisions were made at the gate, so run the primitive
-   rather than the interactive `/subtask`:
+1. **Add it** — the decisions were made at the gate, so run the primitive
+   rather than the interactive `/aspect`:
    ```
-   nu -c "use ~/.config/nushell/hwt.nu *; hwt subtask <name> --goal '<one line>' [--take [<hash> …]] [--tab]"
+   nu -c "use ~/.config/nushell/hwt.nu *; hwt aspect new <name> --kind <kind> --goal '<one line>' [--base <branch>]"
    ```
-   `--tab` for a subtask worked now. That owns the worktree, the branch, the
-   moved commits, the rebase of this branch and the `subtasks.json` entry. A
-   conflict aborts and is reported; stop there and tell me. Then write the
-   subtask's `implementation.md` brief in the shape `/subtask` step 6 gives:
-   goal, file paths, constraints, done-when, commits taken — read by a session
-   that has no memory of this conversation.
-2. **Seed its pipeline state** at
-   `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{new_task}/build-task.json`:
-   ```json
-   { "phase": "plan", "is_subtask": true, "brief_source": "description",
-     "brief": "<the full brief>", "no_hmml": false, "no_context": false,
-     "todo": [], "waiting_on": null }
-   ```
-   `is_subtask: true` is what bounds the depth at one — without it the subtask's
-   own session would assess a split of its own.
+   Then overwrite its `aspects/<name>/brief.md` in the shape `/aspect` step 6
+   gives — goal, done when, why the task needs it, already known, where to
+   look, out of scope — read by a session that has no memory of this
+   conversation.
+
+Per approved task: run `/issue-create` for it, naming this task in its context.
 
 Then, once per task:
 
-3. Record every subtask under `subtasks` with `task`, `goal` and `created`, set
+2. Record the aspects under `aspects` and the tasks under `tasks`, set
    `split: {"outcome": "split", …}` and `phase: handed-off`, and write the state
    file.
-4. Run `journal:write` once, recording the decomposition and *why* each cut fell
+3. Run `journal:write` once, recording the decomposition and *why* each cut fell
    where it did. The rejected candidates belong here too — that reasoning is the
-   part that would otherwise be lost, and the subtask journals will not have it.
-5. Open the subtasks worked now: `hcdev tab <name>` for each. Print the
-   handoff: each subtask with its worktree path, now (its tab is open) or
-   postponed (`hcdev tab <name>` or `hcdev wt <name>` opens it later), a note
-   that `hdash` lists them under this task's card, and a reminder that each
-   runs its own `/task:build` and gates independently. If this branch was
-   rebased and had been pushed, say it needs a force push.
+   part that would otherwise be lost, and the aspects' journals will not have it.
+4. Start the aspects worked now:
+   `nu -c "use ~/.config/nushell/hwt.nu *; hwt aspect start <name>"` for each —
+   it checks the aspect out from its base's current tip and opens its tab. A
+   rebase conflict is aborted and reported; stop there and tell me. Print the
+   handoff: each aspect with its kind and whether its tab is open or it waits
+   as `open` (`hwt aspect start <name>`, or a click in hdash, starts it later),
+   each task filed, a note that `hdash` lists the aspects on this task's card,
+   and a reminder that each code aspect runs its own `/task:build` and gates
+   independently.
 
-**Only tabs are opened here** — for the subtasks worked now. A postponed one
-is opened later, by a click in `hdash` or an `hcdev tab` I run myself.
-**This task implements nothing** — it owns no code, opens no PR, and does
-not poll the subtasks. End your turn.
+**Only the aspects worked now are started here.** **This task implements
+nothing** — it owns no code, opens no PR, and does not poll its aspects. End
+your turn.
 
 ______________________________________________________________________
 
@@ -597,11 +616,15 @@ there was run by hand, say so in one bullet and name what does cover it.
 
 The `track-pr` hook records the PR to `prs.json`. If it did not fire, append the
 PR there yourself (create with `[]` first; never store the PR's live state).
+**In an aspect** the hook does not fire and nothing goes to `prs.json`: open
+the PR with `--base <the base>`, and set `aspect.json` `state` to `pr` and its
+`pr` to the URL (Edit, keep every other key).
 Set `phase: ci` and continue.
 
 Hobby repos are mine, so a PR is optional — for a small solo change, pushing to
 the default branch may be right. Ask if it is not obvious, and skip to `journal`
-when I say no PR.
+when I say no PR. An aspect always opens one: it is done
+only once its PR has merged.
 
 ## Phase `ci` — the PR is green before the pipeline ends
 
@@ -632,6 +655,12 @@ and repair them; never hand me a red PR as finished.
 Run `journal:write` — goal, what changed, evidence, open items, with the context
 gaps under the open items so they survive into the next session's resume. Set
 `phase: done`.
+
+**In an aspect**, wait for the merge before `done`: `hcoord merged <pr url>`,
+Bash `timeout: 600000`, again on `timeout`. `merged` → set `aspect.json`
+`state` to `done`. `blocked` → print the reason, set `waiting_on`, and stop;
+a resume re-checks. An aspect's done-when was read at GATE 2, so the merge is
+what is left.
 Print a one-line wrap-up: task, PR link if any, anything still open. End.
 
 ______________________________________________________________________
@@ -642,10 +671,9 @@ ______________________________________________________________________
   my behalf. The pipeline asks for wording of its own in exactly one place,
   GATE C, and what I answer there is recorded verbatim: no phase and no
   sub-skill may smooth it into prose of yours.
-- **A subtask is a separate deliverable; this pipeline is one branch.** Work that
-  wants its own worktree, branch and PR is a subtask, decided once at GATE S back
-  before this branch had commits. Once it does, the answer is to finish this task
-  and write the rest up as issues with `/issue-create`.
+- **This pipeline is one branch.** Work found on the way that is part of this
+  task but outside this branch's change is an aspect — `/aspect`, now or later;
+  work that is not part of this task is a task for later, `/issue-create`.
 - If artifacts and the state file disagree, trust the artifacts, say so, and
   correct the state file.
 - If I ask for something off-pipeline mid-run, handle it, then re-anchor on the

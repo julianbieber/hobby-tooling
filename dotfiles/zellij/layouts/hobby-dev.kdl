@@ -9,7 +9,7 @@
 // No experts pane — a hobby task is a single repo, so there is only ever one
 // expert to talk to, and the per-task socket path would sit three levels deep.
 //
-// The compact bar is what shows a task's research aspects, each a tab of this
+// The compact bar is what shows a task's aspects, each a tab of this
 // session (`hcdev tab`). `hcdev-dev-panes` in hcdev.nu spells the same panes for
 // the layouts it renders, and the two must stay alike.
 layout {

@@ -15,10 +15,9 @@ use crate::model::task::{notes_root, worktrees_root};
 /// How often the fingerprint is taken.
 pub const FINGERPRINT_POLL_SECS: u64 = 2;
 
-const NOTES_FILES: [&str; 6] = [
+const NOTES_FILES: [&str; 5] = [
     "task.json",
     "prs.json",
-    "subtasks.json",
     "build-task.json",
     "issue.md",
     "tasks.json",
@@ -26,7 +25,7 @@ const NOTES_FILES: [&str; 6] = [
 
 /// Modification times of everything whose change can alter the model: the worktree and notes
 /// roots and their project, topic and task dirs (a task appearing or vanishing), and per notes
-/// task the files a card reads: `task.json`, `prs.json`, `subtasks.json`, `build-task.json`,
+/// task the files a card reads: `task.json`, `prs.json`, `build-task.json`,
 /// `issue.md` and `tasks.json`.
 #[derive(Clone, Default, PartialEq, Debug)]
 pub struct Fingerprint(HashMap<PathBuf, SystemTime>);

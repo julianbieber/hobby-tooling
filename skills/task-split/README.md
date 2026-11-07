@@ -20,7 +20,7 @@ through `/issue-create`.
 `dotfiles/claude-md/hobby.CLAUDE.md`, section **Task shaping**. That file is
 symlinked to `~/.claude-hobby/CLAUDE.md` and is loaded in every hobby session in
 every repo, so the rules apply to work that never invokes this skill — a task
-proposed mid-conversation, a `/subtask` split, an issue written by hand. A skill
+proposed mid-conversation, an `/aspect` split, an issue written by hand. A skill
 is opt-in and would have covered only the deliberate case.
 
 The division is: `CLAUDE.md` holds the rules, this skill holds the *procedure* for
@@ -76,5 +76,5 @@ people optimise against rather than satisfy.
 
 - `/issue-create` — turns one accepted entry into an issue, and runs the shape
   check before writing it
-- `/subtask` — splitting work already in progress; bound by the same
-  rules
+- `/aspect` — splitting off part of a task already in progress, now or
+  later; bound by the same rules

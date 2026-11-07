@@ -39,14 +39,14 @@ pub struct Session {
     pub since: u64,
 }
 
-/// Whose Claude session a record is: a task's own, or one of its research aspects', named.
+/// Whose Claude session a record is: a task's own, or one of its aspects', named.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Owner {
     Task(TaskId),
     Aspect(TaskId, String),
 }
 
-/// The live sessions: each task's own, and each research aspect's, keyed by its task and name.
+/// The live sessions: each task's own, and each aspect's, keyed by its task and name.
 /// Replaced only when a poll finds a change.
 #[derive(Default, PartialEq, Debug)]
 pub struct Sessions {
@@ -73,7 +73,7 @@ impl Sessions {
         out
     }
 
-    /// The session of research aspect `name` of task `id`, if one runs.
+    /// The session of aspect `name` of task `id`, if one runs.
     pub fn aspect(&self, id: &TaskId, name: &str) -> Option<Session> {
         self.aspects.get(&(id.clone(), name.to_owned())).copied()
     }
@@ -140,7 +140,7 @@ pub fn task_of(project_dir: &Path, root: &Path) -> Option<TaskId> {
     })
 }
 
-/// The research aspect a project dir lies in: `<root>/<project>/<topic>/<task>/<name>[/...]`,
+/// The aspect a project dir lies in: `<root>/<project>/<topic>/<task>/<name>[/...]`,
 /// compared by whole components.
 pub fn aspect_of(project_dir: &Path, root: &Path) -> Option<(TaskId, String)> {
     let rest = project_dir.strip_prefix(root).ok()?;
@@ -169,9 +169,9 @@ pub fn aspect_of(project_dir: &Path, root: &Path) -> Option<(TaskId, String)> {
 }
 
 /// Keep, per task, the newest record whose Claude process still runs (same pid and start time, so
-/// a reused pid does not count). A record belongs to what its project dir lies in: a research
-/// aspect's worktree under `aspects`, else a task's worktree under `root` — so a tab of a task's
-/// session that works an aspect or a subtask is credited to that, although every tab shares the
+/// a reused pid does not count). A record belongs to what its project dir lies in: an aspect's
+/// worktree under `aspects`, else a task's worktree under `root` — so a tab of a task's session
+/// that works an aspect is credited to that aspect, although every tab shares the
 /// task's zellij session name. Only a dir in neither, such as a coordinator's main checkout, is
 /// matched by the zellij session it ran in. Every Claude process counts, whatever pane or stage
 /// started it.
@@ -603,29 +603,6 @@ mod tests {
             sessions.aspect(&id("p", "t", "a"), "x").map(|s| s.state),
             Some(SessionState::Idle)
         );
-    }
-
-    // Pins that a subtask worked as a tab of its parent's session, sharing the parent's session
-    // name, is credited to the subtask by its worktree.
-    #[test]
-    fn attribute_credits_a_subtask_tab_to_the_subtask() {
-        let parent = id("p", "t", "a");
-        let by_session = HashMap::from([("hcdev-p-t-a".to_owned(), parent.clone())]);
-        let out = attribute(
-            [
-                (rec("/w/p/t/a", "hcdev-p-t-a", SessionState::Busy, 1), 10),
-                (
-                    rec("/w/p/t/child", "hcdev-p-t-a", SessionState::Idle, 2),
-                    10,
-                ),
-            ],
-            &by_session,
-            Path::new("/w"),
-            Path::new("/asp"),
-            alive,
-        );
-        assert_eq!(out[&Owner::Task(parent)].record.pid, 1);
-        assert_eq!(out[&Owner::Task(id("p", "t", "child"))].record.pid, 2);
     }
 
     // Pins the stuck-busy correction: busy for a whole window with almost no CPU reads idle,

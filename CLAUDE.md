@@ -314,8 +314,8 @@ A card also carries the session's **live plan**: `todo` and `waiting_on` from th
 `build-task.json`, which `/task:build` and `/task:auto` keep current — a `▸ Todo (3/7)`
 toggle with the active step beside it, `waiting: <line>` in amber while a gate holds, and
 the whole list when expanded. It is the hobby half of work's `flow` record: the todos and
-the waiting line came over, the aspects did not, because a second PR here is a subtask
-(decided at GATE S) and the card already lists those. One session writes the file, so it
+the waiting line came over, the aspects did not as they were, because a second PR here is
+a code aspect (decided at GATE S, or added with `/aspect`) and the card already lists those. One session writes the file, so it
 needs none of work's `wt flow patch` locking.
 
 Cards carry an `idle 12m` / `busy 3m` badge from `hooks/session-state`, which writes one
@@ -523,24 +523,56 @@ hand-typed `hcdev auto` keeps the play gate and the running application.
 reads the one field it needs from `tasks.json` with `serde_json::Value` rather than
 depending on the crate.
 
-## A research aspect is a part of a task, worked in a tab
+## An aspect is a part of a task, worked in a tab; a task is work for later
 
-A task that needs a lot of research used to do it inline, filling its own
-session with sources, spikes and dead ends, or split it off as a subtask —
-which is a deliverable with its own card and session, the wrong shape for a
-question whose answer is a file. A **research aspect** is the third option:
-`/aspect <question>` in the task's session creates
-`notes/<p>/<t>/<task>/aspects/<name>/` (`aspect.json`, a self-contained
-`brief.md`), a worktree on branch `<task>@<name>` cut from the task's branch,
-and a tab in the task's zellij session whose Claude (`haspect` →
-`/task:aspect`) writes `findings.md` and stops. hdash lists it on the task's
-card with its state, `open` → `active` → `reported` → `closed`.
+Work split off a task has two homes, and the axis between them is **when**,
+not what: a **task** is work that will happen at some point and is not run
+immediately; an **aspect** is work run immediately or very soon as part of a
+task (`notes/hobby-tooling/skills/aspect-vs-task/business-context.md`
+`## when-task-when-aspect`). There is no third. Subtasks — a task of its own
+owned by another through `subtasks.json`, worked now as a tab or postponed on
+its card — were that third home, and are gone (`## no-subtasks`): run-now
+code work had two homes, a research aspect if its answer was a file and a
+`tab: true` subtask if it was code, and neither was called an aspect when it
+was code. A `subtasks.json` left in the notes is no longer read; its entries
+were always ordinary tasks.
+
+`/aspect <work>` in a task's session (or one of its aspects' tabs) adds
+`notes/<p>/<t>/<task>/aspects/<name>/` — `aspect.json` and a self-contained
+`brief.md` — and checks nothing out. `aspect.json` carries a **kind**:
+
+| kind | done when | state |
+|---|---|---|
+| `research` | its answer is in `findings.md` | `open` → `active` → `reported` |
+| `code` | its PR has merged and its done-when holds (`## code-aspect-done`) | `open` → `active` → `pr` → `done` |
+
+`hwt aspect close` sets `closed` from any of them. Research stays one kind
+of aspect beside code (`## research-kind`).
+
+**An aspect can be planned for later in the task.** An idea that is part of
+the task but outside the aspect being read is added so it is not forgotten,
+and run before the task is finished (`## aspect-lifecycle`). So adding and
+starting are two steps: `hwt aspect new` writes the notes, `hwt aspect start`
+fetches, cuts `<task>@<name>` from the current tip of the aspect's **base** —
+the default branch unless one was named — or rebases the branch onto it when
+it already exists, and opens the tab. The PR goes to the same base. `hwt
+done` refuses a task while any aspect is not `reported`, `done` or `closed`
+(`## done-refuses-open-aspects`), unless `-f`. Commits never move between
+branches (`## no-commit-picking`), which is why `hwt subtask --take` has no
+successor.
+
+**Every kind starts the same way** (`## aspect-start`): the tab's Claude pane
+runs `haspect`, which starts `/task:aspect` while the aspect is `open` and
+resumes the tab's conversation after that. `/task:aspect` reads the kind: a
+research aspect is answered into `findings.md`; a code aspect runs the full
+`/task:build` pipeline in its worktree (`## code-aspect-pipeline`), with its
+state file, plan and journal in the aspect's notes dir, the task's
+`business-context.md`, `is_aspect` skipping the split, and the PR against the
+base. `/aspect` is allowed under `auto: true` (`## aspect-under-auto`).
 
 **An aspect is not a task**: no `task.json`, so `scan_tasks` and `known-tasks`
-never enumerate it and it has no card. Slices of implementation stay subtasks
-— the decision in `business-context.md` `## decisions` is that a subtask is
-the shape for work that may be postponed — and a subtask worked now opens as a
-tab too (below).
+never enumerate it and it has no card. It is listed on its task's card with
+kind and state, and a click on one not yet started starts it.
 
 **Its worktree lives under `~/fun_aspects`, not beside the task.** About a
 dozen consumers read the third component under `~/fun_worktrees` as the task —
@@ -550,18 +582,15 @@ dir would have been an orphan, a sync target, and a phantom notes dir on the
 first PR. Under a separate root each of them says "not a task" unchanged, and
 aspect awareness is added only where it is wanted: `hresearch` resolves an
 aspect worktree to the aspect's notes dir. `@` is in the branch name only;
-`<task>/<name>` cannot coexist with a branch `<task>`.
+`<task>/<name>` cannot coexist with a branch `<task>`. `track-pr` therefore
+does not record an aspect's PR; `/task:build` writes it into `aspect.json`.
 
-**A tab, not a session.** `hcdev tab <name>` opens the aspect with
+**A tab, not a session.** `hcdev tab <name>` opens a started aspect with
 `zellij --session <task's> action new-tab`, or switches to it; with the
 session down it starts it from a rendered layout. `hcdev-dev-panes` spells the
 two panes for the rendered layouts; `hobby-dev.kdl` stays the layout of a
 session with no tabs to restore and of `hcdev here`/`dir`/`new`, so the two
 have to stay alike.
-
-`/aspect` refuses under `auto: true`: an unattended run is one session watched
-through one `build-task.json`, and a tab it cannot see would hold a gate
-nobody answers.
 
 **Every tab shares the task's zellij session name**, so two things that keyed
 on it alone had to learn the tab. hdash credits a session-state record to
@@ -571,31 +600,20 @@ checkout); it badges the aspect's line; a task's ordering counts its
 aspects, so an aspect waiting on you raises the card. The ctrl-g dump keys on
 the session name plus `$ZELLIJ_PANE_ID`. That the pane id is distinct per tab
 and reaches the hooks and the ctrl-g editor was established by the first
-research aspect run (`aspects/pane-id-reach/findings.md` in the task notes).
-
-**A subtask worked now is a tab too.** `hwt subtask` is the one way to split
-work out — `/spawn` recorded ownership in `subtasks.json` but wrote no issue,
-`/subtask` wrote an issue but recorded no ownership, and both are now
-`/subtask` on top of it. The `subtasks.json` entry carries `tab`: `true` when
-the subtask is worked now, as a tab of the parent's session (`hcdev tab
-<name>`, which also sets it), `false` when it is postponed on its own card.
-The subtask is still a whole task — `task.json`, card, PR — so nothing that
-reads tasks changed; hdash adds `tab`/`postponed` and the child's badge to the
-parent's subtask line, and a click on a tab subtask opens its tab.
+research aspect run (`aspects/pane-id-reach/findings.md` in the
+`llm_workflow/task_aspects` notes).
 
 **The tabs outlive the session and the checkout.** `hcdev wt` starting a new
-session renders a layout with the task's tab first and one tab per research
-aspect that is not closed and per `tab: true` subtask, each whose worktree is
-checked out — the zellij session is scratch like the worktree, and `hcdev
-close`, a reboot or a second machine would otherwise lose which tabs a task
-had. `hwt rm` removes the task's aspect worktrees before its own (a dirty one
-stops it, unless `-f`) and keeps their state; `hwt restore` re-creates every
-one not closed, also for a task already present. `hcdev close` sweeps the
-processes under the task's aspect root as well as its worktree. `hwt done`
-does not touch aspects, because it does not touch the task's own worktree
-either. Subtasks are tasks of their own and are not cascaded; `hwt sync`
-never sees `~/fun_aspects`, so research scratch is never wip-committed or
-pushed.
+session renders a layout with the task's tab first and one tab per aspect
+that is not closed and whose worktree is checked out — the zellij session is
+scratch like the worktree, and `hcdev close`, a reboot or a second machine
+would otherwise lose which tabs a task had. `hwt rm` removes the task's aspect
+worktrees before its own (a dirty one stops it, unless `-f`) and keeps their
+state; `hwt restore` re-creates every started one not closed, also for a task
+already present, and leaves an `open` one for `hwt aspect start`. `hcdev
+close` sweeps the processes under the task's aspect root as well as its
+worktree. `hwt sync` never sees `~/fun_aspects`, so aspect scratch is never
+wip-committed or pushed.
 
 ## Opening a session from a dashboard: two things that kill the terminal
 
@@ -1358,8 +1376,8 @@ text-decidable rules before it files anything.
 
 **The rules are in the always-loaded file on purpose.** That file is symlinked to
 `~/.claude-hobby/CLAUDE.md`, so it governs every hobby session in every repo,
-including the cases that never invoke a skill: a task proposed mid-conversation, a
-`/subtask` split, an issue typed by hand. A skill is opt-in, and opt-in enforcement
+including the cases that never invoke a skill: a task proposed mid-conversation, an
+`/aspect` split, an issue typed by hand. A skill is opt-in, and opt-in enforcement
 would have covered only the one case that was already being done deliberately.
 
 So the split is: `CLAUDE.md` holds the rules, `skills/task-split/skill.md` holds
@@ -1375,15 +1393,14 @@ would make both of them mine to fix afterwards rather than mine to make.
 
 `/task:build` applies them too, in its `assess-split` phase — the one-time
 question of whether this task is really one task, asked before any planning and
-ending at a hard gate. The two tiers do not overlap: a **subtask** is a separate
-deliverable with its own worktree, branch, PR and session, and everything below
-that floor is one pass of the pipeline on one branch. A subtask is cut from the
-default branch, never from the parent's, so its PR holds only its own work;
-what the parent already committed reaches it as whole commits (`hwt subtask
---take`), with the parent rebased onto the subtask's branch so each commit lands
-in exactly one PR. That is what lets a split happen after work has started,
-where the gate used to refuse. Depth is bounded at one by `is_subtask`
-in the seeded state file rather than by asking the model to remember. Most tasks
+ending at a hard gate. A piece it cuts off is an **aspect** of this task — a
+separate branch and PR, worked in a tab now or later — or a **task** for later,
+filed with `/issue-create`; everything below that floor is one pass of the
+pipeline on one branch. Commits never move between branches, so a branch that
+already holds work is not split at the gate, and work found later is added
+with `/aspect`. A code aspect runs the same pipeline with `is_aspect` set,
+which skips the split, so depth is bounded at one by the path rather than by
+asking the model to remember. Most tasks
 are one task, and the phase is expected to say so in a line.
 
 ## Installing
@@ -1444,7 +1461,7 @@ next prompt. Two pieces, and they only work as a pair:
 
 `<key>` is the sanitized `$ZELLIJ_SESSION_NAME-p$ZELLIJ_PANE_ID`, so ctrl-g in one
 pane opens that pane's conversation and not a neighbour's — the pane id is what
-separates a task's tab from its research aspects' tabs, which share the session
+separates a task's tab from its aspects' tabs, which share the session
 name. **The key derivation is duplicated in
 both scripts and must stay identical** — diverge and each silently uses a
 different file.

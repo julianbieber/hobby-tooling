@@ -5,30 +5,36 @@
 | Type         | skill                                                    |
 | Install path | `~/.claude-hobby/commands/aspect.md` → `/aspect`         |
 | Owner        | @julianbieber                                            |
-| Dependencies | nushell `hwt.nu` (`hwt aspect new`), `hcdev.nu` (`hcdev tab`), `haspect`, `/task:aspect` |
+| Dependencies | nushell `hwt.nu` (`hwt aspect new`, `hwt aspect start`), `hcdev.nu` (`hcdev tab`), `haspect`, `/task:aspect` |
 | Status       | experimental                                             |
 
 ## Description
 
-Run from a task's own Claude session. It turns a research question into a
-**research aspect** of that task: a worktree under
-`~/fun_aspects/<project>/<topic>/<task>/<name>` on branch `<task>@<name>`, a
-notes dir `notes/<project>/<topic>/<task>/aspects/<name>/` with `aspect.json`
-and a self-contained `brief.md`, and a tab in the task's zellij session whose
-Claude (`haspect` → `/task:aspect`) writes the answer to `findings.md`.
+Run from a task's own Claude session, or from one of its aspects' tabs. It
+adds an **aspect** to that task: a notes dir
+`notes/<project>/<topic>/<task>/aspects/<name>/` with `aspect.json` and a
+self-contained `brief.md`. Started — now, or later in the task — it gets a
+worktree under `~/fun_aspects/<project>/<topic>/<task>/<name>` on branch
+`<task>@<name>`, cut from the current tip of its base, and a tab in the task's
+zellij session whose Claude (`haspect` → `/task:aspect`) works it.
 
-The aspect appears on the task's hdash card under **Aspects** with its state.
+An aspect is `research` (done when `findings.md` answers it) or `code` (done
+when its PR to its base has merged and its done-when holds). Both kinds start
+the same way.
 
-## Why an aspect and not a subtask
+The aspect appears on the task's hdash card under **Aspects** with its kind
+and state; a click on one not yet started starts it.
 
-A subtask is a deliverable with its own card, session, branch and PR, and it
-can wait for weeks. A research question ends in a file the task reads, and it
-belongs to the task: it has no card, closes with it, and runs in its session
-as a tab. The research context — sources, spikes, dead ends — stays in the
-tab's conversation instead of this one.
+## Why an aspect and not a task
 
-## Refused under `auto: true`
+The split is about when, not what. A task is work planned for some later
+point, with a card of its own. An aspect is part of this task — run now, or
+added so it is not forgotten and run before the task is finished, which is
+why `hwt done` refuses a task with an unfinished aspect.
 
-An unattended `/task:auto` run is one session that a coordinator watches
-through one `build-task.json`. A tab it cannot see would hold a gate nobody
-answers.
+## Started from the current base
+
+An aspect may be added long before it is started, so its worktree is not cut
+when it is added: starting it fetches and cuts from the base's current tip, or
+rebases the branch onto it when it already exists. The PR goes to the same
+base.

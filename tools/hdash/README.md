@@ -23,7 +23,7 @@ re-runs itself in a fullscreen Alacritty window titled and classed `hdash`. Warn
 
 ### Mouse and keys
 
-Every button and chip works by click, as do the project rows, the PR, subtask and aspect lines and a
+Every button and chip works by click, as do the project rows, the PR and aspect lines and a
 card's body, which selects the card. The wheel scrolls the sidebar or the list under the
 pointer; the control under the pointer is drawn reversed.
 
@@ -31,7 +31,7 @@ pointer; the control under the pointer is drawn reversed.
 | --- | --- |
 | `q` / `Ctrl-C` | quit (`Ctrl-C` also while typing in the filter field) |
 | `↑` `ü` / `↓` `ä` | select the previous / next card; `PgUp` / `PgDn` by a screen |
-| `←` `ö` / `→` `#` | move along the selected card's buttons, then its todo toggle, PR toggle, PR lines, subtasks and aspects |
+| `←` `ö` / `→` `#` | move along the selected card's buttons, then its todo toggle, PR toggle, PR lines and aspects |
 | `Enter` / `Space` | press the focused control (a newly selected card starts on its primary button) |
 | `/` | focus the project filter field |
 
@@ -131,13 +131,14 @@ card line: **`▸ Todo (3/7)`** with the active step beside it, and **`waiting: 
 amber while a gate holds. Clicking the toggle (or focusing it and pressing `Enter`) expands
 the whole list — `✓` done, `▶` active, `○` pending, `✗` dropped. `/task:build` and
 `/task:auto` write both fields; a dropped item counts as done. It is the hobby half of the
-work `wt-overview`'s flow line, without work's flow aspects: a second PR here is a subtask,
-which the card already lists.
+work `wt-overview`'s flow line, without work's flow aspects: a second PR here is a code
+aspect, which the card already lists.
 
-A task with research aspects lists them under **`Aspects (n)`**, one line each:
-`⌕ <name> · <state> · <question>`, green once the state is `reported`. The state comes from
-`notes/…/<task>/aspects/<name>/aspect.json`. Clicking a line opens that aspect as a tab in
-the task's session (`hcdev tab`): with the session's window on screen the tab is opened
+A task with aspects lists them under **`Aspects (n)`**, one line each:
+`⌕ <name> · <kind> · <state> · <goal>`, green once the state is `reported` or `done`. Kind
+and state come from `notes/…/<task>/aspects/<name>/aspect.json`. Clicking a line starts the
+aspect when it is not checked out yet (`hwt aspect start`), then opens it as a tab in the
+task's session (`hcdev tab`): with the session's window on screen the tab is opened
 without a terminal and the window focused; otherwise a terminal starts or attaches the
 session with the tab.
 
@@ -152,16 +153,11 @@ lies in, else by its zellij session name (from `hcdev.nu`'s `hcdev-session-names
 newest live record per task decides. A session busy for 30 seconds whose `claude` process used
 under 60 CPU ticks over that window reads idle since its last hook event.
 
-A research aspect's Claude runs in a tab of its task's session and shares its session name, so
+An aspect's Claude runs in a tab of its task's session and shares its session name, so
 a record whose directory lies in an aspect worktree (`~/fun_aspects/…/<task>/<name>`) is
 matched to that aspect first: its badge sits on the aspect's line, not on the card header. For
 ordering, the chips and the header count a task's aspects count with it — an aspect waiting on
 you makes the task idle.
-
-A subtask worked as a tab of its parent's session shares the parent's session name too, and is
-matched by its own worktree like any task: the badge is on its own card, and repeated on the
-parent's subtask line, which reads `· tab` or `· postponed`. Clicking a tab subtask's line opens
-its tab (`hcdev tab`); clicking a postponed one scopes the list to its project.
 
 The sidebar lists the projects with a `notes/<project>/` directory — an upstream clone
 under `~/fun_repos` with no notes gets no row — plus any project an orphan worktree sits
@@ -203,7 +199,7 @@ Every read runs in the background, on a small job pool (git, `gh`, pull) or its 
 | model | — | the notes and worktree trees | rescan when their fingerprint moves (every 2 s) |
 
 The fingerprint is the mtimes of the project, topic and task dirs of both trees and of each
-notes task's `task.json`, `prs.json`, `subtasks.json`, `build-task.json`, `issue.md`,
+notes task's `task.json`, `prs.json`, `build-task.json`, `issue.md`,
 `tasks.json`, its `aspects/` dir and each aspect's `aspect.json`. A rescan is merged in: git status carries over by repo path and PR state by URL,
 so a background update never resets a card to loading, and nothing is redrawn when nothing
 changed. **Refresh** un-hides the cards and rescans in the background, keeping the cards
