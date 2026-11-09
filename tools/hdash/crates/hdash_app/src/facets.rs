@@ -352,6 +352,7 @@ mod tests {
         lifted.block = Some(Block {
             until: Some("1970-01-02".into()),
             reason: None,
+            ..Block::default()
         });
         let f = of(&lifted, None);
         assert!(f.matches(&Chip::State(StateChip::Ready)));

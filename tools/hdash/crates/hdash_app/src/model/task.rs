@@ -128,6 +128,13 @@ struct AspectFile {
     goal: Option<String>,
 }
 
+/// The live state of a PR a task's block waits on, delivered from the async query.
+pub struct BlockPrMsg {
+    pub id: TaskId,
+    pub url: String,
+    pub status: PrStatus,
+}
+
 /// A live PR status result, delivered from the async query over a channel. Mirrors [`GitMsg`].
 pub struct PrMsg {
     /// The task the PR belongs to.
@@ -188,7 +195,7 @@ pub struct Repo {
     pub git: GitInfo,
 }
 
-/// A block: the task is waiting on an action and/or until a day. Deserialized from the `blocked`
+/// A block: the task is waiting on an action, a day and/or a pull request. Deserialized from the `blocked`
 /// object in `task.json` (`null`/absent means not blocked).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Block {
@@ -198,6 +205,29 @@ pub struct Block {
     /// Human-readable reason the task is blocked, if set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr: Option<String>,
+    /// That PR's last-read `gh` state (`OPEN`, `MERGED`, `CLOSED`); `None` until first read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_state: Option<String>,
+}
+
+impl Block {
+    pub fn pr_merged(&self) -> bool {
+        self.pr_state.as_deref() == Some("MERGED")
+    }
+
+    pub fn pr_closed(&self) -> bool {
+        self.pr_state.as_deref() == Some("CLOSED")
+    }
+
+    /// The URL to ask GitHub about: the block's PR, unless its state can no longer change.
+    pub fn pr_to_check(&self) -> Option<&str> {
+        if self.pr_merged() || self.pr_closed() {
+            return None;
+        }
+        self.pr.as_deref()
+    }
 }
 
 /// What a coordinator's `tasks.json` says about its list, as counts per status, plus
@@ -355,12 +385,15 @@ impl Task {
         self.block.is_some()
     }
 
-    /// Whether the block has lifted: a block with an until-date that is today or
-    /// earlier. Indefinite blocks (no until-date) are never "ready".
+    /// Whether the block has lifted: the PR it waits on merged, or its until-date is today
+    /// or earlier. Any other block is not "ready".
     pub fn ready(&self) -> bool {
         let Some(block) = &self.block else {
             return false;
         };
+        if block.pr_merged() {
+            return true;
+        }
         let Some(until) = &block.until else {
             return false;
         };
@@ -1070,6 +1103,41 @@ pub fn adopt(id: &TaskId) -> std::io::Result<()> {
     write_meta_at(&meta_path(id), &TaskMeta::default())
 }
 
+/// Record what a PR's state has become on a task's block, leaving the rest of `task.json` as it
+/// is. Returns the block as now recorded, or `None` when `status` says nothing about the state,
+/// or the task no longer waits on `url`, or the recorded state already matches.
+pub fn record_block_pr_state(
+    id: &TaskId,
+    url: &str,
+    status: PrStatus,
+) -> std::io::Result<Option<Block>> {
+    record_block_pr_state_at(&meta_path(id), url, status)
+}
+
+fn record_block_pr_state_at(
+    path: &Path,
+    url: &str,
+    status: PrStatus,
+) -> std::io::Result<Option<Block>> {
+    let state = match status {
+        PrStatus::Merged => "MERGED",
+        PrStatus::Closed => "CLOSED",
+        PrStatus::Open | PrStatus::Draft => "OPEN",
+        PrStatus::Unknown | PrStatus::Loading => return Ok(None),
+    };
+    let mut meta = read_meta_at(path);
+    let Some(block) = meta.blocked.as_mut() else {
+        return Ok(None);
+    };
+    if block.pr.as_deref() != Some(url) || block.pr_state.as_deref() == Some(state) {
+        return Ok(None);
+    }
+    block.pr_state = Some(state.to_owned());
+    let recorded = block.clone();
+    write_meta_at(path, &meta)?;
+    Ok(Some(recorded))
+}
+
 fn toggle_done_at(path: &Path) -> std::io::Result<bool> {
     let mut meta = read_meta_at(path);
     meta.done = !meta.done;
@@ -1086,6 +1154,77 @@ fn set_backlog_at(path: &Path, backlog: bool) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_merged_pr_lifts_the_block_and_a_closed_one_holds_it() {
+        let mut t = build_task(
+            TaskId {
+                project: "p".into(),
+                topic: "t".into(),
+                name: "pr-block".into(),
+            },
+            true,
+            false,
+            Some(Block {
+                pr: Some("u".into()),
+                ..Block::default()
+            }),
+        );
+        assert!(t.blocked() && !t.ready());
+        t.block.as_mut().unwrap().pr_state = Some("CLOSED".into());
+        assert!(t.blocked() && !t.ready());
+        t.block.as_mut().unwrap().pr_state = Some("MERGED".into());
+        assert!(t.ready());
+    }
+
+    #[test]
+    fn only_a_pr_that_can_still_change_is_checked() {
+        let block = |state: Option<&str>| Block {
+            pr: Some("u".into()),
+            pr_state: state.map(str::to_owned),
+            ..Block::default()
+        };
+        assert_eq!(block(None).pr_to_check(), Some("u"));
+        assert_eq!(block(Some("OPEN")).pr_to_check(), Some("u"));
+        assert_eq!(block(Some("MERGED")).pr_to_check(), None);
+        assert_eq!(block(Some("CLOSED")).pr_to_check(), None);
+        assert_eq!(Block::default().pr_to_check(), None);
+    }
+
+    #[test]
+    fn recording_a_block_pr_state_keeps_the_rest_of_task_json() {
+        let dir = std::env::temp_dir().join(format!("hdash_block_pr_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("task.json");
+        std::fs::write(
+            &path,
+            r#"{"done":false,"blocked":{"reason":"r","pr":"u","pr_state":"OPEN"},"backlog":true}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            record_block_pr_state_at(&path, "u", PrStatus::Open).unwrap(),
+            None
+        );
+        assert_eq!(
+            record_block_pr_state_at(&path, "other", PrStatus::Merged).unwrap(),
+            None
+        );
+        assert_eq!(
+            record_block_pr_state_at(&path, "u", PrStatus::Unknown).unwrap(),
+            None
+        );
+        let recorded = record_block_pr_state_at(&path, "u", PrStatus::Merged)
+            .unwrap()
+            .unwrap();
+        assert!(recorded.pr_merged());
+
+        let meta = read_meta_at(&path);
+        assert_eq!(meta.blocked.unwrap().reason.as_deref(), Some("r"));
+        assert_eq!(meta.backlog, Some(true));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     // Pins how a task's aspects are read: sorted by name, kind, state and goal from aspect.json,
     // an empty goal dropped, a missing kind read as research and a missing state as open, and a

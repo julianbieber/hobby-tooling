@@ -53,9 +53,9 @@ export def main [] {
     print "  hwt restore <task>                             Re-create a removed worktree"
     print "  hwt forget <task> [-a]                         Purge task metadata (-a: whole notes dir)"
     print "  hwt done [task] / undone [task]                Mark task done / active"
-    print "  hwt block [-u <date>] [-r <reason>]            Mark current task blocked"
-    print "  hwt unblock                                    Unblock the current task"
-    print "  hwt blocked                                    List blocked + ready tasks"
+    print "  hwt block [-u <date>] [-r <reason>] [--pr <url>] [--task <t>] [-p <proj>]  Mark a task blocked"
+    print "  hwt unblock [--task <t>] [-p <proj>]           Unblock a task"
+    print "  hwt blocked                                    List blocked + ready tasks, re-reading open PRs"
     print "  hwt prune                                      Clean stale worktree references"
     print "  hwt refresh [-n]                               Fetch/pull default branch on all repos"
     print "  hwt claude <task>                              Start Claude (hobby account) in a worktree"
@@ -96,7 +96,7 @@ def ensure-notes-dir [project: string, topic: string, task: string] {
 
 # --- task.json metadata -----------------------------------------------------
 # A task's metadata lives at notes/<project>/<topic>/<task>/task.json:
-#   { done: bool, blocked: {until?, reason?}|null, backlog?: bool }
+#   { done: bool, blocked: {until?, reason?, pr?, pr_state?}|null, backlog?: bool }
 # It outlives the worktree, so done/blocked state survives `hwt rm` and lets
 # `hwt restore` re-create the checkout. Tracked in the notes repo, not gitignored.
 #
@@ -188,9 +188,26 @@ def task-block-info [task_path: path] {
     if $blocked == null { return null }
     let until = ($blocked.until? | default null)
     let reason = ($blocked.reason? | default null)
+    let pr = ($blocked.pr? | default null)
+    let pr_state = ($blocked.pr_state? | default null)
     let today = (date now | format date "%Y-%m-%d")
-    let ready = (($until | is-not-empty) and ($today >= $until))
-    { until: $until, reason: $reason, ready: $ready }
+    let ready = ($pr_state == "MERGED") or (($until | is-not-empty) and ($today >= $until))
+    { until: $until, reason: $reason, pr: $pr, pr_state: $pr_state, ready: $ready }
+}
+
+def pr-state [url: string] {
+    let out = (do -i { ^gh pr view $url --json state -q .state } | complete)
+    if $out.exit_code == 0 { $out.stdout | str trim } else { null }
+}
+
+def refresh-block-pr [t: record] {
+    let blocked = (read-task-meta $t.project $t.topic $t.task).blocked
+    if $blocked == null or ($blocked.pr? | default null) == null { return }
+    if ($blocked.pr_state? | default null) in ["MERGED" "CLOSED"] { return }
+    let state = (pr-state $blocked.pr)
+    if $state != null and $state != ($blocked.pr_state? | default null) {
+        meta-set-blocked $t.project $t.topic $t.task ($blocked | upsert pr_state $state)
+    }
 }
 
 # State label for a task: "done" | "ready" | "blocked" | "active".
@@ -929,14 +946,20 @@ export def "hwt aspect list" [
     if not ($dir | path exists) { return [] }
     ls $dir | where type == dir | get name | path basename | sort | each {|name|
         let meta = (try { open --raw (aspect-meta-path $parent $name) | from json } catch { {state: "unreadable"} })
+        let state = ($meta.state? | default "open")
+        let pr = ($meta.pr? | default null)
         {
             name: $name
             kind: ($meta.kind? | default "research")
-            state: ($meta.state? | default "open")
+            state: $state
             goal: ($meta.goal? | default "")
             base: ($meta.base? | default null)
             created: ($meta.created? | default "")
             present: ((hcdev-aspect-worktree $parent.project $parent.topic $parent.task $name) | path exists)
+            outcome: ($meta.outcome? | default "")
+            open_items: ($meta.open_items? | default [])
+            pr: $pr
+            pr_state: (if $state == "pr" and $pr != null { pr-state $pr } else { null })
         }
     }
 }
@@ -1328,41 +1351,57 @@ export def "hwt undone" [
     print $"Marked active: ($found.project)/($found.topic)/($found.task)"
 }
 
-# Mark the current task blocked. --until is the date the block lifts, --reason
-# what it is waiting on; both optional.
+# Mark a task blocked, the current directory's unless --task names one. --until
+# is the date the block lifts, --reason what it is waiting on, --pr a pull request
+# it is waiting on; all optional. A merged PR lifts the block as a passed date
+# does. A closed one holds it, since nothing will land. Replaces any earlier
+# block on the task. Errors when the task cannot be found.
 export def "hwt block" [
     --until (-u): string    # YYYY-MM-DD the block lifts
     --reason (-r): string   # Why it's blocked
+    --pr: string            # URL of the PR it waits on
+    --task: string@task-completions               # Task (defaults to cwd's task)
+    --project (-p): string@project-completions    # Disambiguate across projects
 ] {
-    let found = task-from-cwd
+    let found = resolve-task-arg $task $project
     if $found == null {
-        error make { msg: $"Not in a task directory \(($WORKTREE_BASE)/<project>/<topic>/<task>/...\)" }
+        error make { msg: $"Task '($task)' not found" }
     }
     mut blocked = {}
     if ($until | is-not-empty) { $blocked = ($blocked | upsert until $until) }
     if ($reason | is-not-empty) { $blocked = ($blocked | upsert reason $reason) }
+    if ($pr | is-not-empty) {
+        $blocked = ($blocked | upsert pr $pr)
+        let state = (pr-state $pr)
+        if $state != null { $blocked = ($blocked | upsert pr_state $state) }
+    }
     meta-set-blocked $found.project $found.topic $found.task $blocked
     let until_msg = if ($until | is-not-empty) { $" until ($until)" } else { "" }
     print $"Blocked: ($found.project)/($found.topic)/($found.task)($until_msg)"
 }
 
-# Unblock the current task
-export def "hwt unblock" [] {
-    let found = task-from-cwd
+# Unblock a task, the current directory's unless --task names one.
+export def "hwt unblock" [
+    --task: string@task-completions               # Task (defaults to cwd's task)
+    --project (-p): string@project-completions    # Disambiguate across projects
+] {
+    let found = resolve-task-arg $task $project
     if $found == null {
-        error make { msg: $"Not in a task directory \(($WORKTREE_BASE)/<project>/<topic>/<task>/...\)" }
+        error make { msg: $"Task '($task)' not found" }
     }
     meta-set-blocked $found.project $found.topic $found.task null
     print $"Unblocked: ($found.project)/($found.topic)/($found.task)"
 }
 
 # List blocked + ready (block-lifted) tasks. Ready sorts first — a daily
-# "what's waiting on me / what just freed up" view.
+# "what's waiting on me / what just freed up" view. Asks GitHub about each PR a
+# block waits on, unless it has merged or closed, and records what changed.
 export def "hwt blocked" [] {
     ensure-worktree-dir
     known-tasks
     | each {|t|
         if $t.done { return null }
+        refresh-block-pr $t
         let block = (task-block-info $t.path)
         if $block == null { return null }
         {
@@ -1372,6 +1411,8 @@ export def "hwt blocked" [] {
             state: (if $block.ready { "ready" } else { "blocked" })
             until: $block.until
             reason: $block.reason
+            pr: $block.pr
+            pr_state: $block.pr_state
         }
     }
     | compact
@@ -1523,12 +1564,13 @@ export def "hwt tree" [] {
                 let suffix = if $done {
                     "  (done)"
                 } else if ($block != null) and $block.ready {
-                    let u = if ($block.until | is-not-empty) { $" \(block lifted ($block.until)\)" } else { "" }
+                    let u = if ($block.pr_state == "MERGED") { $" \(merged ($block.pr)\)" } else if ($block.until | is-not-empty) { $" \(block lifted ($block.until)\)" } else { "" }
                     $"  ⚑ READY($u)"
                 } else if ($block != null) {
                     let u = if ($block.until | is-not-empty) { $" until ($block.until)" } else { "" }
                     let r = if ($block.reason | is-not-empty) { $": ($block.reason)" } else { "" }
-                    $"  ⏸ blocked($u)($r)"
+                    let p = if ($block.pr | is-not-empty) { $" on ($block.pr)" } else { "" }
+                    $"  ⏸ blocked($u)($p)($r)"
                 } else if not $row.present {
                     "  (removed)"
                 } else {

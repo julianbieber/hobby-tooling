@@ -567,16 +567,27 @@ impl DashView {
         if task.done {
             header.push(badge("done", DONE));
         } else if task.ready() {
-            let until = task
+            let lifted_by = task
                 .block
                 .as_ref()
-                .and_then(|b| b.until.clone())
+                .map(|b| {
+                    if b.pr_merged() {
+                        "PR merged".to_owned()
+                    } else {
+                        b.until.clone().unwrap_or_default()
+                    }
+                })
                 .unwrap_or_default();
-            header.push(badge(&format!("ready · {until}"), AMBER));
+            header.push(badge(&format!("ready · {lifted_by}"), AMBER));
         } else if let Some(block) = &task.block {
-            let label = match &block.until {
-                Some(until) => format!("blocked · until {until}"),
-                None => "blocked".to_owned(),
+            let label = match (&block.pr, &block.until) {
+                (Some(_), _) if block.pr_closed() => "blocked · PR closed".to_owned(),
+                (Some(pr), _) => {
+                    let number = pr.rsplit('/').next().unwrap_or_default();
+                    format!("blocked · PR #{}", clean(number))
+                }
+                (None, Some(until)) => format!("blocked · until {until}"),
+                (None, None) => "blocked".to_owned(),
             };
             header.push(badge(&label, DIM));
         }

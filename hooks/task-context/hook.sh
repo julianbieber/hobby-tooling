@@ -103,8 +103,11 @@ CTX="${CTX}This directory is the git worktree itself (single-repo task); the mai
 META="$NOTES_DIR/task.json"
 if [ -f "$META" ]; then
   done_v=$(jaq -r '.done // false' "$META" 2>/dev/null || echo false)
-  blocked_v=$(jaq -r 'if (.blocked // null) == null then "no" else ((.blocked.reason // "yes") + (if .blocked.until then " (until " + .blocked.until + ")" else "" end)) end' "$META" 2>/dev/null || echo "no")
+  blocked_v=$(jaq -r 'if (.blocked // null) == null then "no" else ((.blocked.reason // "yes") + (if .blocked.until then " (until " + .blocked.until + ")" else "" end) + (if .blocked.pr then " (PR " + .blocked.pr + " " + (.blocked.pr_state // "state unread") + ")" else "" end)) end' "$META" 2>/dev/null || echo "no")
   CTX="${CTX}Task status: done=${done_v}, blocked=${blocked_v}"$'\n'
+  if [ -d "$NOTES_DIR/aspects" ]; then
+    CTX="${CTX}This task has aspects. Their state is \`aspect.json\` under \`aspects/\` in the notes dir: answer a status question by running \`hwt aspect list\`, never from what this session saw earlier."$'\n'
+  fi
 else
   # No task.json: this worktree is an orphan. `hwt orphans` lists them, hdash offers Adopt.
   CTX="${CTX}This worktree has no \`task.json\` in the notes repo, so it is not a recorded task (an orphan). \`hwt orphans\` lists them; hdash offers **Adopt**."$'\n'

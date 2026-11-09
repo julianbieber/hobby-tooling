@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The Claude pane of an aspect's tab, the same for every kind: start /task:aspect
-# while the aspect is still `open`, and resume the aspect's last conversation
-# after that.
+# while the aspect is still `open`, resume the aspect's last conversation running
+# /task:aspect while it is unfinished, so a respawned tab picks up what changed
+# while it was gone, and resume it idle once it is finished.
 #
 # Runs from the aspect worktree (~/fun_aspects/<project>/<topic>/<task>/<name>)
 # and reads aspect.json in notes/<project>/<topic>/<task>/aspects/<name>/.
@@ -34,7 +35,8 @@ if [ -n "${ZELLIJ_PANE_ID:-}" ]; then
 fi
 
 STATE=$(jaq -r '.state // "open"' "$DIR/aspect.json" 2>/dev/null || echo open)
-if [ "$STATE" = open ]; then
-  exec chobby "/task:aspect"
-fi
-exec chobby --continue
+case "$STATE" in
+  open) exec chobby "/task:aspect" ;;
+  reported | done | closed) exec chobby --continue ;;
+  *) exec chobby --continue "/task:aspect" ;;
+esac

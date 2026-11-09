@@ -72,7 +72,9 @@ task of its own: `/issue-create`, not this.
    never invented>
 
    ## Already known
-   <what this session has established or ruled out, with file:line or links>
+   <what this session has established or ruled out. Every line names the command
+    or file that established it and says what was read, so a reader can tell
+    "not in Cargo.toml" from "not available">
 
    ## Where to look
    <files in the repo, crates, docs — the starting points, not a plan>
