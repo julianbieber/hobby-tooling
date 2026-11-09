@@ -563,8 +563,9 @@ branches (`## no-commit-picking`), which is why `hwt subtask --take` has no
 successor.
 
 **Every kind starts the same way** (`## aspect-start`): the tab's Claude pane
-runs `haspect`, which starts `/task:aspect` while the aspect is `open` and
-resumes the tab's conversation after that. `/task:aspect` reads the kind: a
+runs `haspect`, which starts `/task:aspect` while the aspect is `open`, resumes
+the tab's conversation with `/task:aspect` while it is unfinished, and resumes
+it idle once it is finished. `/task:aspect` reads the kind: a
 research aspect is answered into `findings.md`; a code aspect runs the full
 `/task:build` pipeline in its worktree (`## code-aspect-pipeline`), with its
 state file, plan and journal in the aspect's notes dir, the task's
@@ -615,6 +616,43 @@ already present, and leaves an `open` one for `hwt aspect start`. `hcdev
 close` sweeps the processes under the task's aspect root as well as its
 worktree. `hwt sync` never sees `~/fun_aspects`, so aspect scratch is never
 wip-committed or pushed.
+
+### A split task's state is in `aspect.json`, and a message says when to read it
+
+These decisions are mine, recorded in
+`notes/hobby-tooling/skills/a_split_tasks_notes_and_follow_ups_go/business-context.md`.
+After a split, the parent's `issue.md`, `implementation.md` and journal went on
+listing merged work as open, and the parent answered "is this done?" from what it
+saw when it started the aspects.
+
+**No aspect writes the task's notes** (`## who-writes-parent`,
+`## parent-issue-body`). `aspect.json` is the static place: `/task:aspect finish`
+adds `outcome` and `open_items` beside `state`. `hwt aspect list` reads them, and
+asks `gh` for the live state of a PR still at `pr`. An open item a task of its own
+covers carries that task in `issue`, which makes it done from this task's view
+(`## open-items-to-follow-up`).
+
+**The child messages the parent, and the parent closes itself**
+(`## who-writes-parent`, `## parent-done`). The message says only to read the
+record. The peer is found by name: a default session name starts with its
+directory's basename, its non-alphanumerics as `-`, which is why an aspect's
+session (`<aspect>-…`) cannot match its task's. A handed-off parent then runs
+`hwt done`, whose refusal means an aspect is still unfinished. No parent listed
+loses nothing: the record is on disk, and the task-context hook points any later
+session of that task at `hwt aspect list`, including after a compaction.
+
+**A respawn is what notices a merge nobody watched** (`## merge-without-session`).
+An unfinished aspect's tab starts as `--continue "/task:aspect"`, and
+`/task:aspect` reads a `pr`'s state once: merged goes to `/task:build journal`.
+
+**A follow-up waits on a PR through its block** (`## waits-on-meaning`):
+`blocked: {pr, pr_state}`, set with `hwt block --pr`. A merged PR is `ready`, the
+same as a passed date, so the card floats up and stops reading as waiting; a closed
+one holds, because nothing will land. `hdash` asks `gh` every five minutes and
+`hwt blocked` once per run, and neither asks about a `MERGED` or `CLOSED` state,
+which cannot change. A follow-up filed at GATE S has no PR yet, so its block starts
+as a `--reason` and it is named in the aspect's `blocks`; the aspect's `pr` phase
+turns that into `--pr`.
 
 ## Opening a session from a dashboard: two things that kill the terminal
 

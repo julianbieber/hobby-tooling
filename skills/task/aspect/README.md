@@ -25,6 +25,14 @@ works the aspect by its kind:
 
 `hwt aspect close` sets `closed`. hdash shows the state on the task's card.
 
+## How a finished aspect reaches its task
+
+`/task:aspect finish` records `outcome` and `open_items` in `aspect.json` and
+messages the task's session to read them. It never writes the task's notes, so
+there is one record of an aspect's state and nothing to fall behind it. A respawned
+tab runs this skill again while the aspect is unfinished, which is how a PR that
+merged while no session watched it gets noticed.
+
 ## Why the findings have a fixed shape
 
 The reader is the task's own session, or me deciding from the card. The answer

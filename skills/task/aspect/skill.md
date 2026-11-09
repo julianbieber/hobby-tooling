@@ -1,6 +1,6 @@
 ---
 description: Work one aspect of a task in its own tab — a research aspect answered into findings.md, a code aspect built through /task:build to a merged PR against its base
-allowed-tools: Skill, Bash(pwd:*), Bash(date:*), Bash(ls:*), Bash(rg:*), Bash(git status:*), Bash(git log:*), Bash(git diff:*), Bash(cargo:*), Bash(hresearch:*), WebSearch, Read, Write, Edit
+allowed-tools: Skill, ListAgents, SendMessage, Bash(pwd:*), Bash(date:*), Bash(ls:*), Bash(rg:*), Bash(git status:*), Bash(git log:*), Bash(git diff:*), Bash(gh pr view:*), Bash(nu -c:*), Bash(cargo:*), Bash(hresearch:*), WebSearch, Read, Write, Edit
 ---
 
 You are the Claude of one **aspect**: a piece of a task's own work, worked in
@@ -14,7 +14,11 @@ first two steps for every kind:
   against the aspect's base that has merged (step 6).
 
 Change nothing outside the aspect's worktree and notes dir, and the task's
-`business-context.md`.
+`business-context.md`. **`aspect.json` is the aspect's whole record**: the task
+reads its outcome and open items there, so this session never writes the task's
+`issue.md`, `implementation.md` or journal.
+
+The argument `finish` goes from step 1 straight to step 7.
 
 ## 1. Resolve
 
@@ -31,7 +35,14 @@ with "/task:aspect runs in an aspect worktree; open it with `hcdev tab`".
 `business-context.md` in the task notes when they exist. The task's recorded
 context is this aspect's too — do not ask me again what is written there.
 
-Set `"state": "active"` in `aspect.json` (Edit, keep every other key).
+An `open` aspect becomes `"state": "active"` in `aspect.json` (Edit, keep every
+other key). Any other state is a resume, usually a respawned tab, and is left
+as it is:
+
+- `pr` → `gh pr view <pr> --json state -q .state`. `MERGED` →
+  `/task:build journal`. `CLOSED` → say the PR was closed unmerged, and stop for
+  my decision. `OPEN` → step 6.
+- `active` → carry on from what the notes and the worktree show.
 
 If the brief has no answerable question or no describable change, ask me for
 it — once, in one line.
@@ -87,16 +98,35 @@ verify goes under Open questions.
 
 ## 5. Finish
 
-Set `"state": "reported"` in `aspect.json`. Print the Answer paragraph and the
-path to `findings.md`, and stop. Follow-up questions from me in this tab
-continue the same aspect: update `findings.md`, keep the state `reported`.
+Run step 7. Print the Answer paragraph and the path to `findings.md`, and stop.
+Follow-up questions from me in this tab continue the same aspect: update
+`findings.md`, keep the state `reported`, and do not message the task again.
 
 ## 6. A code aspect
 
 Run `/task:build` (Skill tool) with no argument, in this worktree. It resolves
 the aspect from `pwd`, takes `brief.md` as its brief and keeps its own state in
 the aspect notes dir; its gates are mine as in any task. It sets
-`aspect.json` `state` to `pr` with the PR's URL once the PR is open, and
-`done` once it has merged. Do not re-do what it owns.
+`aspect.json` `state` to `pr` with the PR's URL once the PR is open, and runs
+`/task:aspect finish` once it has merged. Do not re-do what it owns.
+
+## 7. Report to the task
+
+1. **Record it** in `aspect.json` (Edit, keep every other key):
+   - `state`: `done` for a code aspect, `reported` for a research one;
+   - `outcome`: one paragraph on what came out, with the PR for code;
+   - `open_items`: every item in `findings.md`'s Open questions, or the `## Open`
+     of this aspect's newest journal entry, as `{"text": "...", "issue": null}`;
+     `[]` when there are none. `issue` is `<project>/<topic>/<task>` once a task
+     of its own covers the item, which makes it done from this task's view:
+     whoever files or refreshes that issue sets it.
+2. **Lift a research aspect's waits:** for each `<project>/<task>` in `blocks`,
+   `nu -c "use ~/.config/nushell/hwt.nu *; hwt unblock --task <task> --project <project>"`.
+   A code aspect's waits are on its PR, and lift when that merges.
+3. **Tell the task.** `ListAgents`, and for each session whose name begins with
+   TASK, its non-alphanumeric characters written as `-`, `SendMessage`:
+   `Aspect NAME of TASK finished: read aspects/NAME/aspect.json. /task:build handed-off says what to do.`
+   With no such session, say so in one line: the record is on disk, and the
+   task's next session reads it.
 
 Never commit to the notes repo. Never touch the task's own worktree.

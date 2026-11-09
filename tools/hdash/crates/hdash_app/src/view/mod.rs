@@ -21,8 +21,8 @@ use crate::hits::Hits;
 use crate::model::item::{Item, Model, UiState, in_pr_scope, item_visible, merge, scan};
 use crate::model::pull::{PullMsg, PullOutcome, pull};
 use crate::model::task::{
-    CachedPr, GitMsg, PrMsg, PrStatus, Task, TaskId, adopt, clear_pr_cache, read_git,
-    read_pr_cache, read_pr_status, set_backlog, toggle_done, write_pr_cache,
+    BlockPrMsg, CachedPr, GitMsg, PrMsg, PrStatus, Task, TaskId, adopt, clear_pr_cache, read_git,
+    read_pr_cache, read_pr_status, record_block_pr_state, set_backlog, toggle_done, write_pr_cache,
 };
 use crate::refresh::{Landed, RefreshPoller};
 use crate::session::{SessionReader, SessionState, Sessions};
@@ -118,6 +118,9 @@ pub struct DashView {
     pull_rx: Receiver<PullMsg>,
     pulls: HashMap<String, Pull>,
     block_every: Interval,
+    block_pr_every: Interval,
+    block_pr_tx: Sender<BlockPrMsg>,
+    block_pr_rx: Receiver<BlockPrMsg>,
     lifted: HashSet<TaskId>,
     scope_key: Option<ScopeKey>,
     model_dirty: bool,
@@ -158,6 +161,7 @@ impl DashView {
     pub fn with_model(model: Model) -> Self {
         let (git_tx, git_rx) = channel();
         let (pr_tx, pr_rx) = channel();
+        let (block_pr_tx, block_pr_rx) = channel();
         let (pull_tx, pull_rx) = channel();
         Self {
             model,
@@ -180,6 +184,9 @@ impl DashView {
             pull_rx,
             pulls: HashMap::new(),
             block_every: Interval::new(Duration::from_secs(BLOCK_POLL_SECS), false),
+            block_pr_every: Interval::new(Duration::from_secs(PR_POLL_MINS * 60), true),
+            block_pr_tx,
+            block_pr_rx,
             lifted: HashSet::new(),
             scope_key: None,
             model_dirty: false,
@@ -224,6 +231,7 @@ impl DashView {
         let mut changed = std::mem::take(&mut self.model_dirty);
         changed |= self.drain_git();
         changed |= self.drain_pr();
+        changed |= self.drain_block_prs();
         changed |= self.drain_pulls();
         changed |= self.expire_pull_lines();
         changed |= self.poll_background(delta);
@@ -274,6 +282,9 @@ impl DashView {
         if self.pr_every.tick(delta) {
             self.forget_changeable_prs();
             changed = true;
+        }
+        if self.block_pr_every.tick(delta) {
+            self.dispatch_block_prs();
         }
         if self.block_every.tick(delta) {
             let now: HashSet<TaskId> = self
@@ -340,6 +351,50 @@ impl DashView {
             {
                 repo.git = msg.info;
                 changed = true;
+            }
+        }
+        changed
+    }
+
+    fn dispatch_block_prs(&self) {
+        for task in self.model.tasks.iter().filter(|t| !t.done) {
+            let Some(url) = task
+                .block
+                .as_ref()
+                .and_then(|b| b.pr_to_check())
+                .map(str::to_owned)
+            else {
+                continue;
+            };
+            let id = task.id.clone();
+            let reply = Reply::new(
+                self.block_pr_tx.clone(),
+                BlockPrMsg {
+                    id: id.clone(),
+                    url: url.clone(),
+                    status: PrStatus::Unknown,
+                },
+            );
+            spawn_job(move || {
+                let (status, _, _) = read_pr_status(&url);
+                reply.send(BlockPrMsg { id, url, status });
+            });
+        }
+    }
+
+    fn drain_block_prs(&mut self) -> bool {
+        let msgs: Vec<BlockPrMsg> = self.block_pr_rx.try_iter().take(DRAIN_CAP).collect();
+        let mut changed = false;
+        for msg in msgs {
+            match record_block_pr_state(&msg.id, &msg.url, msg.status) {
+                Ok(Some(block)) => {
+                    if let Some(task) = self.model.task_mut(&msg.id) {
+                        task.block = Some(block);
+                        changed = true;
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => warn!("recording {}'s block PR state: {e}", msg.id.name),
             }
         }
         changed

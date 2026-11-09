@@ -77,6 +77,7 @@ does. `~/fun_worktrees` is not enumerated: it answers `present`, and nothing els
 | a task is checked out | `~/fun_worktrees/P/T/TASK` | `present` — Active vs Removed / Not started |
 | a task was ever started | a branch named after it in `~/fun_repos/P` | Removed vs Not started |
 | a task is done / blocked | `task.json` | the badges and the sort rank |
+| a blocking PR's state | `gh`, every 5 minutes until it merges or closes, written to `task.json` | `ready · PR merged`, `blocked · PR closed` |
 | an item is backlogged | `task.json` | which list mode shows it |
 | what the work *is* | `notes/P/T/TASK/issue.md` | the card's title |
 

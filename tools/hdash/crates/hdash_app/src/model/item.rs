@@ -408,6 +408,7 @@ mod tests {
         ready.block = Some(Block {
             until: Some("2020-01-01".into()),
             reason: None,
+            ..Block::default()
         });
         let mut in_review = task("p", "t", "z-in-review");
         in_review.prs = vec![Pr {
@@ -424,6 +425,7 @@ mod tests {
         blocked.block = Some(Block {
             until: Some("2999-01-01".into()),
             reason: None,
+            ..Block::default()
         });
         let mut unstarted = task("p", "t", "z-unstarted");
         unstarted.present = false;

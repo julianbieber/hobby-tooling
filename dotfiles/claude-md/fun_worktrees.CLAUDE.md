@@ -54,6 +54,7 @@ hwt new <task> -p <project> -t <topic>   create a task worktree + notes dir
 hwt go <task>                            cd to it (fuzzy, searches all projects)
 hwt tree                                 project -> topic -> task overview
 hwt done | block | unblock               task state
+hwt block --pr <url> [--task <t> -p <p>] wait on a PR; merging it lifts the block
 hwt orphans                              worktrees with no task.json
 hwt rm <task>                            remove the worktree and its aspects', keep the notes
 hwt restore <task>                       re-create a removed worktree and its started aspects'

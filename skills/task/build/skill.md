@@ -158,10 +158,18 @@ represents the implemented change, never a plan.
    branch → `done`.
 
    **`phase: handed-off` is terminal.** This task's work lives in its aspects
-   now. Print `hwt aspect list` with `hwt aspect start <name>` beside each
-   still `open`, remind me that a code aspect runs its own `/task:build` and
-   that `hwt done` refuses this task until every aspect is finished, and end
-   the turn. Do not plan, implement, or open a PR here — this task owns no
+   now. Run `hwt aspect list`, and print each aspect's state, live PR state and
+   outcome, its `open_items` with no `issue`, and `hwt aspect start <name>`
+   beside each still `open`. Then run `hwt done`: it refuses while an aspect is
+   unfinished, which only means the task is still waiting, and it needs no
+   confirmation from me because the aspects are the whole of this task. End the
+   turn. Do not plan, implement, or open a PR here — this task owns no code.
+
+   **The same applies whenever this session is asked.** A status question and a
+   message from an aspect are both answered by running `hwt aspect list` again,
+   never from what this session saw earlier. A message is a prompt to re-read
+   the record, not a report to pass on. In any other phase, report what it says
+   and carry on: `hwt done` is only this skill's to run when the task owns no
    code.
 
 5. **Flags:** `--no-hmml` skips the `delta` phase, for a change I can read
@@ -309,6 +317,10 @@ Only after I approve the decomposition. Per approved aspect, in order:
    conversation.
 
 Per approved task: run `/issue-create` for it, naming this task in its context.
+One that waits on an aspect gets a block, not a sentence in its body:
+`nu -c "use ~/.config/nushell/hwt.nu *; hwt block --reason 'waits on aspect <name> of <this task>' --task <t> --project <p>"`,
+and `<p>/<t>` in that aspect's `blocks` list in `aspect.json`, so the aspect can
+hand it on.
 
 Then, once per task:
 
@@ -318,6 +330,8 @@ Then, once per task:
 3. Run `journal:write` once, recording the decomposition and *why* each cut fell
    where it did. The rejected candidates belong here too — that reasoning is the
    part that would otherwise be lost, and the aspects' journals will not have it.
+   Aspect status is not journal content: `## Current State` says to read
+   `hwt aspect list`, so it cannot go stale.
 4. Start the aspects worked now:
    `nu -c "use ~/.config/nushell/hwt.nu *; hwt aspect start <name>"` for each —
    it checks the aspect out from its base's current tip and opens its tab. A
@@ -329,8 +343,9 @@ Then, once per task:
    independently.
 
 **Only the aspects worked now are started here.** **This task implements
-nothing** — it owns no code, opens no PR, and does not poll its aspects. End
-your turn.
+nothing** — it owns no code, opens no PR, and does not poll its aspects: each
+one messages this session when it finishes (`/task:aspect` step 7). End your
+turn.
 
 ______________________________________________________________________
 
@@ -627,7 +642,8 @@ The `track-pr` hook records the PR to `prs.json`. If it did not fire, append the
 PR there yourself (create with `[]` first; never store the PR's live state).
 **In an aspect** the hook does not fire and nothing goes to `prs.json`: open
 the PR with `--base <the base>`, and set `aspect.json` `state` to `pr` and its
-`pr` to the URL (Edit, keep every other key).
+`pr` to the URL (Edit, keep every other key). Then, for each `<p>/<t>` in its
+`blocks`: `nu -c "use ~/.config/nushell/hwt.nu *; hwt block --pr <url> --task <t> --project <p>"`.
 Set `phase: ci` and continue.
 
 **Every change reaches the default branch through a PR.** Push to the default
@@ -661,13 +677,15 @@ and repair them; never hand me a red PR as finished.
 
 ## Phase `journal`
 
+**In an aspect**, wait for the merge first: `hcoord merged <pr url>`, Bash
+`timeout: 600000`, again on `timeout`. `blocked` → print the reason, set
+`waiting_on`, and stop; a respawned tab re-checks. An aspect's done-when was read
+at GATE 2, so the merge is what is left.
+
 Run `journal:write` — goal, what changed, evidence, open items.
 
-**In an aspect**, wait for the merge first: `hcoord merged <pr url>`, Bash
-`timeout: 600000`, again on `timeout`. `merged` → set `aspect.json` `state` to
-`done`. `blocked` → print the reason, set `waiting_on`, and stop; a resume
-re-checks. An aspect's done-when was read at GATE 2, so the merge is what is
-left.
+**In an aspect**, run `/task:aspect finish`: it records the outcome and open items
+in `aspect.json` and tells the task.
 
 Set `phase: done`.
 Print a one-line wrap-up: task, PR link if any, anything still open. End.

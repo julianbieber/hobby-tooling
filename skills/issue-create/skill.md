@@ -154,6 +154,11 @@ issue that holds several tasks. `/task-split` is the pass for that.
       any extra tags from the existing frontmatter. Never touch `task.json`, and
       never touch an existing `## Progress` section — that is `/issue-update`'s.
 
+   A task that waits on other work records it as a block, not a sentence in the
+   body, because a body cannot notice the work landing:
+   `nu -c "use ~/.config/nushell/hwt.nu *; hwt block --pr <url> --task <task> --project <project>"`,
+   or `--reason` when there is no PR yet.
+
    Leave `git add` / `commit` in the notes repo to me.
 
 8. **Report** the notes path and the title.
