@@ -505,7 +505,9 @@ only, config values, a mechanical rename — saying so in one line.
 Run `/hmml-extract --against <ref>`, with `<ref>` the merge base of the
 worktree and the default branch
 (`git merge-base HEAD "origin/$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)"`).
-It writes one `delta-<branch>.hmml` into the notes dir: the touched units'
+Nothing is committed yet, so the delta's header says `head: worktree` and its
+links point into the files on disk. It writes one `delta-<branch>.hmml` into
+the notes dir: the touched units'
 walks as the worktree leaves them, each changed step marked `+` / `-` / `~` and
 linked to the diff, the data and signatures the change touches, and its tests
 in summary, then lints it. Record its path as `hmml_delta`.

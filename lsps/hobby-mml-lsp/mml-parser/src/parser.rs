@@ -15,6 +15,9 @@ use crate::span::{Span, Spanned};
 pub const HEADER_KEYS: [&str; 5] = ["repo", "branch", "base", "head", "pr"];
 pub const REQUIRED_HEADER_KEYS: [&str; 4] = ["repo", "branch", "base", "head"];
 pub const ARROW: &str = " → ";
+/// The `head` value of a delta read off the checkout as it stands, before
+/// its change is committed.
+pub const WORKTREE: &str = "worktree";
 
 pub fn parse(src: &str) -> Document {
     let mut p = Parser {
@@ -155,11 +158,17 @@ impl Parser {
                 code::BAD_HEADER_VALUE,
                 format!("`{key}` takes a single token"),
             );
-        } else if (key == "base" || key == "head") && !is_commit_id(v) {
+        } else if key == "base" && !is_commit_id(v) {
             self.err(
                 vspan,
                 code::BAD_HEADER_VALUE,
-                format!("`{key}` must be a commit id of 7–40 hex digits"),
+                "`base` must be a commit id of 7–40 hex digits",
+            );
+        } else if key == "head" && !is_commit_id(v) && v != WORKTREE {
+            self.err(
+                vspan,
+                code::BAD_HEADER_VALUE,
+                format!("`head` must be a commit id of 7–40 hex digits, or `{WORKTREE}`"),
             );
         }
         self.doc.header.entries.push(HeaderEntry {

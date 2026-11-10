@@ -656,3 +656,12 @@ fn unknown_data_role() {
         "bad-struct",
     );
 }
+
+#[test]
+fn head_may_be_the_worktree() {
+    assert_eq!(
+        codes(&with("head: 2222222", "head: worktree")),
+        Vec::<&str>::new()
+    );
+    assert_code(&with("base: 1111111", "base: worktree"), "bad-header-value");
+}

@@ -281,8 +281,9 @@ Set `phase: delta` when `delta` is true, `comments` otherwise, and fall through.
 **Delta** — only when `delta` is true. `/hmml-extract --against <ref>`, with
 `<ref>` the merge base of the worktree and the default branch: it writes the
 units the diff touches as the worktree leaves them, `+` / `-` / `~` marking what
-the change did, as one `delta-<branch>.hmml` in the task's notes dir. Record its
-path as `hmml_delta`. It is derived,
+the change did, as one `delta-<branch>.hmml` in the task's notes dir, with
+`head: worktree` since nothing is committed until after the last gate. Record
+its path as `hmml_delta`. It is derived,
 never edited, and rerun after any later behaviour change (feedback, a repair).
 The play gate prints it; unattended, `hcoord wait`'s reader finds it in the
 notes. `phase: comments`.

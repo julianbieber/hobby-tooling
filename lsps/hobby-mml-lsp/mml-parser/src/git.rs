@@ -2,7 +2,8 @@
 //!
 //! The checkout is found from the delta's own path; every question about it
 //! is answered by shelling out to `git`. Answers about a commit never change,
-//! so [`GitCache`] keeps them for as long as it lives.
+//! so [`GitCache`] keeps them for as long as it lives; answers about the
+//! working tree (`head: worktree`) are asked afresh every time.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -11,7 +12,7 @@ use std::sync::Arc;
 
 use crate::ast::{Document, Side};
 use crate::diagnostic::{Diagnostic, code};
-use crate::parser::is_commit_id;
+use crate::parser::{WORKTREE, is_commit_id};
 
 #[derive(Default)]
 pub struct GitCache {
@@ -63,6 +64,9 @@ impl GitCache {
     }
 
     pub fn files_at(&mut self, dir: &Path, sha: &str) -> Option<Arc<Vec<String>>> {
+        if sha == WORKTREE {
+            return worktree_files(dir).map(Arc::new);
+        }
         let key = (dir.to_path_buf(), sha.to_owned());
         self.files
             .entry(key)
@@ -74,6 +78,13 @@ impl GitCache {
     }
 
     pub fn diff_files(&mut self, dir: &Path, base: &str, head: &str) -> Arc<Vec<String>> {
+        if head == WORKTREE {
+            let mut files: Vec<String> = git_text(dir, &["diff", "--name-only", base])
+                .map(|s| s.lines().map(str::to_owned).collect())
+                .unwrap_or_default();
+            files.extend(untracked_files(dir));
+            return Arc::new(files);
+        }
         let key = (dir.to_path_buf(), base.to_owned(), head.to_owned());
         self.diff
             .entry(key)
@@ -89,11 +100,31 @@ impl GitCache {
     }
 
     pub fn line_count(&mut self, dir: &Path, sha: &str, path: &str) -> Option<usize> {
+        if sha == WORKTREE {
+            return std::fs::read(dir.join(path)).ok().map(|b| count_lines(&b));
+        }
         let key = (dir.to_path_buf(), sha.to_owned(), path.to_owned());
         *self.lines.entry(key).or_insert_with(|| {
             git(dir, &["show", &format!("{sha}:{path}")]).map(|b| count_lines(&b))
         })
     }
+}
+
+fn untracked_files(dir: &Path) -> Vec<String> {
+    git_text(dir, &["ls-files", "--others", "--exclude-standard"])
+        .map(|s| s.lines().map(str::to_owned).collect())
+        .unwrap_or_default()
+}
+
+fn worktree_files(dir: &Path) -> Option<Vec<String>> {
+    let tracked = git_text(dir, &["ls-files", "--cached"])?;
+    let mut files: Vec<String> = tracked
+        .lines()
+        .filter(|p| dir.join(p).is_file())
+        .map(str::to_owned)
+        .collect();
+    files.extend(untracked_files(dir));
+    Some(files)
 }
 
 pub fn rev_parse(dir: &Path, rev: &str) -> Option<String> {
@@ -155,16 +186,22 @@ pub fn checkout_candidates(delta: &Path, repo: &str, home: &Path) -> Vec<PathBuf
     out
 }
 
+/// The first candidate checkout that holds `commit`: the delta's `head`, or
+/// its `base` when `head` is the working tree.
 pub fn find_checkout(
     cache: &mut GitCache,
     delta: &Path,
     repo: &str,
-    head: &str,
+    commit: &str,
     home: &Path,
 ) -> Option<PathBuf> {
     checkout_candidates(delta, repo, home)
         .into_iter()
-        .find(|c| cache.has_commit(c, head))
+        .find(|c| cache.has_commit(c, commit))
+}
+
+fn is_head(s: &str) -> bool {
+    is_commit_id(s) || s == WORKTREE
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -232,13 +269,18 @@ impl Target {
 
 pub fn target(cache: &mut GitCache, doc: &Document, delta: &Path, home: &Path) -> Option<Target> {
     let repo = doc.header.value("repo")?;
-    let head = doc.header.value("head").filter(|h| is_commit_id(h))?;
+    let head = doc.header.value("head").filter(|h| is_head(h))?;
     let base = doc
         .header
         .value("base")
         .filter(|b| is_commit_id(b))
         .map(str::to_owned);
-    let checkout = find_checkout(cache, delta, repo, head, home)?;
+    let anchor = if head == WORKTREE {
+        base.as_deref()?
+    } else {
+        head
+    };
+    let checkout = find_checkout(cache, delta, repo, anchor, home)?;
     Some(Target {
         checkout,
         base,
@@ -258,9 +300,10 @@ pub fn check_links(
     let (Some(repo), Some(head)) = (doc.header.get("repo"), doc.header.value("head")) else {
         return out;
     };
-    if !is_commit_id(head) {
+    if !is_head(head) {
         return out;
     }
+    let worktree = head == WORKTREE;
     let Some(t) = target(cache, doc, delta, home) else {
         let tried: Vec<String> = checkout_candidates(delta, &repo.value, home)
             .iter()
@@ -270,14 +313,19 @@ pub fn check_links(
             repo.span,
             code::CHECKOUT_NOT_FOUND,
             format!(
-                "no checkout of `{}` holds commit {head}; tried {}",
+                "no checkout of `{}` holds {}; tried {}",
                 repo.value,
+                if worktree {
+                    "the base commit".to_owned()
+                } else {
+                    format!("commit {head}")
+                },
                 tried.join(", ")
             ),
         ));
         return out;
     };
-    if let Some(branch) = doc.header.get("branch") {
+    if let Some(branch) = doc.header.get("branch").filter(|_| !worktree) {
         let tip = rev_parse(
             &t.checkout,
             &format!("refs/heads/{}^{{commit}}", branch.value),
@@ -347,10 +395,14 @@ pub fn check_links(
     out
 }
 
-/// A file on disk holding `path` as it is at `sha`: the working file when the
-/// checkout's `HEAD` is that commit, else a copy materialised under
+/// A file on disk holding `path` as it is at `sha`: the working file when
+/// `sha` is the working tree or the checkout's `HEAD`, else a copy materialised under
 /// `<cache_dir>/<full sha>/<path>`.
 pub fn source_file(checkout: &Path, sha: &str, path: &str, cache_dir: &Path) -> Option<PathBuf> {
+    if sha == WORKTREE {
+        let working = checkout.join(path);
+        return working.is_file().then_some(working);
+    }
     let full = rev_parse(checkout, &format!("{sha}^{{commit}}"))?;
     if rev_parse(checkout, "HEAD").as_deref() == Some(full.as_str()) {
         let working = checkout.join(path);

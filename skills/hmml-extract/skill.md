@@ -1,7 +1,7 @@
 ---
 description: Read a branch's diff back as one concise .hmml review delta — the touched units' behaviour walks (systems with their schedule, observers with their event) with every changed step marked +/-/~ and linked to the diff, the data (with ECS roles) and public signatures it touches, and its tests in summary — for reading before merge
 argument-hint: '[--against <ref>] [<checkout>]'
-allowed-tools: Read, Grep, Glob, Write, Bash(ls:*), Bash(pwd:*), Bash(rg:*), Bash(wc:*), Bash(sed -n:*), Bash(rm -f:*), Bash(hobby-mml-parser:*), Bash(git -C * rev-parse:*), Bash(git rev-parse:*), Bash(git -C * diff:*), Bash(git -C * show:*), Bash(git -C * log:*), Bash(git -C * merge-base:*), Bash(git -C * branch:*), Bash(git -C * grep:*), Bash(git -C * remote:*), Bash(gh pr view:*), mcp__tree-extract__list_modules, mcp__tree-extract__get_neighbors, mcp__tree-extract__call_path, mcp__tree-extract__impact_of, mcp__tree-extract__get_symbol, mcp__tree-extract__search_symbols, mcp__lsp-mcp__document_symbol, mcp__lsp-mcp__find_references, mcp__lsp-mcp__goto_definition, mcp__lsp-mcp__hover
+allowed-tools: Read, Grep, Glob, Write, Bash(ls:*), Bash(pwd:*), Bash(rg:*), Bash(wc:*), Bash(sed -n:*), Bash(rm -f:*), Bash(hobby-mml-parser:*), Bash(git -C * rev-parse:*), Bash(git rev-parse:*), Bash(git -C * diff:*), Bash(git -C * show:*), Bash(git -C * log:*), Bash(git -C * merge-base:*), Bash(git -C * branch:*), Bash(git -C * grep:*), Bash(git -C * remote:*), Bash(git -C * status:*), Bash(git -C * ls-files:*), Bash(gh pr view:*), mcp__tree-extract__list_modules, mcp__tree-extract__get_neighbors, mcp__tree-extract__call_path, mcp__tree-extract__impact_of, mcp__tree-extract__get_symbol, mcp__tree-extract__search_symbols, mcp__lsp-mcp__document_symbol, mcp__lsp-mcp__find_references, mcp__lsp-mcp__goto_definition, mcp__lsp-mcp__hover
 ---
 
 Read one branch's diff back as a **review delta**: a single `.hmml` file that
@@ -47,7 +47,10 @@ a caller sees, and report the rest.
       worktree (`~/fun_worktrees/{project}/{topic}/{task}`) or an aspect
       worktree (`~/fun_aspects/{project}/{topic}/{task}/{aspect}`). Never
       `~/fun_repos/<repo>`.
-    - **`head`**: `git -C <checkout> rev-parse --short=10 HEAD`.
+    - **`head`**: `worktree` when `git -C <checkout> status --porcelain` lists
+      anything — the change, or part of it, is not committed yet, which is how
+      `/task:build` and `/task:auto` call this skill. Otherwise
+      `git -C <checkout> rev-parse --short=10 HEAD`.
     - **`branch`**: the checked-out branch.
     - **`base`**: `--against <ref>` resolved to a commit, else
       `git merge-base origin/<default branch> HEAD`.
@@ -69,8 +72,13 @@ a caller sees, and report the rest.
 
 02. **Read the diff.**
 
-    - Start with `git -C <checkout> diff --stat <base>...HEAD`, then read the
-      full diff.
+    - With a commit `head`: `git -C <checkout> diff --stat <base>...HEAD`,
+      then the full diff.
+    - With `head: worktree`: `git -C <checkout> diff --stat <base>` and the
+      full `git -C <checkout> diff <base>`, which cover committed and
+      uncommitted changes alike, plus every file
+      `git -C <checkout> ls-files --others --exclude-standard` lists, read
+      whole: an untracked file is new and no `git diff` shows it.
     - Sort the changed files into three groups: source, tests, and the rest
       (assets, config, shaders, docs, build).
     - The rest shows up only through what it does to a unit. An asset, RON
@@ -136,7 +144,8 @@ a caller sees, and report the rest.
       In a Bevy repo `mod.rs` and `plugin.rs` repeat, so these need their
       directory: `waves/mod.rs`.
     - Use the first line of the expression that decides the behaviour: the
-      `head` side, or the `base` side for a `-`.
+      `head` side (the file on disk, for `head: worktree`), or the `base` side
+      for a `-`.
     - A changed step without a link is a defect, because the link is what lets
       me jump from the step to its hunk.
 

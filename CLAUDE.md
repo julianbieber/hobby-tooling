@@ -782,7 +782,14 @@ type may carry its ECS role (`component`, `resource`, `event`, `message`,
 a changed system or a changed ECS shape read as one; type-checking access was
 what a hand-maintained spec needed, and a delta derived from the diff does not.
 
-The parser and LSP are the work crates with three changes: the checkout is
+**`head: worktree` is the second divergence** (`## delta-head-worktree`).
+`/task:build` and `/task:auto` derive the delta before anything is committed —
+the commits are made after the last gate — and work's v2 resolves every link
+against a `head` commit, so the delta of an uncommitted change could not lint.
+With `head: worktree` the head side is the files on disk, untracked ones
+included, and the delta keeps resolving after the commits land.
+
+The parser and LSP are the work crates with four changes: `head: worktree`, the checkout is
 resolved from the hobby layout (`~/fun_aspects`, then `~/fun_worktrees`, then
 `~/fun_repos`, the first two only when `repo` is the delta's project), the
 trigger and the role, and a Bevy fixture in place of the work one.

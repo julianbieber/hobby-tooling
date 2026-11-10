@@ -238,3 +238,55 @@ fn cli_lint_reports_through_home() {
     assert_eq!(stdout.matches("info [stale-delta]").count(), 1, "{stdout}");
     assert_eq!(out.status.code(), Some(1));
 }
+
+#[test]
+fn worktree_head_reads_uncommitted_and_untracked_files() {
+    let w = world();
+    let repo = w.home.join("fun_worktrees/demo/t/task");
+    git(&repo, &["reset", "-q", "--hard", &w.base]);
+    write(&repo, "src/a/Run.rs", 8);
+    write(&repo, "src/Fresh.rs", 2);
+    let src = format!(
+        "repo: demo
+branch: feat
+base: {base}
+head: worktree
+
+## intent
+  - runs
+
+## unit run — the runner @ a/Run.rs:1
+  - start
++ - edited, not committed @ a/Run.rs:8
++ - in an untracked file @ Fresh.rs:2
++ - past the edited file @ a/Run.rs:9
+- - removed step, base side @ Old.rs:4
+",
+        base = &w.base[..10]
+    );
+    let diags = lint(&w, &src);
+    assert!(
+        on_line(&src, &diags, "not committed").is_empty(),
+        "{diags:#?}"
+    );
+    assert!(
+        on_line(&src, &diags, "untracked file").is_empty(),
+        "{diags:#?}"
+    );
+    assert!(on_line(&src, &diags, "base side").is_empty(), "{diags:#?}");
+    let past = on_line(&src, &diags, "past the edited");
+    assert_eq!(past.len(), 1, "{diags:#?}");
+    assert_eq!(past[0].code, "unresolved-diff-link");
+    assert!(!diags.iter().any(|d| d.code == "stale-delta"));
+    assert_eq!(diags.len(), 1, "{diags:#?}");
+}
+
+#[test]
+fn worktree_head_needs_a_checkout_holding_base() {
+    let w = world();
+    let src = "repo: demo\nbranch: feat\nbase: abcdef0123\nhead: worktree\n\n## intent\n  - runs\n\n## unit run — r\n+ - x @ Run.rs:1\n";
+    let diags = lint(&w, src);
+    assert_eq!(diags.len(), 1, "{diags:#?}");
+    assert_eq!(diags[0].code, "checkout-not-found");
+    assert!(diags[0].message.contains("the base commit"));
+}

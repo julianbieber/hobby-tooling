@@ -39,6 +39,7 @@ the work MML v2 rewrite and changed in two places.
 | checkout | `~/worktrees/{topic}/{task}[/aspects/{id}]/{repo}` | `~/fun_aspects/{p}/{t}/{task}/{name}`, then `~/fun_worktrees/{p}/{t}/{task}` |
 | fallback | `~/projects/{repo}` | `~/fun_repos/{repo}` |
 | Bevy | — | `in <Schedule>` / `on <Event>` on a unit; an ECS role on a `## data` type |
+| `head` | a commit | a commit, or `worktree` for an uncommitted change |
 
 The task directory *is* the checkout here, so the first two candidates are only
 tried when the header's `repo` names the delta's project.
@@ -64,6 +65,11 @@ hobby-mml-parser --version              # hobby-mml-parser 3.x for this grammar
 Exit status: `0` ok; `1` any error, or under `--lint` any error or warning; `2`
 usage or I/O error. Info diagnostics never gate. The codes and their severities
 are grammar §11.
+
+`head: worktree` is the one hobby addition to the header: the change is not
+committed yet, so the head side is the checkout's files on disk, untracked ones
+included, and the checkout is the candidate that holds `base`. `/task:build`
+derives its delta before GATE 2, when nothing is committed.
 
 Each `@ <file>[:<line>]` is matched by whole path components from the end, first
 among the files `git diff --name-only base...head` lists, then among all files

@@ -78,10 +78,14 @@ single token, except `pr`, which is a URL.
 | `repo`   | yes | the project, as named under `~/fun_repos`; the checkout is resolved from it (§8) |
 | `branch` | yes | the PR's head branch                                                       |
 | `base`   | yes | commit the delta is read against (merge base, or the last reviewed commit) |
-| `head`   | yes | commit the delta describes                                                 |
+| `head`   | yes | commit the delta describes, or `worktree` for the checkout as it stands     |
 | `pr`     | no  | the PR's URL, once one exists                                              |
 
-`base` and `head` are commit ids (7–40 hex digits). A missing required key is
+`base` and `head` are commit ids (7–40 hex digits), except that `head` may be
+`worktree`: the change is not committed yet, and its head side is the checkout's
+files on disk, tracked and untracked alike. That is the normal case for a delta
+`/task:build` derives before GATE 2, and it keeps resolving after the commits
+land, because the tree then equals `HEAD`. A missing required key is
 `missing-header-key`, and an unknown key is `unknown-header-key`. Both are
 errors.
 
@@ -373,7 +377,8 @@ and the ` — `:
 ## 8. Diff links and the checkout
 
 A diff link is resolved against the **checkout** of `repo`. The first of these
-that exists and contains the `head` commit is used:
+that exists and contains the `head` commit (the `base` commit, for
+`head: worktree`) is used:
 
 1. `~/fun_aspects/{project}/{topic}/{task}/{aspect}`, where the delta sits in
    `notes/{project}/{topic}/{task}/aspects/{aspect}/`
@@ -385,7 +390,9 @@ The first two are tried only when `repo` names the delta's `{project}`: a task
 is one repo, so the task directory is the checkout.
 
 `<file>` resolves first among the files `git diff --name-only base...head`
-lists, then among all files at that side's commit. It must match exactly one
+lists, then among all files at that side's commit. For `head: worktree` the
+head side is the working tree: the diff is `git diff --name-only base` plus the
+untracked files, and the files are those on disk. It must match exactly one
 path, comparing whole path components from the end. `<line>` must lie within the
 file at that side (`head` for context/`+`/`~`, `base` for `-`).
 
@@ -393,8 +400,10 @@ These checks run under `--lint` and in the editor, and report:
 
 - `unresolved-diff-link` (warning): no file, more than one file, or a line out
   of range. The message names the candidates.
-- `checkout-not-found` (warning, once per file): no checkout holds `head`.
-- `stale-delta` (info): the checkout's tip of `branch` is past `head`.
+- `checkout-not-found` (warning, once per file): no checkout holds `head`
+  (`base`, for `head: worktree`).
+- `stale-delta` (info): the checkout's tip of `branch` is past `head`. Never
+  for `head: worktree`.
 
 ## 9. `## api`
 
@@ -487,7 +496,7 @@ The PR's test changes, **summarised**. Every line is a flat entry (content depth
 | ------------------------ | -------- | ---------------------------------------------- |
 | `missing-header-key`     | error    | header (§2)                                    |
 | `unknown-header-key`     | error    | header (§2)                                    |
-| `bad-header-value`       | error    | `base`/`head` not a commit id (§2)             |
+| `bad-header-value`       | error    | `base` not a commit id, `head` neither one nor `worktree` (§2) |
 | `unknown-section`        | error    | (§1)                                           |
 | `section-order`          | error    | (§1)                                           |
 | `missing-intent`         | error    | no `## intent`, or an empty one (§5)           |
