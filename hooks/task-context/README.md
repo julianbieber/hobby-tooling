@@ -5,7 +5,7 @@
 
 Injects the current hobby task identity into the session: project / topic / task,
 the main checkout path, `task.json` done/blocked state, the notes directory, the
-latest journal date, and an HMML spec count.
+latest journal date, and an HMML review-delta count.
 
 Silent (exit 0, no output) unless cwd is under
 `~/fun_worktrees/<project>/<topic>/<task>`.

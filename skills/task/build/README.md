@@ -30,8 +30,9 @@ Reviewing that plan and then the real diff was a double review, and the plan
 drifted from what was built — "reviewing the version that works seems more
 productive than the double review from before". So only facts are settled
 before code — the brief and the business context — and after the change is
-implemented `/hmml-extract --against <merge-base>` writes the touched units as
-the worktree leaves them, with what the diff changed marked `# -` / `# +`. The
+implemented `/hmml-extract --against <merge-base>` writes one
+`delta-<branch>.hmml`: the touched units' walks as the worktree leaves them,
+each changed step marked `+` / `-` / `~` and linked to the diff. The
 HMML exists for me to understand what the code change is doing, so it
 represents the implemented change; it is regenerated whenever the diff moves and
 never edited.

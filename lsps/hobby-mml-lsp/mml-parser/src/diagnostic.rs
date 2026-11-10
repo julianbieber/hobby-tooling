@@ -1,9 +1,8 @@
 //! LSP-shaped diagnostics.
 //!
 //! A [`Diagnostic`] carries a byte [`Span`], a [`Severity`], a stable string
-//! `code`, and a human message. The LSP server (task 07) maps these 1:1 onto
-//! `lsp_types::Diagnostic` (span → range via [`LineIndex`], severity → LSP
-//! severity, code → `NumberOrString::String`).
+//! `code` (grammar §11), and a human message. The LSP server maps these 1:1
+//! onto `lsp_types::Diagnostic`.
 
 use crate::span::Span;
 use serde::Serialize;
@@ -16,153 +15,38 @@ pub enum Severity {
     Info,
 }
 
-/// Stable diagnostic codes. Kept as `&'static str` so callers (skills, the LSP,
-/// tests) can match on exact strings. Each variant is documented where it is
-/// produced (see `parser.rs` and `validate.rs`).
+/// Stable diagnostic codes, exactly as listed in grammar §11.
 pub mod code {
-    // Header (parse-time).
     pub const MISSING_HEADER_KEY: &str = "missing-header-key";
-    pub const BAD_KIND: &str = "bad-kind";
-    pub const BAD_METHOD: &str = "bad-method";
     pub const UNKNOWN_HEADER_KEY: &str = "unknown-header-key";
-    pub const MALFORMED_HEADER_LINE: &str = "malformed-header-line";
-
-    // Structure (parse-time).
-    pub const MISSING_SECTION: &str = "missing-section";
-    pub const DUPLICATE_SECTION: &str = "duplicate-section";
-    pub const SECTION_OUT_OF_ORDER: &str = "section-out-of-order";
+    pub const BAD_HEADER_VALUE: &str = "bad-header-value";
     pub const UNKNOWN_SECTION: &str = "unknown-section";
-    /// A section that exists in the grammar but is not legal for the file's
-    /// `kind` — e.g. `## data` in a `kind: plugin` spec, or `## systems` in a
-    /// `kind: job` one (grammar §7.2).
-    pub const SECTION_NOT_ALLOWED: &str = "section-not-allowed-for-kind";
-    pub const TAB_INDENT: &str = "tab-indent";
-
-    // Modules (parse-time).
-    pub const MALFORMED_MODULE: &str = "malformed-module";
-    pub const MODULE_NAME_NOT_PASCAL: &str = "module-name-not-pascal";
-
-    // Data (parse-time).
-    pub const MALFORMED_STRUCT: &str = "malformed-struct";
-    pub const MALFORMED_FIELD: &str = "malformed-field";
-    pub const MALFORMED_TYPE: &str = "malformed-type";
-    pub const BAD_PARAM_SOURCE: &str = "bad-param-source";
-    pub const UNTERMINATED_BLOCK: &str = "unterminated-block";
-
-    // Rust references (grammar §4.7) — a type declaration carrying `@ <path>`.
-    /// A `struct`/`enum` with no `{ … }` body and no `@ <path>` to reference.
-    /// A body may only be omitted when the type is declared in real code.
-    pub const MISSING_TYPE_BODY: &str = "missing-type-body";
-    /// The `@` annotation on a type declaration is not a usable source path —
-    /// empty, or an `@ spec` ref (a type points at code, never at a spec).
-    pub const MALFORMED_TYPE_PATH: &str = "malformed-type-path";
-    /// Emitted only by filesystem-aware consumers: the referenced file resolves
-    /// but declares no type of that name.
-    pub const RUST_TYPE_NOT_FOUND: &str = "rust-type-not-found";
-    /// Emitted only by filesystem-aware consumers: the referenced Rust type's
-    /// `#[derive(…)]` does not match the ECS role of the section it was filed
-    /// under (a `#[derive(Resource)]` type declared in `## components`).
-    pub const RUST_ROLE_MISMATCH: &str = "rust-role-mismatch";
-    /// Emitted only by filesystem-aware consumers: the spec says `struct` and
-    /// the code says `enum`, or `marker` names a struct that has fields.
-    pub const RUST_SHAPE_MISMATCH: &str = "rust-shape-mismatch";
-    /// Emitted only by filesystem-aware consumers: a field or variant the spec
-    /// asserts already exists is absent from the real type. A member added by a
-    /// `# +` is a comment the parser never sees, and a legacy `+` / `-` member
-    /// is intent rather than an assertion, so neither is ever reported.
-    pub const RUST_MEMBER_UNKNOWN: &str = "rust-member-unknown";
-
-    // External-crate imports (grammar §4.8).
-    pub const MALFORMED_EXTERN_IMPORT: &str = "malformed-extern-import";
-
-    // Type imports (grammar §4.5).
-    pub const MALFORMED_IMPORT: &str = "malformed-import";
-    pub const DUPLICATE_IMPORT: &str = "duplicate-import";
-    /// Emitted only by filesystem-aware consumers (the LSP and the CLI) when a
-    /// well-formed `use` import names a spec file that does not exist on disk,
-    /// or a type that the target spec does not define. The pure parse/validate
-    /// passes never produce it (mirrors [`UNRESOLVED_SPEC_REF`]).
-    pub const UNRESOLVED_IMPORT: &str = "unresolved-import";
-
-    // Behavior (parse-time).
-    pub const DANGLING_ELSE: &str = "dangling-else";
-    pub const DANGLING_ON_ERROR: &str = "dangling-on-error";
-    pub const MALFORMED_BINDING: &str = "malformed-binding";
-
-    // Api entries (grammar §11).
-    pub const MALFORMED_API_ENTRY: &str = "malformed-api-entry";
-    pub const DUPLICATE_API_ENTRY: &str = "duplicate-api-entry";
-    /// A `kind: module` spec whose `## api` lists no functions. The section
-    /// exists to carry the module's public surface, so an empty one means the
-    /// surface has not been captured yet (grammar §11).
-    pub const EMPTY_API: &str = "empty-api";
-
-    // Cross-spec references (grammar §5.4).
-    pub const MALFORMED_SPEC_REF: &str = "malformed-spec-ref";
-    pub const DUPLICATE_SPEC_REF: &str = "duplicate-spec-ref";
-    /// Emitted only by filesystem-aware consumers (the LSP and the CLI) when a
-    /// well-formed `@ spec` ref does not resolve to a spec file on disk. The
-    /// pure parse/validate passes never produce it.
-    pub const UNRESOLVED_SPEC_REF: &str = "unresolved-spec-ref";
-    /// Emitted only by filesystem-aware consumers: a `@ spec unit::member` ref
-    /// whose target spec **does** exist but defines no such `## api` entry
-    /// (grammar §5.4, §11). An error rather than a warning, unlike
-    /// [`UNRESOLVED_SPEC_REF`]: the file is right there to check the name
-    /// against, so the name is simply wrong.
-    pub const UNKNOWN_SPEC_MEMBER: &str = "unknown-spec-member";
-
-    // Source linkage (header `source.paths` + module `@ path`).
-    /// Emitted only by filesystem-aware consumers (the LSP, the CLI's `--lint`)
-    /// when a `source.paths` entry or a module `@ path` does not resolve to a
-    /// file on disk under any of the goto-definition search directories. The
-    /// pure parse/validate passes never produce it.
-    pub const UNRESOLVED_SOURCE_PATH: &str = "unresolved-source-path";
-
-    // Bevy dialect — `## systems` / `## access` (grammar §8, §9).
-    pub const MALFORMED_SYSTEM: &str = "malformed-system";
-    pub const SYSTEM_NAME_NOT_SNAKE: &str = "system-name-not-snake";
-    pub const DUPLICATE_SYSTEM: &str = "duplicate-system";
-    pub const MALFORMED_MARKER: &str = "malformed-marker";
-    /// An attribute line that is not `key: value`, or one that appears with no
-    /// system entry to attach to.
-    pub const MALFORMED_ACCESS: &str = "malformed-access";
-    pub const UNKNOWN_ACCESS_KEY: &str = "unknown-access-key";
-    pub const DUPLICATE_ACCESS_KEY: &str = "duplicate-access-key";
-    pub const MISSING_SCHEDULE: &str = "missing-schedule";
-    /// A `schedule:` label outside the known Bevy set. A warning, not an error —
-    /// custom schedules are legitimate.
-    pub const UNKNOWN_SCHEDULE: &str = "unknown-schedule";
-    /// An access-list name that resolves to no declared, imported, or built-in
-    /// component / resource / event.
-    pub const UNDEFINED_ACCESS_ITEM: &str = "undefined-access-item";
-    /// An access-list name that resolves, but whose ECS role does not fit the
-    /// key it appears under (a component in `emits:`, an event in `query:`, …).
-    pub const ACCESS_ROLE_MISMATCH: &str = "access-role-mismatch";
-    /// An `after:` / `before:` / `set:` name matching no system or set declared
-    /// in this file. A warning — ordering across plugins is legitimate.
-    pub const UNRESOLVED_SYSTEM_REF: &str = "unresolved-system-ref";
-
-    // Change annotations (grammar §10). All advisory: an annotated spec is a
-    // valid spec, so none of these is an error — they report a delta that has
-    // stopped describing a real change.
-    /// A `# -` with no text after it: the removed line is gone, so the baseline
-    /// can no longer be reconstructed.
-    pub const EMPTY_CHANGE_REMOVAL: &str = "empty-change-removal";
-    /// A `# +` with no content beneath it — an addition marker introducing
-    /// nothing.
-    pub const EMPTY_CHANGE_ADDITION: &str = "empty-change-addition";
-    /// A removed line that kept its `- ` bullet, which the marker's own `-`
-    /// already stands in for.
-    pub const REDUNDANT_CHANGE_BULLET: &str = "redundant-change-bullet";
-    /// Un-annotating the spec yields a baseline that does not parse or validate
-    /// — so the unannotated lines are not a version that stands on its own.
-    pub const UNRECOVERABLE_BASELINE: &str = "unrecoverable-baseline";
-
-    // Semantic (validate-time).
-    pub const UNDEFINED_TYPE: &str = "undefined-type";
+    pub const SECTION_ORDER: &str = "section-order";
+    pub const MISSING_INTENT: &str = "missing-intent";
+    pub const NO_UNIT: &str = "no-unit";
+    pub const BAD_GUTTER: &str = "bad-gutter";
+    pub const BAD_INDENT: &str = "bad-indent";
+    pub const NESTED_CHANGE_MISMATCH: &str = "nested-change-mismatch";
+    pub const CHANGE_IN_INTENT: &str = "change-in-intent";
+    pub const BAD_TILDE: &str = "bad-tilde";
+    pub const BAD_ANNOTATION: &str = "bad-annotation";
+    pub const DUPLICATE_ANCHOR: &str = "duplicate-anchor";
+    pub const UNKNOWN_API_REF: &str = "unknown-api-ref";
+    pub const UNKNOWN_ANCHOR: &str = "unknown-anchor";
+    pub const BAD_STRUCT: &str = "bad-struct";
     pub const DUPLICATE_TYPE: &str = "duplicate-type";
-    pub const DUPLICATE_FIELD: &str = "duplicate-field";
+    pub const DUPLICATE_UNIT: &str = "duplicate-unit";
+    pub const BAD_UNIT_HEADER: &str = "bad-unit-header";
+    pub const MISPLACED_INVARIANTS: &str = "misplaced-invariants";
+    pub const BAD_FN: &str = "bad-fn";
     pub const DUPLICATE_MODULE: &str = "duplicate-module";
+    pub const DUPLICATE_FN: &str = "duplicate-fn";
+    pub const BAD_TEST: &str = "bad-test";
+    pub const NO_CHANGE: &str = "no-change";
+    pub const UNLINKED_CHANGE: &str = "unlinked-change";
+    pub const UNRESOLVED_DIFF_LINK: &str = "unresolved-diff-link";
+    pub const CHECKOUT_NOT_FOUND: &str = "checkout-not-found";
+    pub const STALE_DELTA: &str = "stale-delta";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -187,6 +71,16 @@ impl Diagnostic {
         Diagnostic {
             span,
             severity: Severity::Warning,
+            code,
+            message: message.into(),
+        }
+    }
+
+    /// An advisory hint. Never gates the CLI's exit status.
+    pub fn info(span: Span, code: &'static str, message: impl Into<String>) -> Diagnostic {
+        Diagnostic {
+            span,
+            severity: Severity::Info,
             code,
             message: message.into(),
         }

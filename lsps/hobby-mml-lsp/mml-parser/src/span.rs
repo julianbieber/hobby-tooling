@@ -1,14 +1,13 @@
 //! Byte spans and byte-offset → (line, column) conversion.
 //!
 //! Every AST node and diagnostic carries a [`Span`] of byte offsets into the
-//! source. The LSP server (task 07) needs LSP `Position`s (0-based line +
+//! source. The LSP server needs LSP `Position`s (0-based line +
 //! UTF-16 character), so [`LineIndex`] converts an offset into `(line, col)`.
 
 use serde::Serialize;
 
-/// A half-open byte range `[start, end)` into the source text. `Default` is the
-/// empty span at offset 0, so span-carrying AST nodes can derive `Default`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
+/// A half-open byte range `[start, end)` into the source text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Span {
     pub start: usize,
     pub end: usize,

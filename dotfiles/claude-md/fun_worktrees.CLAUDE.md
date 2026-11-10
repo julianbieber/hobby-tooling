@@ -31,7 +31,7 @@ task, and the main checkout it derives from is `~/fun_repos/<project>`.
 | Journal entries | same dir, `YYYY-MM-DD.md` |
 | Done/blocked/backlog state | same dir, `task.json` (tracked — `{ done, blocked }`, plus `backlog` once hdash has set one) |
 | PRs opened | same dir, `prs.json` (written by the track-pr hook) |
-| HMML specs | same dir, `<unit>.hmml` |
+| HMML review delta | same dir, `delta-<branch>.hmml` (derived from the diff by `/hmml-extract`) |
 | Business context | same dir, `business-context.md` (my own words, recorded verbatim) |
 | Research aspects | same dir, `aspects/<name>/` (`aspect.json`, `brief.md`, `findings.md`); worktree `~/fun_aspects/<project>/<topic>/<task>/<name>` |
 

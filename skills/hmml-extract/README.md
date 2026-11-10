@@ -1,97 +1,55 @@
 # HMML Extract
 
-| Field        | Value                                                                              |
-| ------------ | ---------------------------------------------------------------------------------- |
-| Type         | skill                                                                              |
-| Install path | `~/.claude-hobby/commands/hmml-extract.md`                                                            |
-| Owner        | @julianbieber                                                                      |
-| Dependencies | HMML grammar (`lsps/hobby-mml-lsp/grammar.md`), `tree-extract` & `lsp-mcp` MCPs |
-| Status       | experimental                                                                       |
+| Field        | Value                                                                                         |
+| ------------ | --------------------------------------------------------------------------------------------- |
+| Type         | skill                                                                                         |
+| Install path | `~/.claude-hobby/commands/hmml-extract.md`                                                    |
+| Owner        | @julianbieber                                                                                 |
+| Dependencies | HMML grammar (`lsps/hobby-mml-lsp/grammar.md`), `hobby-mml-parser`, `tree-extract` & `lsp-mcp` MCPs |
+| Status       | experimental                                                                                  |
 
 ## Description
 
-Analyzes one unit of an existing system — an endpoint, a message/queue workflow,
-or a scheduled job — and emits a valid
-[`.hmml`](../../lsps/hobby-mml-lsp/grammar.md) (Mental Model Language)
-spec: the four sections **modules / data / behavior / invariants** that capture
-how the unit behaves at mental-model altitude. Plain extraction writes the
-**baseline** — the *current* version of the unit, unannotated.
+Reads a branch's diff back as one `.hmml` **review delta**: the touched units'
+behaviour walks as the branch leaves them — a system with the schedule that runs
+it, an observer with its event — with each changed step marked `+`, `-` or `~`
+and linked to its line in the diff, plus the data shapes (with their ECS roles)
+and public signatures the change touches and a grouped summary of its tests.
+`/task:build` runs it in its `delta` phase and shows it at GATE 2; `/task:auto`
+runs it on `--delta`.
 
-With `--against <ref>` it writes the **review delta** instead: the unit as the
-worktree leaves it, with what `git diff --merge-base <ref>` changed marked `# -` / `# +`
-(grammar §10), so a finished change can be read as a change to the mental model
-before merge. `/task:build` runs it after the code is implemented. The file is
-derived and regenerated whenever the diff moves, never maintained by hand.
+Produces one file per PR, in the notes dir of the checkout it reads:
 
-## Why the delta is derived, not designed
+- `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/delta-<branch>.hmml`
+- `…/{task}/aspects/{aspect}/delta-<branch>.hmml` for an aspect's worktree
 
-The spec used to be annotated with the intended change *before* the code, then
-translated into code. Reviewing that plan and then the real diff was a double
-review, and the plan drifted from what was built — "reviewing the version that
-works seems more productive than the double review from before". The HMML
-exists so I understand what the code change is doing, so it represents the
-implemented change.
+The file is derived from the diff and rewritten on every run.
 
-You point at one unit ("the `/tiles/{z}/{x}/{y}` endpoint", "the shader reload batch
-consumer"); the skill traces the call graph with `tree-extract`, reads the
-behavior off the source, and writes the file into the current task's notes dir.
+## Why one file per PR
 
-Produces:
-
-- `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/<unit>.hmml` —
-  the overview: header + the `##` sections the `kind` takes,
-  `source.repo`/`source.paths` pointing at the real code;
-- one `<module>.hmml` beside it per collaborator with a public surface — a
-  `kind: module` spec carrying that module's `## api`, function by function
-  (grammar §11), with the overview's steps linked into it by member ref.
-
-## Why both layers come out of one run
-
-The overview names its collaborators and stops, so a change about a module's API
-rather than a unit's flow had nothing to describe it in. The module specs are
-that missing layer.
-
-They cannot be a second run. A member ref into a spec that does not exist yet is
-an **error**, not a warning — that is what makes the ref worth navigating by — so
-an overview emitted alone hands back a spec that does not lint. One run writes
-the set, then lints the set.
-
-A collaborator that exposes nothing is **skipped and reported**: `## api` would
-be empty, which raises `empty-api`, which the lint step then tells you to fix. It
-keeps its `## modules` line, because it still does work in the behaviour, and it
-gets no `@ spec` ref.
-
-Emits the `.hmml` files and stops — reviewing, editing, and committing it are the
-human's job (that is the point of the artifact).
+This follows the work MML v2 change. The per-unit spec model wrote every touched
+unit, collaborator and module as a full spec whose `# +` / `# -` comment markers
+had to reconstruct the base, which made a delta many files and mostly markers.
+Nothing plans in HMML any more, so that property had no consumer; a gutter on
+each line, context kept around the changed steps, and a diff link on every
+changed line is what reading a change needs.
 
 ## Installation
 
-Installed by `just install-skills` from `~/fun_repos/hobby-tooling`, or manually:
-
-```bash
-mkdir -p ~/.claude-hobby/commands/
-ln -s ~/fun_repos/hobby-tooling/skills/hmml-extract/skill.md \
-  ~/.claude-hobby/commands/hmml-extract.md
-```
+Installed by `just install-skills` from `~/fun_repos/hobby-tooling`; the linter
+by `just install-mml`.
 
 ## Usage
 
 ```
-/hmml-extract the shader reload batch worker
+/hmml-extract                       # current worktree, against the merge base
+/hmml-extract --against <sha>       # only what changed since <sha>
 ```
-
-Point it at a unit (an endpoint, a queue/message workflow, or a job) or a
-file/function. It writes
-`~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/<unit>.hmml`.
 
 ## Known Limitations
 
-- The value is the **altitude** of the `## behavior` section — mental-model
-  steps, not a transcription. That judgement is model-dependent; treat the
-  output as a first draft to edit, never as ground truth.
-- The `## modules` map is only as good as `tree-extract`'s graph for the repo;
-  cross-file / external calls may be missed, so verify the module list.
-- Emits and stops — it does not iterate with you, and it never runs `git add` /
-  `git commit` in the notes or tooling repos.
-- Output is checked with `hobby-mml-parser <path> --lint`; altitude and naming
-  remain judgement calls the grammar cannot settle.
+- The value is the altitude of the walks. That is a judgement call, so read the
+  delta next to the diff, not instead of it.
+- Units are found by walking callers up to an `add_systems` / `add_observer`
+  registration; a system registered through a helper or a macro can be missed.
+  The report lists the units it found and the changed files it left uncovered.
