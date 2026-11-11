@@ -751,143 +751,60 @@ this config is used, work `cdev` sessions included — there is no per-session
 config short of rendering one, which `hobby-auto` (installed, not generated) does
 not do.
 
-## HMML is a Bevy dialect here
+## HMML is the review delta of one PR
 
-`lsps/hobby-mml-lsp/grammar.md` is the **source of truth** for HMML (v2) and
-what the `hmml-*` skills read. The work `01-language-spec/grammar.md` describes v1
-and governs nothing in this repo.
+`lsps/hobby-mml-lsp/grammar.md` is the **source of truth** for HMML (v3) and
+what `/hmml-extract` reads. An `.hmml` file reads one branch's diff back as a
+change to the mental model: `delta-<branch>.hmml` in the task's (or aspect's)
+notes dir, with `## intent`, the touched `## data`, one `## unit` per entry
+point the change reaches, `## api` signatures and a `## tests` summary. Every
+line has a diff-style gutter (` ` `+` `-` `~`, the last written `old → new`),
+unchanged steps stay as context, and every changed line links to its line in
+the diff, which `--lint` checks against the checkout.
 
-Hobby specs are **`.hmml`**, never `.mml`. The extension is what keeps the two
+**v3 is the work MML v2 rewrite, taken over on purpose** (recorded in
+`notes/hobby-tooling/llm_workflow/sync_from_mml/business-context.md`,
+`## sync-from-work`). The per-unit spec model it replaces wrote every touched
+unit, collaborator and module as a full spec, with `# +` / `# -` comment
+markers that had to reconstruct the baseline — at work one PR's delta came to
+20 files and 1,800 lines for ~2,450 changed code lines. Nothing plans in HMML
+any more, so baseline recoverability had no consumer. `/hmml-new`,
+`/hmml-review` and `/hmml-validate`, the per-unit kinds (`plugin`, `system`,
+`module`, `endpoint`, `workflow`, `job`), the world sections, access blocks and
+their role checks, `use` imports, `@ spec` refs and `@ <path>` type references
+went with it. A v2 spec left in a notes dir is a note, not an input, and does
+not parse.
+
+**The Bevy layer is light** (`## bevy-layer`): a unit names what runs it —
+`in <Schedule>` for a system, `on <Event>` for an observer — and a `## data`
+type may carry its ECS role (`component`, `resource`, `event`, `message`,
+`state`). Neither is checked against the code or against each other. They make
+a changed system or a changed ECS shape read as one; type-checking access was
+what a hand-maintained spec needed, and a delta derived from the diff does not.
+
+**`head: worktree` is the second divergence** (`## delta-head-worktree`).
+`/task:build` and `/task:auto` derive the delta before anything is committed —
+the commits are made after the last gate — and work's v2 resolves every link
+against a `head` commit, so the delta of an uncommitted change could not lint.
+With `head: worktree` the head side is the files on disk, untracked ones
+included, and the delta keeps resolving after the commits land.
+
+The parser and LSP are the work crates with four changes: `head: worktree`, the checkout is
+resolved from the hobby layout (`~/fun_aspects`, then `~/fun_worktrees`, then
+`~/fun_repos`, the first two only when `repo` is the delta's project), the
+trigger and the role, and a Bevy fixture in place of the work one.
+
+Hobby files are **`.hmml`**, never `.mml`. The extension is what keeps the two
 dialects apart: Helix routes `.hmml` to `hobby-mml-lsp` by file type, and work
-`.mml` to `mml-lsp`, with no path globs or block-ordering tricks involved.
-`mml_parser::SPEC_EXT` is the single definition — every place that builds or
-filters a spec filename goes through it, so the extension stays a one-line
-change.
+`.mml` to `mml-lsp`.
 
 The **binaries keep their `hobby-mml-*` names** (`hobby-mml-lsp`,
-`hobby-mml-parser`), as do the crate directories. That is
-deliberate, not an oversight: they never collided with the work `mml-lsp` /
-`mml-parser` on `PATH` in the first place, so renaming them would
-buy nothing and cost a `cargo uninstall` dance plus stale `~/.cargo/bin`
-entries. The language is HMML; the programs that read it are `hobby-mml-*`.
+`hobby-mml-parser`), as do the crate directories: they never collided with the
+work `mml-lsp` / `mml-parser` on `PATH`, so renaming them would buy nothing and
+cost a `cargo uninstall` dance plus stale `~/.cargo/bin` entries.
 
-The fork exists because hobby projects are Bevy games and MML v1 assumes a unit
-is a function (`in: T` / `out: T`). An ECS has no such contract — data flows
-through the World — so v2 adds `kind: plugin` / `kind: system` and the sections
-`## components`, `## resources`, `## events`, `## systems`, `## access`, with the
-legal section set a function of `kind:`. A system's interface is its **access
-block** (`schedule:`, `query:`, `reads:`, `writes:`, `spawns:`, `emits:`, …), and
-every name in it is role-checked against the declared components / resources /
-events. That check is what replaces the `in:`/`out:` type check and what gives
-the LSP goto-definition, "who writes this component?", and the index's schedule
-map.
-
-`## data` is the one section **both** dialects take, and v2.1 is what made that
-true. A Bevy feature is full of types that are not components, resources, or
-events — a field type, an enum a component is built from — and there was nowhere
-to put them: a world section would have claimed a role the type does not have,
-and omitting them made every field naming one an `undefined-type` error. So a
-Bevy kind may declare `## data`, with `in:`/`out:` and `marker` still illegal
-there, and a `## data` name in an access list an `access-role-mismatch`. The
-section is a type namespace in this dialect, not an interface — role is what
-makes an access list checkable, and that is exactly what `## data` withholds.
-
-`endpoint` / `workflow` / `job` keep the v1 grammar unchanged, so the handful of
-non-Bevy hobby repos (`mosaik_map`, `securitd`, `glsllsp`) still have a usable
-dialect. The two cannot be mixed in one file.
-
-### A spec holds both versions of the unit (v2.3)
-
-A spec used to be edited in place to describe the change a task intended, which
-threw away the thing the change was a change *to*: read afterwards, the file said
-what the code should do and nothing said what it did. §10 makes the file keep the
-**baseline** — the unit as it is before the change — and write the change on top
-of it as `# +` / `# -` comment markers. Both versions in one file, the delta
-surviving a commit.
-
-The markers are ordinary comments, so this is a convention, not grammar — which
-is precisely why `mml-parser/src/annotations.rs` exists. **No other pass sees
-them**, including the one rule that makes the convention work: dropping every
-`# +` block and un-commenting every `# -` line must reproduce the baseline. That
-is checked by reconstructing it, re-parsing and re-validating, and reporting any
-error the baseline has that the annotated spec does not — `unrecoverable-baseline`,
-typically a `# +` on something the baseline itself already needs.
-
-**The annotations stay after the code lands.** Stripping them would leave a file
-indistinguishable from a plain baseline, and the spec is the record of what the
-task changed. The next task gets its baseline from a fresh extract, not from this
-file.
-
-**The delta is derived from the diff, not designed ahead of the code.** It used
-to be: `/task:build` annotated the intended change onto the baseline, reviewed
-it at GATE 1, and `/hmml-translate` implemented the markers. That was a double
-review — the plan, then the real diff — and the plan drifted from what was
-built, as it did at work. Now `/hmml-extract --against <ref>` writes the unit as
-the worktree leaves it with what `git diff --merge-base <ref>` changed marked, after the
-code exists, and `/hmml-translate` is gone. The HMML exists for me to understand
-what the code change is doing, so it represents the implemented change; the file
-is regenerated whenever the diff moves and never maintained by hand. `/hmml-new`
-and `/hmml-review` stay as standalone tools for a spec I design by hand, and
-nothing in the pipeline runs them.
-
-**§10 is the one change spelling, which cost v2.2 its member delta.** A `@ <path>`
-type body's inline `+ streak: u32` / `- remaining` said the same thing a second
-way, and the two could not both be right about what an unmarked line means: §10
-needs unannotated text to be the baseline, and `+ streak` is intent. The inline
-form still parses so v2.2 specs keep working, but the grammar now calls it legacy
-and nothing emits it. Nothing was lost in the trade — a `# +` member is a comment,
-the parser skips comments, so it never reaches `rust-member-unknown`, which is
-exactly the "intent is never an assertion" suppression the inline markers were
-written to provide.
-
-One divergence from the work copy: `redundant-change-bullet` is a **warning**
-here, not an info hint. Work's `--lint` does not gate on info severity; this one
-gates on any diagnostic at all, so an info hint would gate anyway while claiming
-not to. A doubled bullet is a one-character fix, so gating on it costs nothing.
-
-### The detail layer says what a collaborator can do (v2.4)
-
-A behavioural spec names its collaborators and stops — `WaveRng — draws the
-spawn offsets` and no more. So the moment a change is about a module's API
-rather than a unit's flow, the spec has nothing to offer and translation is back
-to prose → code. `kind: module` is the layer underneath: **one module's public
-surface**, `## api` in the slot every other kind writes `## behavior` in, one
-`fn` signature per public function with the bullets describing it nested beneath.
-
-**The two failure modes of a ref get different severities, and that is the whole
-design.** A `@ spec unit` whose file is missing stays a warning — the spec may
-be planned and not yet written. A `@ spec unit::function` whose file exists but
-defines no such entry is an **error**: the file is right there to check the name
-against. That is what makes a member ref worth navigating by, and it is why
-`/hmml-extract` writes both layers in one run — emitting the overview alone
-would hand back a spec that does not lint.
-
-**A module with no public surface gets no spec.** `## api` would be empty, which
-raises `empty-api`, which the lint step then tells you to fix — so "one spec per
-`## modules` line" would contradict the linter. The module keeps its line,
-because it still does work in the behaviour; it just gets no `@ spec` ref. The
-normal case is a helper that is private to the unit, which is the same boundary
-the detail layer already draws around private functions, one level up.
-
-**A Bevy system is not an api entry.** A system is called by the schedule rather
-than by a caller, and its interface is its access block — it belongs in a
-`kind: plugin` or `kind: system` spec. A module spec is for the plain-Rust
-helpers a system calls into: a table, a generator, a mesher, a solver. That is
-the one place this dialect and the work v1.5 it came from genuinely differ.
-
-Two smaller consequences. `Future`, `Result`, `Either` and `Tuple` join the
-containers so a signature can stay faithful to the code it is read next to
-instead of normalising an effect away; a tuple stays `Tuple<A, B>` so the type
-grammar remains `Ident<args…>`. And a `use` line's ref may not carry a member —
-a `use` imports types out of a spec file, and a function is not a type — which
-is why the use-line parser now splits on the first colon that is not part of a
-`::`, so the whole ref reaches validation instead of being cut down the middle
-of the separator.
-
-Where work needed a new `kind-mismatched-section` error, this dialect needed
-nothing: sections here are already a named set per kind, so `## behavior` on a
-module and `## api` on anything else are ordinary `section-not-allowed-for-kind`
-errors.
+`tree-sitter-hmml` lives in the Helix fork and still parses v2, so a v3 delta
+highlights only partly until it is ported from the work `tree-sitter-mml`.
 
 ## HSTRUCT records the standards a repo holds itself to
 

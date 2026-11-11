@@ -1,982 +1,608 @@
 ---
-title: "Hobby HMML — language specification (v2.4, Bevy dialect)"
+title: "Hobby HMML — language specification (v3, the PR delta, Bevy dialect)"
 created: 2026-07-25
 tags:
   - spec
   - reference
 ---
 
-# Hobby HMML — Mental Model Language
+# HMML — Mental Model Language (v3: the PR delta)
 
-**This file is the source of truth for the HMML grammar.** The
-`hobby-mml-parser` / `hobby-mml-lsp` binaries and the five `hmml-*` skills
-implement exactly what is defined here.
+**This file is the source of truth for the HMML grammar.** `/hmml-extract`,
+`hobby-mml-parser` and `hobby-mml-lsp` implement exactly what is defined here;
+`tree-sitter-hmml` lives in the Helix fork and follows it.
 
-HMML is the hobby dialect and its files are **`.hmml`**. The work dialect keeps
-`.mml` and its own `mml-lsp`; the distinct extension is what lets both live on
-one machine without Helix guessing. The binaries here stay `hobby-mml-*` — they
-never collided with the work ones.
+HMML is the hobby dialect of the work MML and its files are **`.hmml`**. The
+work dialect keeps `.mml` and its own `mml-lsp`; the distinct extension is what
+lets both live on one machine. v3 is work MML v2 plus a light Bevy layer: a unit
+may name what runs it (§7.1), and a `## data` type may carry its ECS role
+(§6.1).
 
-An `.hmml` file describes **one unit of behavior** — small enough to hold in one
-head, one review, one diff. Its main use is reading a change before merge:
-`/hmml-extract --against <ref>` describes the unit as the branch leaves it, with
-what the diff changed marked `# -` / `# +` (§10).
+An `.hmml` file is the **review delta of one pull request**. It says what the PR
+changes at the altitude you would use to narrate it to a colleague, and every
+changed line points at the place in the diff that makes it. The file is derived
+from the diff, never maintained, and rewritten whenever the diff changes.
 
-> **v2.0 (2026-07-25) — the Bevy dialect.** Hobby projects are overwhelmingly
-> Bevy games, and Bevy breaks MML's founding assumption. A v1 unit is a function:
-> its contract is `in: T` / `out: T`. An ECS has no such thing — data flows
-> through the World, so a **system**'s interface is the set of components,
-> resources, and events it touches, and a **plugin**'s interface is what it
-> registers into the `App`.
->
-> v2 therefore adds two kinds (`plugin`, `system`) and five sections
-> (`## components`, `## resources`, `## events`, `## systems`, `## access`), and
-> makes the legal section set a function of `kind:`.
->
-> **The change is additive.** `endpoint` / `workflow` / `job` keep the v1.3
-> grammar unchanged, `in:` / `out:` included; every v1 spec is still a valid v2
-> spec. The Bevy sections are illegal for the classic kinds and vice versa, so
-> the two dialects cannot be mixed in one file.
+A delta is **organised by change, not by file**. One file covers one PR and
+holds:
 
-> **v2.1 (2026-07-29) — `## data` in the Bevy dialect.** Not every shape in a
-> Bevy feature is a component, a resource, or an event. A spawn pattern, a
-> config record nested inside a resource, an enum a component is built from —
-> these are plain Rust types, and v2.0 had nowhere to put them: declaring one in
-> `## components` claimed it was a component, and leaving it out made every
-> field that used it an `undefined-type` error.
->
-> A Bevy kind may therefore now declare `## data` too, for the **role-less**
-> shapes ([§4.6](#46--data--in-the-bevy-dialect)). `in:` / `out:` stay illegal
-> there — the section is a type namespace in this dialect, not an interface —
-> and a `## data` name may not appear in an access list, because the whole point
-> of a role is that an access list is checkable against it.
+- the touched units' behaviour walks, every step included, with unchanged steps
+  kept as context;
+- the data shapes the change touches;
+- the public signatures the walks link to or the change alters;
+- a summary of its tests.
 
-> **v2.2 (2026-08-04) — types that already exist.** A spec's type namespace
-> could be populated two ways: declare the type here, or import it from a
-> sibling `.hmml`. Most of a real feature's types are in neither place — they
-> are in the checkout's Rust, or in a dependency. All three workarounds were
-> wrong: **redeclaring** the type creates a second definition that drifts (and
-> reads to `/hmml-translate` as "make this exist", inviting a diff that deletes
-> real fields), **omitting** it makes every field naming it an `undefined-type`,
-> and **adding it to the built-in lists** claims Bevy defines it.
->
-> v2.2 adds the missing vocabulary — *declared elsewhere* — in two forms, one
-> per guarantee:
->
-> - **`@ <path>` on a declaration** ([§4.7](#47-referencing-a-rust-type--path)):
->   the type is in this checkout, so the reference is **verified** — the type
->   must be there, its `#[derive(…)]` must match the section it was filed under,
->   and goto-definition lands on the real struct. The body becomes optional, and
->   when present it is a **delta**: `+` adds a member, `-` removes one, unmarked
->   asserts one already exists, and anything not listed stays as it is.
-> - **`use extern <crate::path>:`** ([§4.8](#48-importing-from-a-dependency-use-extern)):
->   the type is in a dependency, so nothing is verifiable. It brings names into
->   scope with the section's role and offers nothing else; goto opens its docs.rs
->   page.
->
-> Two keywords rather than one because the guarantee differs and should be
-> legible at a glance. Additive: every v2.1 spec is still a valid v2.2 spec.
+The examples in this file use one made-up PR to a Bevy survivor game: every
+enemy killed pays a bounty into a purse, a wave cleared early pays a bonus, and
+the shop spends from the purse.
 
-> **v2.3 (2026-08-28) — the spec holds both versions.** A spec used to be edited
-> in place to describe the change a task intends, which threw away the thing the
-> change is a change *to*: read afterwards, the file said what the code should
-> do and nothing said what it did. Recovering the delta meant git archaeology in
-> the notes repo, and an edit committed there stopped being a delta at all.
->
-> v2.3 adds **change annotations** ([§10](#10-change-annotations)): the file
-> keeps the **baseline** — the unit as it is before the change — and the change
-> is written on top of it as `# +` / `# -` comment markers. Both versions are in
-> one file, the delta survives being committed, and `/hmml-translate` is told
-> exactly what to add and remove instead of inferring it.
->
-> They are ordinary comments (§1), so this is a **convention, not grammar**: an
-> annotated spec parses and validates exactly like any other. What is new is
-> vocabulary, plus four checks that the markers still describe a real change.
->
-> **§10 is the one change spelling, and it supersedes the v2.2 member delta.**
-> A `@ <path>` body's inline `+` / `-` said the same thing in a second way, and
-> the two could not both be right about what an unmarked line means: §10 needs
-> unannotated text to be the baseline, and `+ streak: u32` is intent. The inline
-> form still parses, so every v2.2 spec is still valid — but a new spec writes a
-> member change the way it writes every other change
-> ([§4.7](#47-referencing-a-rust-type--path)).
+> **v3 (2026-11-10)** replaces v2.x. The kinds `plugin`, `system`, `module`,
+> `endpoint`, `workflow` and `job` are gone, along with the world sections
+> (`## components`, `## resources`, `## events`, `## systems`, `## access`),
+> the `# +`/`# -` comment annotations, `use` imports, `@ spec` refs and
+> `@ <path>` type references. A v2 file does not parse as v3.
+> `hobby-mml-parser --version` prints `3.x` for this grammar.
 
-> **v2.4 (2026-09-09) — the detail layer (`kind: module`).** The behavioural
-> kinds describe a unit at mental-model altitude: a handful of collaborators and
-> a dozen steps. That is right for *what does this plugin do*, and it stays. It
-> says nothing about what a collaborator can actually **do** — `WaveRng — draws
-> the spawn offsets` and no more — so the moment a change is about a module's
-> API rather than a unit's flow, the spec has nothing to offer and translation
-> falls back to prose → code.
->
-> v2.4 adds the layer underneath: `kind: module` ([§11](#11-the-module-dialect-kind-module)),
-> whose third section is **`## api`** — one `fn` signature per public function,
-> each owning the bullets that describe it. With it come the
-> **`unit::function`** / `unit::Type::method` member form of an `@ spec` ref
-> ([§5.4](#54-cross-spec-references--spec)) and four containers so a signature
-> can stay faithful to the code it describes: `Future`, `Result`, `Either`,
-> `Tuple` ([§4.3](#43-type-expressions)).
->
-> Additive: every v2.3 spec is still valid. The new kind is opt-in, and `## api`
-> on a non-module — or `## behavior` on a module — is a
-> `section-not-allowed-for-kind` error rather than a silent reinterpretation.
+______________________________________________________________________
 
 ## 1. File shape
 
-An `.hmml` file is **line-oriented, UTF-8**, and has two parts in a fixed order:
-
-1. A **header** (YAML-ish key/value block) at the top.
-2. A sequence of **`##` sections**, in canonical order.
-
-The canonical section order across both dialects is:
-
 ```
-modules, data, components, resources, events, systems, access, api, behavior, invariants
+<header>          key: value lines
+
+## intent         required, first
+## data           optional
+## unit <name> …  one or more, in the order a request meets them
+## api            optional
+## tests          optional
 ```
 
-`## api` and `## behavior` are alternative spellings of one slot — a spec has
-one or the other, never both ([§11](#11-the-module-dialect-kind-module)).
-
-Which of them are **required**, and which are even **allowed**, depends on the
-header `kind` — see [§7](#7-kinds-and-the-section-schema).
-
-Rules that apply everywhere:
-
-- **Blank lines** are allowed between blocks and ignored.
-- **Comments** start with `#` at the first non-space column and run to end of
-  line. A `#` inside a value (e.g. in a behavior step) is *not* a comment. A
-  `##` at column 0 is a section header, never a comment.
-- **Indentation is spaces only** (no tabs). One nesting level = **2 spaces**.
-- Each section header appears at most once. Out of canonical order is a
-  warning; duplicated is an error.
+- Sections appear in this order, and `## unit` repeats once per unit. Any other
+  `##` line is an error (`unknown-section`), and so is an out-of-order one
+  (`section-order`).
+- `#` at column 0 followed by a space or the end of the line is a comment and is
+  ignored. `##` at column 0 is always a section header.
+- Blank lines are ignored everywhere.
+- The file is named `delta-<branch>.hmml`, with `/` in the branch replaced by
+  `-`. It lives in the notes dir of the task the branch belongs to,
+  `notes/{project}/{topic}/{task}/delta-<branch>.hmml`, or of the aspect,
+  `notes/{project}/{topic}/{task}/aspects/{aspect}/delta-<branch>.hmml`.
 
 ## 2. Header
 
-A block of `key: value` lines before the first `##` section.
+The header is the `key: value` lines before the first `##`. Each value is a
+single token, except `pr`, which is a URL.
 
-| Key | Required | Meaning |
-|---|---|---|
-| `unit` | yes | Unique identifier (kebab-case). **This is the filename** (`<unit>.hmml`). |
-| `kind` | yes | One of `endpoint`, `workflow`, `job`, `plugin`, `system`, `module`. |
-| `system` | yes | Free-text label for the conceptual product grouping (`bevy-survivor`). Not a path component. |
-| `method` | no | HTTP verb; `kind: endpoint` only. |
-| `base` | no | Directory that relative `source.paths` and `@ path` entries resolve against. |
-| `source` | no | `repo:` + a `paths:` list — where the real code lives. |
+| Key      | Req | Value                                                                      |
+| -------- | --- | -------------------------------------------------------------------------- |
+| `repo`   | yes | the project, as named under `~/fun_repos`; the checkout is resolved from it (§8) |
+| `branch` | yes | the PR's head branch                                                       |
+| `base`   | yes | commit the delta is read against (merge base, or the last reviewed commit) |
+| `head`   | yes | commit the delta describes, or `worktree` for the checkout as it stands     |
+| `pr`     | no  | the PR's URL, once one exists                                              |
 
-Identifiers match `[A-Za-z][A-Za-z0-9._-]*`.
+`base` and `head` are commit ids (7–40 hex digits), except that `head` may be
+`worktree`: the change is not committed yet, and its head side is the checkout's
+files on disk, tracked and untracked alike. That is the normal case for a delta
+`/task:build` derives before GATE 2, and it keeps resolving after the commits
+land, because the tree then equals `HEAD`. A missing required key is
+`missing-header-key`, and an unknown key is `unknown-header-key`. Both are
+errors.
 
-```
-system: bevy-survivor
-unit: enemy-waves
-kind: plugin
-source:
-  repo: bevy_survivor
-  paths:
-    - src/waves/mod.rs
-```
+## 3. The gutter
 
-## 3. `## modules`
+Every line in a section body has a **gutter**: column 0 is one of
 
-One line per behavioural collaborator:
+| Gutter | Meaning                                                               |
+| ------ | --------------------------------------------------------------------- |
+| ` `    | context: the line holds at both `base` and `head`                     |
+| `+`    | added: holds at `head`, not at `base`                                 |
+| `-`    | removed: held at `base`, not at `head`                                |
+| `~`    | changed: one line in both versions, written as `<old> → <new>` (§3.1) |
 
-```
-PascalName — responsibility [@ repo-relative-path] [@ spec <unit>]
-```
+Column 1 is a space, and the **content** starts at column 2. Anything else at
+column 0 is `bad-gutter`, and so is a non-space at column 1. Content indents in
+steps of 2 spaces (`bad-indent` otherwise). The tree a section describes is
+built from content indentation alone. The gutter takes no part in nesting.
 
-The separator is ` — ` (em dash) or ` -- `. Names should be PascalCase (a
-warning otherwise). Optional for the Bevy kinds, where `## systems` carries most
-of what `## modules` used to — keep it for the non-system collaborators
-(the plugin type itself, an asset loader, a helper).
+**Nesting rule.** A removed step's body went with it, so a line nested under a
+`-` line is `-` too. A new step's body is new, so a line nested under a `+` line
+is `+` too. Breaking this rule is `nested-change-mismatch` (error). Lines under
+`~` or context lines may carry any gutter.
 
-## 4. `## data`
+**`## intent` takes no change gutter.** Every intent line is context (`  - …`).
+Using `+`, `-` or `~` there is `change-in-intent` (error).
 
-The type-declaration section. Both dialects have it, and its body grammar is the
-same in each; what differs is what it means and what else it may hold. For
-`endpoint` / `workflow` / `job` it is the whole data model, `in:` / `out:`
-included — unchanged from v1.3. For `plugin` / `system` it holds the shapes that
-carry no ECS role at all ([§4.6](#46--data--in-the-bevy-dialect)).
+### 3.1 `~` lines
 
-### 4.1 Structs
-
-```
-struct Tile {
-  bytes: Vec<u8>,
-  format: TileFormat,
-  zoom: u8 @path,
-}
-```
-
-Field names are snake_case or camelCase. The optional `@path` / `@query` /
-`@body` / `@header` suffix marks an endpoint parameter's source.
-
-The declaration line is `struct Name [@ <path>] [{ … }]`. The optional
-`@ <path>` makes it a **reference** to a type that already exists in real code
-([§4.7](#47-referencing-a-rust-type--path)) — which is what lets the body be
-omitted, and what turns a body that *is* present into a delta. A `struct` with
-neither a body nor a path says nothing, and is a `missing-type-body` error.
-
-### 4.2 Enums
-
-Unit variants only, no payloads: `enum TileFormat { png, webp }`. The same
-`@ <path>` and optional body apply.
-
-### 4.3 Type expressions
-
-An identifier with optional generic arguments. A type must resolve to one of:
-
-- **primitives** — `String`, `bool`, `i8`…`i64`, `u8`…`u64`, `f32`, `f64`
-- **opaque atoms** — `Uuid`, `Money`, `DateTime`, `Entity`, `Duration`, `Vec2`,
-  `Vec3`, `Vec4`, `Quat`, `Color`, `Timer`, `Rect`
-- **containers** — `Option<T>`, `Vec<T>`, `Map<K,V>`, `Queue<T>`, `Stream<T>`,
-  `Handle<T>`, `Future<T>`, `Result<T,E>`, `Either<L,R>`, `Tuple<A,B>`
-
-  The last four exist for `## api` signatures
-  ([§11](#11-the-module-dialect-kind-module)): a module spec is read next to the
-  code it describes, so a fallible or effectful return is written the way the
-  code writes it — `Result<Wave, TableError>` — rather than normalized down to
-  `Wave` plus an `on error` bullet. A tuple is spelled as the container
-  `Tuple<A, B>`, not `(A, B)`, so the type grammar stays `Ident<args…>`.
-- a struct/enum/marker defined or imported in this file
-
-Anything else is an `undefined-type` error.
-
-### 4.4 `in:` / `out:`
+A `~` line holds exactly one `→` (U+2192, with a space either side). The text
+before the arrow is the old wording and the text after it is the new one, each
+cut down to the clause that differs. The words both versions share lead the line
+and are written once:
 
 ```
-in:  TileRequest
-out: Tile
+~ - check the Score covers the price → the Purse covers the price
 ```
 
-Each is a single type expression. **Illegal in the Bevy dialect** — a Bevy unit's
-interface is its access block, not an input and an output — and **illegal in a
-`kind: module`**, whose inputs and outputs are its functions' parameters and
-return types ([§11](#11-the-module-dialect-kind-module)).
+This reads as "check the Score covers the price" becoming "check the Purse
+covers the price". When the shared words would only come after the change, rephrase
+the step so they lead.
 
-### 4.5 Importing types (`use`)
+When the change only adds a clause, the new side starts with `… `. That means
+"the whole old wording, then this":
 
 ```
-use enemy-waves: Wave, EnemyHealth
+~ - write WaveCleared → … with early set when the timer has not finished
 ```
 
-Brings type **names** (not bodies) from another unit into this file's scope. The
-target is a bare `<unit>` resolving to a sibling `<unit>.hmml` in the same task
-directory. Legal at the top of `## data` **and** of each world section
-([§8.1](#81--components----resources----events)).
+When more than one clause changes, write a `-` line and a `+` line instead. A
+`~` line with no arrow, or with more than one, is `bad-tilde` (error).
 
-Malformed ref / empty type list / non-PascalCase name → `malformed-import`
-(error). Importing a type twice, or one also defined locally →
-`duplicate-import` (error). A well-formed import whose target file or type does
-not exist → `unresolved-import` (warning, filesystem-aware tools only). The
-section an import lands in decides the imported name's **role**, never whether
-it has to resolve — every `use` line is checked the same way.
+## 4. Line annotations
 
-### 4.6 `## data` in the Bevy dialect
+A content line may end with annotations. They come in this order, and each at
+most once:
 
-**`plugin` / `system` only**, and optional. A Bevy feature is full of types that
-are not components, resources, or events: a field type, an enum a component is
-built from, a config record nested inside a resource. They belong here.
+```
+<text> [^anchor] [@ <file>[:<line>]] [@ api <M>::<fn>[, <M>::<fn>…]] [@ guards ^a, ^b]
+```
+
+- **`^anchor`** names the line so a test can say it guards it.
+  - It is `[a-z][a-z0-9_]*` and unique in the file (`duplicate-anchor`).
+  - It goes on unit steps and unit invariants only.
+- **`@ <file>[:<line>]`** is the **diff link** (§8): where the diff makes this
+  line true.
+  - `<file>` is any path suffix that identifies one file (`waves.rs` or
+    `waves/director.rs`).
+  - The line counts on the `head` side for context, `+` and `~` lines, and on
+    the `base` side for `-` lines.
+  - Name the first line of the expression that decides the behaviour, not the
+    first line of the enclosing function.
+- **`@ api <Module>::<fn>`** (or `<Module>::<Type>::<fn>`) points at an `## api`
+  entry of this file. `unknown-api-ref` (error) is reported when it names none.
+  - A step whose work spans several functions lists them, separated by commas.
+  - `@ api M::f` matches a `fn f` or a `fn M::f` in module `M`.
+  - Unit steps only.
+- **`@ guards ^a, ^b`** lists the anchors a test line guards. `unknown-anchor`
+  (error) is reported when one is not defined. Test lines only.
+
+An annotation out of order, repeated, or on a line kind that does not take it is
+`bad-annotation` (error).
+
+**`unlinked-change`** (warning) is reported for a `+`, `-` or `~` unit step,
+`## api` `fn` entry or test line without a diff link.
+
+- A `+` or `-` step also counts as linked when a line it sits under, or one
+  nested under it, carries a link and has the same gutter. One link can cover a
+  whole added or removed block.
+- Data lines, invariants and module lines may stay unlinked.
+
+## 5. `## intent`
+
+One to three `- ` bullets saying what the PR sets out to do, for its consumer.
+They read like the done-when, not like the diff.
+
+```
+## intent
+  - every enemy killed pays its bounty into the purse, and a wave cleared before its timer pays a bonus
+```
+
+## 6. `## data`
+
+The data shapes the change touches. A type is listed only when a unit step or an
+`## api` signature of this delta names it, **and** one of these holds:
+
+- its fields change;
+- the change adds or removes it;
+- the reader needs its shape to follow a changed step.
+
+A type the PR adds that nothing in the delta names stays out.
 
 ```
 ## data
-enum SpawnPattern { ring, scatter, line }
-struct SpawnPoint {
-  offset: Vec2,
-  pattern: SpawnPattern,
-}
-
-## resources
-struct WaveConfig {
-  interval_secs: f32,
-  points: Vec<SpawnPoint>,
-}
+  component struct Enemy {
+    health: f32,
+-   score_value: u32,
++   bounty: u32,
+  }
++ event struct EnemyDied { enemy: Entity, bounty: u32, at: Vec3 }
++ resource struct Purse { coins: u32, earned_this_wave: u32 }
++ enum Rarity { common, elite }
 ```
 
-Three rules, all of them the consequence of one idea — **`## data` assigns no
-role**:
+- `struct Name {` opens a block whose fields are `name: Type,` lines nested one
+  step deeper. A `}` at the struct's own depth, with the struct's own gutter,
+  closes it. In a one-line `struct Name { a: A, b: B }` the fields have no
+  gutter of their own.
 
-- **`in:` / `out:` are illegal** (`malformed-struct`). Here the section is a type
-  namespace, not an interface; a Bevy unit's interface is its access block.
-- **`marker` is illegal** (`malformed-marker`) — a marker *is* a component, so
-  it belongs in `## components`.
-- **A `## data` name may not appear in an access list.** Naming one under
-  `query:` / `reads:` / `emits:` / … is an `access-role-mismatch`, worded to say
-  the type exists but has no role, so the fix is to move the declaration rather
-  than write it.
+- Field names are written as the code writes them.
 
-The type namespace is shared with the world sections, so declaring the same name
-in `## data` and in `## components` is a `duplicate-type` error: a shape is
-role-less or it has a role, never both. `use` imports work here too, and an
-import into `## data` is role-less exactly like a local declaration.
+- `enum Name { a, b }` has unit variants. It is written on one line or as a
+  block, like a struct.
 
-A field of a component may name a `## data` type freely — that is the whole
-point of the section.
+- Types use the Rust-like subset:
 
-### 4.7 Referencing a Rust type (`@ <path>`)
+  - primitives: `String bool i8..i64 u8..u64 f32 f64`;
+  - atoms: `Uuid Money DateTime`, and Bevy's
+    `Entity Vec2 Vec3 Quat Color Timer Duration Handle<T>`;
+  - containers:
+    `Option<T> Vec<T> Set<T> Map<K, V> Future<T> Result<T, E> Either<L, R> Tuple<A, B> Queue<T> Stream<T>`;
+  - functions: `Fn<A, R>`, with `Tuple<…>` for several parameters;
+  - any `PascalCase` name.
 
-A type declaration may end its head with `@ <repo-relative-path>`, saying **this
-type already exists, over there**:
+  A name the file does not define is fine, because the delta shows only what
+  changed.
 
-```
-## components
-struct Wave @ src/waves/mod.rs
-struct EnemyHealth @ src/waves/mod.rs {
-  hp: f32,
-  remaining: u32,
-}
-marker Spawner @ src/waves/mod.rs
-```
+- A `struct`/`enum` defined twice on the same side is `duplicate-type` (error).
+  A `-`/`+` pair of the same name is a change, not a duplicate. The same holds
+  for modules and `fn` entries.
 
-The path resolves exactly like a module's `@ path` ([§3](#3--modules)): against
-the declared `base:`, then the `source.repo` checkout roots, then the spec's own
-directory, then the workspace root. It is legal in **both dialects** and in
-every type-declaring section — a `## data` reference is role-less like any other
-`## data` name.
+- Struct and enum names cross-link wherever they appear in prose, and in a unit
+  header's `on <Event>` (§7.1).
 
-**The body is optional, and when present it is partial.** It lists the members
-this spec has something to say about; anything it does not mention **stays as it
-is**. Every listed member is an **assertion** that the real type already has it.
+### 6.1 ECS roles
 
-Changing the member set is a change like any other, so it is written with the
-`# +` / `# -` markers of [§10](#10-change-annotations):
+A type line may start with the role the code registers it with:
+
+| Role        | Bevy                                                      |
+| ----------- | --------------------------------------------------------- |
+| `component` | `#[derive(Component)]`                                    |
+| `resource`  | `#[derive(Resource)]`                                     |
+| `event`     | `#[derive(Event)]` / `EntityEvent`, observed with `On<E>` |
+| `message`   | `#[derive(Message)]`, read with `MessageReader<E>`        |
+| `state`     | `#[derive(States)]` / `SubStates`                         |
 
 ```
-struct EnemyHealth @ src/waves/mod.rs {
-  hp: f32,
-# - remaining: u32,
-# +
-  streak: u32,
-}
+  component struct Enemy {
++ resource struct Purse { coins: u32 }
+  state enum Screen { title, gameplay }
 ```
 
-That falls out of what a marker is. `# +` and `# -` are comments, and the parser
-skips comments, so an added member never reaches the assertion check below and an
-in-progress spec is never noisy about work that has not landed — which is exactly
-the property the v2.2 inline markers were written to provide, reached by the
-route every other section already uses.
+- The role is read off the derive. A type with none of these derives takes no
+  role: a field type, an enum a component is built from.
+- A unit struct (a marker such as `struct Boss;`) is written
+  `component struct Boss {}`.
+- A type whose role changes is a `-`/`+` pair.
+- Nothing checks the role against the code or an access against the role; it
+  is there so a changed ECS shape reads as one. Any other word before
+  `struct`/`enum` is `bad-struct`.
+- Bevy's own types (`Transform`, `Time`, `Children`, …) are never listed.
 
-**The v2.2 inline form is legacy.** A member line may still open with `+` or `-`
-and still means add / remove, so v2.2 specs keep working and
-the parser still reads them; new specs do not write them. Two spellings
-for one statement is one too many, and the inline one is the spelling that made
-§10's rule — unannotated text is the baseline — untrue inside a body. A `+` or
-`-` on a type that declares its own shape stays a `malformed-field` error: there
-is nothing to change.
+## 7. `## unit <name> [in <Schedule> | on <Event>] — <what it is> [@ <file>:<line>]`
 
-The filesystem-aware tools check four things, all **warnings**:
+There is one section per **unit**. A unit is an entry point whose behaviour
+reaches a changed file: an endpoint, a queue consumer, a scheduled job, a tool
+the agent calls, or a CLI command.
 
-- the file declares no such type → `rust-type-not-found`
-- its `#[derive(…)]` does not match the section's role → `rust-role-mismatch`
-- the spec says `struct` and the code says `enum`, or `marker` names a struct
-  with fields → `rust-shape-mismatch`
-- a member the body asserts is not there → `rust-member-unknown`
+- In a Bevy app the entry points are what the `App` runs: a **system** in a
+  schedule, an **observer**, and a `Plugin::build` when what it registers
+  changes beyond the systems it adds (a resource inserted, a state
+  initialised). A CLI tool or a non-Bevy crate keeps the classic ones: a
+  command, a request handler, a queue consumer.
+- Follow each call path from the change up to the first entry point. A
+  collaborator reached through another unit gets a unit of its own when its
+  consumer differs. A helper that two systems call is not a unit; it is the
+  `## api` entry both link to.
+- `<name>` is kebab-case, verb-first or the queue, tool or command name, and
+  unique in the file (`duplicate-unit`).
+- The prose after `—` says what the unit is. The optional diff link points at
+  the entry point.
+- A unit the PR adds writes `(new)` after its name:
+  `## unit pay-bounty (new) on EnemyDied — …`. A unit it removes writes `(removed)`.
+  Every line of a `(new)` unit is `+` and every line of a `(removed)` one is
+  `-`; a line that breaks this is `nested-change-mismatch`.
+- When one unit contains another (a message handler around the tools it calls),
+  the outer one comes first.
 
-A path that does not resolve produces one `unresolved-source-path` warning and
-none of the above: nothing about a file that is not there is knowable, so one
-warning is honest and four would be noise.
-
-The derive check is the one worth the whole feature. In Bevy a type's role
-**is** its derive, so filing a `#[derive(Resource)]` type under `## components`
-— the classic spec error — is caught at the moment it is cheap to fix. A
-reference is worth more than a copy precisely because a copy cannot be checked.
-
-Bevy renamed buffered events, so `## events` accepts `Event`, `Message`,
-`BufferedEvent`, or `EntityEvent`; they are the same statement about the type.
-
-### 4.8 Importing from a dependency (`use extern`)
-
-A Bevy game leans on components it does not own — avian's `Collider`, a
-plugin's marker. No path in this checkout names them:
-
-```
-## components
-use extern avian3d::prelude: Collider, RigidBody
-```
-
-Same rules as a `use` import ([§4.5](#45-importing-types-use)): names join the
-type namespace, **the section assigns the role**, importing a name twice or one
-also defined locally is `duplicate-import`. And nothing else — there is no file
-to resolve, no derive to check, no members. Only the path's shape is checkable
-(`crate` or `crate::module::path`), which is `malformed-extern-import`.
-
-That asymmetry is why it is a second keyword rather than a path that happens not
-to resolve. `@ <path>` means *verified*; `use extern` means *taken on trust*, and
-a reader should not have to resolve a path to tell which they are looking at.
-
-`use extern` is told from an ordinary import by token count: `use extern foo: T`
-has a target after the keyword, whereas `use extern: T` is an import from a
-sibling unit that happens to be called `extern`. Requiring the second token
-keeps a legal unit name from being stolen.
-
-Goto-definition on an external type opens its **docs.rs** page in the editor's
-browser — for a type with no file on this machine, its documentation is the
-nearest thing to a definition there is.
-
-## 5. `## behavior`
-
-Nested `-` bullets; indentation is nesting (2 spaces per level); mostly free
-prose.
-
-### 5.1 Soft control-flow keywords (closed set)
-
-`if …:` / `else:` / `for each …:` / `while …:` / `try:` / `on error …:` — each
-with a trailing `:` and its body nested one level deeper. Everything else is
-prose.
-
-### 5.2 Cross-references
-
-Declared names — modules, systems, structs, enums, markers — written verbatim in
-prose are cross-linked by the LSP. Link-if-known, silent-if-unknown: a mistyped
-name is a missing link, not an error.
-
-**Convention for `kind: plugin`:** make the top-level bullets the system names,
-with each system's logic nested beneath.
+The body is the unit's **whole behaviour walk as `head` leaves it**, with the
+changed steps marked, then an optional `invariants:` block:
 
 ```
-## behavior
-- tick_wave_timer:
-  - advance WaveState.elapsed by the frame delta from Time
-  - if elapsed exceeds WaveConfig.interval_secs:
-    - mark WaveState due and reset elapsed
+## unit spawn-wave in FixedUpdate — the wave director spawning enemies on the wave timer @ waves.rs:40
+  - tick the wave timer
+  - if the timer finished:
+    - spawn X enemies around the player at the wave's ring radius
+~   - give each Enemy a score value from the wave table → a bounty from the wave table ^bounty_from_table @ waves.rs:61 @ api WaveTable::bounty
+  - if no Enemy is left alive:
+~   - write WaveCleared → … with early set when the timer has not finished ^early_clear @ waves.rs:88
+-   - add the wave's score bonus to the Score @ waves.rs:96
+-     - flash the score text
++   - if the clear was early:
++     - credit the wave bonus to the Purse ^wave_bonus @ waves.rs:92 @ api Purse::credit, WaveTable::bonus
+    - start the next wave's timer
+  invariants:
+  - at most N enemies are alive at once
+  - a wave is cleared exactly once
++ - a wave bonus is paid only for a clear before the timer ran out ^bonus_only_early
 ```
 
-### 5.3 `where:` symbol bindings (optional)
+- **Steps** are `- ` bullets at mental-model altitude. Control flow uses only
+  the closed keyword set, each keyword ending in `:` with its body nested
+  beneath it: `if <cond>:` · `else:` · `for each <x>[ in <y>]:` ·
+  `while <cond>:` · `try:` · `on error[ <e>]:`. Everything else is prose.
+- **Context is kept.** Unchanged steps stay in the walk so that the changed ones
+  read in place. A unit the PR removes is written as it was at `base`, every
+  line `-`. Every line of a new unit is `+`.
+- **A step that only moved is context**, written at its `head` position. A move
+  that changes what happens (a step now outside a `try:`, or now before a check)
+  is marked by what changed: `~` on the step, or `+`/`-` on the control-flow
+  line that moved.
+- **Data files steer behaviour too.** A changed asset or config the code reads
+  (a wave table in RON, a shader constant) is a step nested under the step that
+  reads it, linked to the file's line.
+- Literal `X`, `Y`, `N` stand for quantities whose value is not the point.
+- **`invariants:`** at content depth 0 opens the unit's invariants: flat `- `
+  bullets, each a checkable claim. Unchanged ones stay as context.
+  - They come after the last step.
+  - `invariants:` itself takes the gutter of its first bullet, or a space.
+  - An invariant is marked by whether it holds at `base` and at `head`, even
+    when the code that makes it true is untouched. For example, a memory that
+    now holds a placeholder because the model writes one is marked `+`.
+  - An invariant that holds at both sides is context, whatever enforces it now.
+    That holds even when a check was removed because the new design makes the
+    claim true by construction.
+  - An invariant the PR adds or changes about **scope** (which entities a query
+    can reach), **ordering** (what runs before what, within a frame or across
+    states), **failure** (what an error leaves behind) or **persistence** (what
+    outlives a state or a despawn, and where it is kept) is always written.
+    Lifting a walk never folds such an invariant into a step.
+- A step whose work is done by public functions listed in `## api` ends with
+  `@ api Module::fn` after its diff link.
 
-A `where:` line at column 0 ends the bullets and opens a binding block:
+### 7.1 What runs a unit
 
-```
-where:
-  N = 8 @ WaveConfig.base_count
-```
+A Bevy unit names what runs it, between the name (or its `(new)`/`(removed)`)
+and the ` — `:
 
-Use literal `X` / `Y` / `N` in prose for abstract quantities and bind them here.
-
-### 5.4 Cross-spec references (`@ spec`)
-
-A module line, **system entry**, behavior step, `## api` entry, or invariant may
-end with `@ spec <unit>` — "more specification under that unit". At most one per
-line, always the last annotation (after any `@ path`).
-
-A ref may name a **member** of the target: `@ spec <unit>::<function>`, or
-`@ spec <unit>::<Type>::<method>` for a method — one `## api` entry of a
-`kind: module` spec ([§11](#11-the-module-dialect-kind-module)). Unit segments
-follow the header ident rule ([§2](#2-header)); member segments are
-`[A-Za-z_][A-Za-z0-9_]*` and there are at most two of them. A malformed ref is
-an error.
-
-`::` rather than `.` or `#`: `.` already means field access in behavior prose
-([§5.2](#52-cross-references)) and is a legal ident character, and `::` extends
-to `Type::method` without a second rule. A `use` line names a spec file and
-imports **types** out of it, so a member on its ref is a `malformed-import`
-error ([§4.5](#45-importing-types-use)).
-
-**Two severities, because the two failures differ.** A well-formed ref whose
-target **file** does not exist is a warning (`unresolved-spec-ref`) — the target
-spec may be planned but not written yet. A ref whose file *does* exist but
-defines no such member is an **error** (`unknown-spec-member`): the file is right
-there to check the name against, so the name is simply wrong. That is what makes
-a member ref worth navigating by — and it means whatever writes an overview's
-member refs must write the module specs in the same pass.
-
-The LSP completes members after `@ spec <unit>::`, jumps to the named function's
-own line on goto-definition, hovers a member ref as that one entry (signature
-plus bullets), and answers find-references from an `## api` entry's own name with
-"who calls this function?". A member request matches only the refs naming that
-member; a unit request matches every ref into the unit.
-
-## 6. `## invariants`
-
-Flat `-` bullets, each a checkable property: a cap, an ordering guarantee, an
-idempotency claim, a component-exclusivity rule.
-
-## 7. Kinds and the section schema
-
-### 7.1 Kinds
-
-| `kind:` | Models |
-|---|---|
-| `endpoint` | One HTTP endpoint |
-| `workflow` | One message/queue workflow |
-| `job` | One scheduled job |
-| `plugin` | One Bevy `Plugin` — what it registers, and in what order |
-| `system` | One Bevy system, split out of a plugin |
-| `module` | One module's public surface, function by function ([§11](#11-the-module-dialect-kind-module)) |
-
-### 7.2 Which sections each kind takes
-
-| kind | required | also allowed | rejected |
-|---|---|---|---|
-| `endpoint` / `workflow` / `job` | `modules`, `data`, `behavior`, `invariants` | — | every Bevy section |
-| `plugin` | `systems`, `behavior`, `invariants` | `modules`, `data`, `components`, `resources`, `events` | `access` |
-| `system` | `access`, `behavior`, `invariants` | `modules`, `data`, `components`, `resources`, `events` | `systems` |
-| `module` | `modules`, `data`, `api`, `invariants` | — | `behavior` and every Bevy section |
-
-A required section that is absent is a `missing-section` error. A grammatical
-section that is wrong for the kind is a `section-not-allowed-for-kind` error —
-it still parses, so the LSP keeps working mid-edit.
-
-Note the asymmetry: the classic kinds must declare all four sections (v1
-behaviour, preserved), while the Bevy sections are simply **omitted** when they
-have nothing to say. A plugin that registers no events has no `## events`, and
-one whose every shape has a role has no `## data`.
-
-`## data` is the one section both dialects take, and it means something
-different in each ([§4](#4--data), [§4.6](#46--data--in-the-bevy-dialect)) — the
-`in:` / `out:` lines are what stay dialect-specific, not the section header.
-
-When `kind:` is missing or unparsable the classic four-section schema applies,
-so a file being typed top-down does not first look like a broken plugin.
-
-### 7.3 Plugin per file, or system per file?
-
-Both. Start with one `kind: plugin` file per feature, systems described inline.
-When one system's behavior outgrows a few nested bullets, split it into its own
-`kind: system` file and point at it from the plugin's system entry:
+- `in <Schedule>` for a system: `in Update`, `in FixedUpdate`,
+  `in OnEnter(Screen::Gameplay)`. The schedule is the `add_systems` argument,
+  written as the code writes it: a PascalCase label, optionally with one
+  parenthesised `Type::Variant` argument, no spaces.
+- `on <Event>` for an observer: `on EnemyDied`, `on Add<Enemy>`. The event is
+  the observer's `On<…>` type, one token. When it is a `## data` type, it
+  cross-links there.
 
 ```
-spawn_enemies — spawns the next wave at each spawn point @ spec spawn-enemies
+## unit pay-bounty (new) on EnemyDied — the observer paying an enemy's bounty when it dies @ bounty.rs:12
 ```
 
-The split file imports the shapes it touches rather than redeclaring them
-([§4.5](#45-importing-types-use)).
+- The trigger is as `head` leaves it (`base` for a `(removed)` unit). A change
+  to when a unit runs — its schedule, a run condition, an ordering constraint
+  such as `.after(..)` or `.chain()` — is a step at the top of the walk, linked
+  to the registration line: `~ - runs in Update → FixedUpdate @ plugin.rs:22`.
+- A unit that is not a system or an observer names no trigger.
+- A malformed trigger, or a word other than `in`/`on` in that place, is
+  `bad-unit-header`.
 
-## 8. The Bevy sections
+## 8. Diff links and the checkout
 
-### 8.1 `## components` / `## resources` / `## events`
+A diff link is resolved against the **checkout** of `repo`. The first of these
+that exists and contains the `head` commit (the `base` commit, for
+`head: worktree`) is used:
 
-Body grammar is [§4](#4--data)'s type grammar — `struct`, `enum`, `use` — minus
-`in:`/`out:`, plus one addition:
+1. `~/fun_aspects/{project}/{topic}/{task}/{aspect}`, where the delta sits in
+   `notes/{project}/{topic}/{task}/aspects/{aspect}/`
+2. `~/fun_worktrees/{project}/{topic}/{task}`, where the delta sits in that
+   task's notes dir or one of its aspects'
+3. `~/fun_repos/{repo}`
 
-```
-marker Spawner
-```
+The first two are tried only when `repo` names the delta's `{project}`: a task
+is one repo, so the task directory is the checkout.
 
-`marker Name` declares a **zero-sized component**. It is legal only in
-`## components`; markers are common enough in Bevy that spelling one as an empty
-struct reads badly.
+`<file>` resolves first among the files `git diff --name-only base...head`
+lists, then among all files at that side's commit. For `head: worktree` the
+head side is the working tree: the diff is `git diff --name-only base` plus the
+untracked files, and the files are those on disk. It must match exactly one
+path, comparing whole path components from the end. `<line>` must lie within the
+file at that side (`head` for context/`+`/`~`, `base` for `-`).
 
-**The section assigns the role.** A type declared *or imported* into
-`## components` is a component in this file, one in `## resources` is a resource,
-one in `## events` is an event, and one in `## data` has no role at all
-([§4.6](#46--data--in-the-bevy-dialect)). Role is what makes an access list
-checkable, and it is why the same name may not be declared in two of these
-sections (`duplicate-type`).
+These checks run under `--lint` and in the editor, and report:
 
-For a type that references real code ([§4.7](#47-referencing-a-rust-type--path))
-the section's claim is checked against the code's `#[derive(…)]` — the one place
-where "the section assigns the role" can be wrong out loud, and the reason a
-reference beats a copy.
+- `unresolved-diff-link` (warning): no file, more than one file, or a line out
+  of range. The message names the candidates.
+- `checkout-not-found` (warning, once per file): no checkout holds `head`
+  (`base`, for `head: worktree`).
+- `stale-delta` (info): the checkout's tip of `branch` is past `head`. Never
+  for `head: worktree`.
 
-Put a type here only if a system actually accesses it as a component, resource,
-or event. A shape that merely *appears inside* one of those — a field type, an
-enum it is built from — goes in `## data`.
+## 9. `## api`
 
-```
-## components
-struct Wave {
-  index: u32,
-  remaining: u32,
-}
-marker Spawner
-
-## resources
-struct WaveState {
-  current: u32,
-  due: bool,
-}
-
-## events
-struct WaveCleared {
-  index: u32,
-}
-```
-
-**Bevy's own types need no declaration.** `Transform`, `Time`, `AssetServer`,
-`AppExit` and their friends are known to the parser with their roles; restating
-them in every spec would be noise. The lists live in `mml-parser/src/validate.rs`
-(`BUILTIN_COMPONENTS`, `BUILTIN_RESOURCES`, `BUILTIN_EVENTS`) — extend them
-rather than declaring an engine type locally. A local declaration wins over a
-built-in of the same name.
-
-### 8.2 `## systems`
-
-Zero or more entries. Each is a declaration line at column 0 —
+The public signatures the delta links to or changes, **signatures only**. Each
+module line sits at content depth 0 and says what the module is for. Its `fn`
+entries sit one step deeper:
 
 ```
-<snake_name> — <responsibility> [@ <path>] [@ spec <unit>]
+## api
+  WaveTable — the per-wave numbers the director reads @ wave_table.rs
+-   fn score_value(wave: u32) -> u32 @ wave_table.rs:20
++   fn bounty(wave: u32) -> u32 @ wave_table.rs:20
++   fn bonus(wave: u32) -> u32 @ wave_table.rs:31
++ Purse — the coins the player holds this run @ purse.rs
++   fn credit(coins: u32) @ purse.rs:14
++   fn Purse::spend(cost: u32) -> Result<u32, NotEnough> @ purse.rs:22
 ```
 
-— optionally followed by a 2-space-indented **access block**. The line shape is
-exactly a module line ([§3](#3--modules)); the schedule and everything else Bevy
-lives in the block, so `@` keeps its two existing meanings and no more.
+- **Module line:** `PascalName — responsibility [@ <file>]`. Names are unique in
+  the section (`duplicate-module`).
 
-Names should be snake_case, matching the Rust fn (a warning otherwise).
-Duplicate names are an error.
+- **`fn` entry:** `fn [Type::]name(param: Type, …) [-> Type] [@ <file>:<line>]`.
 
-```
-## systems
-tick_wave_timer — advances the wave clock @ src/waves/timer.rs
-  schedule: FixedUpdate
-  reads:    WaveConfig, Time
-  writes:   WaveState
-spawn_enemies — spawns the next wave at each spawn point @ spec spawn-enemies
-  schedule: FixedUpdate
-  after:    tick_wave_timer
-  run_if:   WaveState.due
-  query:    Transform + Spawner
-  spawns:   EnemyHealth, Wave
-```
+  - Signatures stay faithful to the code (`Result<u32, NotEnough>`, not
+    normalised away). A method's receiver (`&self`, `&mut self`) is left out.
+  - `fn` entries carry no body.
+  - Two entries with the same name on the same side of one module are
+    `duplicate-fn` (error).
+  - A `fn` line outside a module, or nested deeper than one step, is `bad-fn`.
 
-### 8.3 The access block
+- **What a module is.** A module is the unit of code that owns the functions,
+  named as the code names it:
 
-A closed set of `key: value` lines. Each key may appear once.
+  - Rust: a module, or a type with an `impl`. A resource's methods are its
+    module, named after the resource.
+  - A trait defined in another type's file is its own module, with its own
+    module line.
 
-| Key | Value | Meaning |
-|---|---|---|
-| `schedule:` | one label | Which schedule it runs in. **Required.** |
-| `set:` | idents | System-set membership (declares the set). |
-| `after:` / `before:` | idents | Ordering against systems or sets. |
-| `run_if:` | free text | Run condition. |
-| `query:` | `A + B - C` | Matched component set: `+` requires, `-` excludes. |
-| `reads:` / `writes:` | idents | Components and resources accessed. |
-| `spawns:` / `despawns:` | idents | Components on entities created / destroyed. |
-| `emits:` / `consumes:` | idents | Events written / read. |
+  **A system or an observer is never an `## api` entry**: the schedule calls
+  it, not a caller, so it is a unit (§7). Neither is a `Plugin` impl.
 
-**Roles are enforced.** `query:`, `spawns:`, `despawns:` take components;
-`emits:`, `consumes:` take events; `reads:` and `writes:` take either a component
-or a resource. A name in the wrong place is `access-role-mismatch`; a name that
-resolves to nothing at all is `undefined-access-item`.
+- **Which `fn` entries are listed.** An entry is listed when:
 
-`query:` names the matched set; a component also listed in `writes:` is mutably
-accessed. Resources appear only under `reads:` / `writes:`.
+  - a unit step links to it, or
+  - the PR removes or changes a public function that exists at `base`.
 
-**Schedules.** The built-in labels are `PreStartup`, `Startup`, `PostStartup`,
-`First`, `PreUpdate`, `StateTransition`, `RunFixedMainLoop`, `FixedFirst`,
-`FixedPreUpdate`, `FixedUpdate`, `FixedPostUpdate`, `FixedLast`, `Update`,
-`PostUpdate`, `Last`, `Main`, `SpawnScene`, plus `OnEnter(X)` / `OnExit(X)` /
-`OnTransition(…)` recognised by shape. Anything else is a **warning**, not an
-error — custom schedules are legitimate.
+  A function the PR adds that no step links to stays out. A module the PR adds
+  still gets its module line, so the reader knows it exists. A changed signature
+  is a `-`/`+` pair. It is a `~` only when the change is the signature's tail,
+  such as the return type (`fn spend(cost: u32) -> bool → Result<u32, NotEnough>`), so
+  that the parts before it read once. A parameter added, removed or retyped
+  mid-signature is always a pair. A function that turns public counts as added
+  (`+`). One that stops being public counts as removed (`-`).
 
-**Ordering refs.** `after:` / `before:` names should match a system or a `set:`
-declared in the same file; otherwise a **warning**. Only checked for
-`kind: plugin` — a standalone `kind: system` file legitimately orders against
-systems specced elsewhere, so its refs are never flagged.
+- **What stays out:** private helpers, constructors (`new`, `Default`), impls
+  of Bevy's own traits (`Plugin`, `FromWorld`), and overrides of a trait method
+  already listed under the trait.
 
-### 8.4 `## access`
+## 10. `## tests`
 
-The `kind: system` form: exactly the [§8.3](#83-the-access-block) block, written
-unindented as its own section.
+The PR's test changes, **summarised**. Every line is a flat entry (content depth
+0, no body):
 
 ```
-## access
-schedule: FixedUpdate
-set:      WaveSpawning
-after:    tick_wave_timer
-query:    Transform + Spawner - SpawnBudget
-reads:    WaveConfig, Time
-writes:   WaveState
-spawns:   EnemyHealth, Wave
+## tests
++ tests 4 — bounty per wave, the early flag, bonus only when early, one clear per wave @ waves_test.rs:12 @ guards ^bounty_from_table, ^early_clear, ^bonus_only_early
++ test bonus_paid_on_early_clear — clearing before the timer credits the wave bonus @ waves_test.rs:80 @ guards ^wave_bonus
+- tests 3 — score spending in the shop; the score is no longer spent @ shop_test.rs:30
+~ test shop_buys_upgrade — with score → with coins @ shop_test.rs:60
 ```
 
-## 9. Diagnostics
+- `test <name> — <description>` is one test. `<name>` is the test's name in
+  snake_case, shortened to the words that identify it.
+- `tests <N> — <description>` is a group of N tests that change together for one
+  reason. N counts test functions as they appear in the source, so a case table
+  one test function runs over counts once. A group's diff link points at its
+  first test. When the tests of one reason sit in several files, write one line
+  per file, so that each file is one jump away.
+- Group whenever several tests share a reason. Give a test its own `test` line
+  when it is the only guard of a changed step, or when its change needs saying
+  on its own.
+- `@ guards` names the anchored lines the tests exercise. A test that guards no
+  line of the delta has no `@ guards`.
+- Unchanged tests are not listed.
+- Any other entry shape is `bad-test` (error).
 
-Stable codes, matched exactly by the skills and the LSP. Defined in
-`mml-parser/src/diagnostic.rs`.
+## 11. Checks at a glance
 
-**Header:** `missing-header-key`, `bad-kind`, `bad-method`, `unknown-header-key`,
-`malformed-header-line`.
+| Code                     | Severity | Where                                          |
+| ------------------------ | -------- | ---------------------------------------------- |
+| `missing-header-key`     | error    | header (§2)                                    |
+| `unknown-header-key`     | error    | header (§2)                                    |
+| `bad-header-value`       | error    | `base` not a commit id, `head` neither one nor `worktree` (§2) |
+| `unknown-section`        | error    | (§1)                                           |
+| `section-order`          | error    | (§1)                                           |
+| `missing-intent`         | error    | no `## intent`, or an empty one (§5)           |
+| `no-unit`                | error    | no `## unit` section (§7)                      |
+| `bad-gutter`             | error    | (§3)                                           |
+| `bad-indent`             | error    | (§3)                                           |
+| `nested-change-mismatch` | error    | (§3, §7)                                       |
+| `change-in-intent`       | error    | (§3)                                           |
+| `bad-tilde`              | error    | (§3.1)                                         |
+| `bad-annotation`         | error    | (§4)                                           |
+| `duplicate-anchor`       | error    | (§4)                                           |
+| `unknown-api-ref`        | error    | (§4)                                           |
+| `unknown-anchor`         | error    | (§4)                                           |
+| `bad-struct`             | error    | malformed struct/enum block, unknown role (§6) |
+| `duplicate-type`         | error    | (§6)                                           |
+| `duplicate-unit`         | error    | (§7)                                           |
+| `bad-unit-header`        | error    | no name or `—`, a bad trigger (§7, §7.1)       |
+| `misplaced-invariants`   | error    | a step after `invariants:`, or two blocks (§7) |
+| `bad-fn`                 | error    | (§9)                                           |
+| `duplicate-module`       | error    | (§9)                                           |
+| `duplicate-fn`           | error    | (§9)                                           |
+| `bad-test`               | error    | (§10)                                          |
+| `no-change`              | warning  | no `+`, `-` or `~` line anywhere               |
+| `unlinked-change`        | warning  | (§4)                                           |
+| `unresolved-diff-link`   | warning  | `--lint` / editor (§8)                         |
+| `checkout-not-found`     | warning  | `--lint` / editor (§8)                         |
+| `stale-delta`            | info     | `--lint` / editor (§8)                         |
 
-**Structure:** `missing-section`, `duplicate-section`, `section-out-of-order`,
-`unknown-section`, `section-not-allowed-for-kind`, `tab-indent`.
+`hobby-mml-parser --lint` exits non-zero on any error or warning. Info never gates.
 
-**Modules:** `malformed-module`, `module-name-not-pascal`.
+## 12. A whole delta
 
-**Data:** `malformed-struct`, `malformed-field`, `malformed-type`,
-`bad-param-source`, `unterminated-block`, plus `malformed-marker` for a `marker`
-line in `## data` (a marker is a component; see [§4.6](#46--data--in-the-bevy-dialect)).
+```hmml
+repo:   bevy_survivor
+branch: wave-bounties
+base:   3a9c41e07b
+head:   c58d20f9a1
+pr:     https://github.com/example/bevy_survivor/pull/42
 
-**Imports:** `malformed-import`, `duplicate-import`, `unresolved-import` (warn),
-`malformed-extern-import`.
-
-**Rust references** ([§4.7](#47-referencing-a-rust-type--path)):
-`missing-type-body`, `malformed-type-path`, plus the filesystem-aware
-`rust-type-not-found` (warn), `rust-role-mismatch` (warn),
-`rust-shape-mismatch` (warn), `rust-member-unknown` (warn).
-
-**Behavior:** `dangling-else`, `dangling-on-error`, `malformed-binding`.
-
-**Cross-spec:** `malformed-spec-ref`, `duplicate-spec-ref`, `unresolved-spec-ref`
-(warn), `unknown-spec-member` (error, filesystem-aware only).
-
-**Api entries** ([§11](#11-the-module-dialect-kind-module)):
-`malformed-api-entry`, `duplicate-api-entry`, `empty-api` (warn).
-
-**Source linkage:** `unresolved-source-path` (warn).
-
-**Bevy:** `malformed-system`, `system-name-not-snake` (warn), `duplicate-system`,
-`malformed-marker`, `malformed-access`, `unknown-access-key`,
-`duplicate-access-key`, `missing-schedule`, `unknown-schedule` (warn),
-`undefined-access-item`, `access-role-mismatch`, `unresolved-system-ref` (warn).
-
-**Semantic:** `undefined-type`, `duplicate-type`, `duplicate-field`,
-`duplicate-module`.
-
-**Change annotations** ([§10](#10-change-annotations)):
-`empty-change-removal` (warn), `empty-change-addition` (warn),
-`redundant-change-bullet` (warn), `unrecoverable-baseline` (warn). All four are
-warnings and none is an error — an annotated spec is a valid spec, and these
-report a delta that has stopped describing a real change.
-
-The `unresolved-*` codes need a filesystem and are emitted only by the
-filesystem-aware consumers (the LSP and `hobby-mml-parser --lint`),
-never by the pure parse/validate passes.
-
-## 10. Change annotations
-
-An `.hmml` describes one unit **as it is**. When a task changes that unit, the
-change is written *on top of* that version rather than replacing it: the file
-keeps the **baseline** — the version the change starts from — and two comment
-markers, `# +` and `# -`, say what the change adds and removes.
-
-This is a **convention, not grammar.** Both markers are ordinary comments
-([§1](#1-file-shape)), so an annotated spec parses and validates exactly like any
-other, and a tool that ignores comments simply sees the baseline.
-
-- `# - <text>` — a line the change **removes**. Comment the original out **in
-  place**, keeping its text verbatim at its original indentation; the marker's
-  `-` stands in for the bullet the line had, where it had one.
-- `# +` — a marker introducing **added** content: the line directly beneath it,
-  together with any lines nested deeper than that line (its children). Several
-  added siblings each take their own marker — one marker covers one line's worth
-  of addition, the way a `+` in a diff does, so what is added is never inferred
-  from where a run happens to stop.
-
-```
-## behavior
-- for each Spawner:
-  # - spawn one enemy per tick
-  # +
-  - spawn WaveConfig.rate enemies per tick
-  # +
-  - emit a WaveSpawned event
-```
-
-A marker covering a line with children takes the whole subtree, so nested work
-needs one marker, not one per line:
-
-```
-# +
-- while the spawner's share is not exhausted:
-  - take the next SpawnPoint from WaveConfig
-```
-
-A `struct` / `enum` head is covered through its closing brace, since the brace
-sits at the head's own indentation and the subtree rule would stop one line
-short of it.
-
-The rules that make the convention worth having:
-
-1. **Baseline recoverability.** Dropping every `# +` block and un-commenting
-   every `# -` line must reproduce the baseline **exactly**. So a baseline line
-   is never deleted or reworded in place — it is commented out with `# -` and
-   the replacement added with `# +`. The file alone therefore carries both
-   versions and the whole delta, with no git archaeology, and the delta survives
-   being committed. This is a **checkable** property, and
-   `hobby-mml-parser` / the LSP check it: reconstructing the baseline and
-   finding that it no longer parses or validates is `unrecoverable-baseline`.
-2. **A modification is a removal plus an addition** — `# -` the old line, `# +`
-   the new one. There is no in-place edit.
-3. **One task's change at a time.** Annotations describe one change, not a
-   history of them; a spec is never a changelog. The next task starts from a
-   fresh extract of the code in its own task directory, so a second change never
-   lands on top of a first one's markers.
-4. **The annotations stay.** Nothing strips them once the implementation
-   matches: the spec is the record of what that change was, and un-annotating it
-   would leave a file indistinguishable from a plain baseline. The unannotated
-   lines are the version the change started from — not, after it lands, the code
-   as it is today.
-
-Annotations apply in **every** section, and to every line shape: a removed
-struct field, an added component, a new `## systems` entry with its whole access
-block, a changed behavior step, an added invariant. In `## api`
-([§11](#11-the-module-dialect-kind-module)) a marker on a `fn` line covers the
-**whole entry**, its nested bullets included, the way it covers a control-flow
-step's subtree — so a changed signature is a `# -` of the old `fn` line plus a
-`# +` of the new one with its bullets beneath. There is no second spelling
-for any of them — including a `@ <path>` type body, whose v2.2 inline `+` / `-`
-markers §10 supersedes ([§4.7](#47-referencing-a-rust-type--path)).
-
-In the tooling: `/hmml-extract --against <ref>` derives the delta from a
-branch's diff (`/task:build` runs it once the change is implemented, before
-GATE 2); plain extraction writes no annotations, and a human may annotate by
-hand; `/hmml-review` pressure-tests a hand-written delta against the rest;
-`/hmml-validate` expects `# +` claims to be present in the code and `# -`
-behaviour to be gone from it.
-
-## 11. The module dialect (`kind: module`)
-
-The behavioural kinds describe a **flow**: a handful of collaborators and a
-dozen steps. A `kind: module` spec is the layer underneath — **one module's
-public surface**, function by function, linked from the overview's `## modules`
-line.
-
-```
-system: bevy-survivor
-unit: wave-table
-kind: module
-source:
-  repo: bevy_survivor
-  paths:
-    - src/waves/table.rs
-
-## modules
-WaveRng — draws the spawn offsets @ src/waves/rng.rs @ spec wave-rng
+## intent
+  - every enemy killed pays its bounty into the purse, and a wave cleared before its timer pays a bonus
+  - the shop spends from the purse instead of from the score
 
 ## data
-use wave-rng: WaveRng
-struct WaveEntry {
-  index: u32,
-  count: u32,
-}
+  component struct Enemy {
+    health: f32,
+-   score_value: u32,
++   bounty: u32,
+    speed: f32,
+  }
++ event struct EnemyDied { enemy: Entity, bounty: u32, at: Vec3 }
++ resource struct Purse { coins: u32, earned_this_wave: u32 }
+  message struct WaveCleared {
+    wave: u32,
++   early: bool,
+  }
++ state enum Shop { closed, browsing }
+
+## unit spawn-wave in FixedUpdate — the wave director spawning enemies on the wave timer @ waves.rs:40
+  - tick the wave timer
+  - if the timer finished:
+    - spawn X enemies around the player at the wave's ring radius
+~   - give each Enemy a score value from the wave table → a bounty from the wave table ^bounty_from_table @ waves.rs:61 @ api WaveTable::bounty
+  - if no Enemy is left alive:
+~   - write WaveCleared → … with early set when the timer has not finished ^early_clear @ waves.rs:88
+-   - add the wave's score bonus to the Score @ waves.rs:96
+-     - flash the score text
++   - if the clear was early:
++     - credit the wave bonus to the Purse ^wave_bonus @ waves.rs:92 @ api Purse::credit, WaveTable::bonus
+    - start the next wave's timer
+  invariants:
+  - at most N enemies are alive at once
+  - a wave is cleared exactly once
++ - a wave bonus is paid only for a clear before the timer ran out ^bonus_only_early
+
+## unit pay-bounty (new) on EnemyDied — the observer paying an enemy's bounty when it dies @ bounty.rs:12
++ - credit the bounty to the Purse and add it to earned_this_wave @ bounty.rs:18 @ api Purse::credit
++ - spawn a coin burst where it died ^coin_burst @ bounty.rs:24
++ invariants:
++ - a dead enemy is paid for exactly once ^paid_once
+
+## unit buy-upgrade in Update — the shop screen's buy button @ shop.rs:70
+  - for each pressed buy button:
+~   - check the Score covers the price → the Purse covers the price ^can_afford @ shop.rs:78 @ api Purse::spend
+    - if it does not:
+      - shake the button and play the denied sound
+    - else:
+      - apply the upgrade to the player
+  - refresh the button labels
 
 ## api
-fn entry_for(index: u32) -> Option<WaveEntry> @ src/waves/table.rs:31
-  - look the index up in the table
-  - if the index is past the last authored wave:
-    - answer nothing, and let the caller scale the last entry
+  WaveTable — the per-wave numbers the director reads @ wave_table.rs
+-   fn score_value(wave: u32) -> u32 @ wave_table.rs:20
++   fn bounty(wave: u32) -> u32 @ wave_table.rs:20
++   fn bonus(wave: u32) -> u32 @ wave_table.rs:31
++ Purse — the coins the player holds this run @ purse.rs
++   fn credit(coins: u32) @ purse.rs:14
++   fn Purse::spend(cost: u32) -> Result<u32, NotEnough> @ purse.rs:22
+  Score — the run's score display @ score.rs
+-   fn spend(cost: u32) -> bool @ score.rs:40
 
-fn WaveEntry::offsets(rng: WaveRng) -> Vec<Vec2>
-  - for each spawn slot in the entry:
-    - draw a jitter for it @ spec wave-rng::WaveRng::next_u32
-    - place the slot on the entry's pattern, displaced by the jitter
-
-## invariants
-- entry_for never answers an entry whose index differs from the one asked for
+## tests
++ tests 4 — bounty per wave, the early flag, bonus only when early, one clear per wave @ waves_test.rs:12 @ guards ^bounty_from_table, ^early_clear, ^bonus_only_early
++ test bonus_paid_on_early_clear — clearing before the timer credits the wave bonus @ waves_test.rs:80 @ guards ^wave_bonus
++ tests 2 — a dead enemy credits its bounty once, even when two hits land in one frame @ bounty_test.rs:8 @ guards ^paid_once
++ test purse_refuses_overspend — a price above the coins leaves the purse untouched @ purse_test.rs:10 @ guards ^can_afford
+- tests 3 — score spending in the shop; the score is no longer spent @ shop_test.rs:30
+~ test shop_buys_upgrade — with score → with coins @ shop_test.rs:60
 ```
-
-### 11.1 Sections
-
-| Section | Holds |
-|---|---|
-| `## modules` | the collaborators this module **calls**, each linkable with `@ spec` |
-| `## data` | the public types this module **owns** — no `in:` / `out:` ([§4.4](#44-in--out)) |
-| `## api` | one entry per public function, its behaviour nested underneath |
-| `## invariants` | properties of the module, as [§6](#6--invariants) |
-
-`## api` sits in the slot a behavioural kind writes `## behavior` in. Writing the
-other dialect's spelling — `## behavior` on a module, `## api` on anything else —
-is a `section-not-allowed-for-kind` error: the two sections hold structurally
-different content, so reinterpreting one as the other would silently discard it.
-
-A module is **not** a Bevy kind. It declares no components, resources, events,
-systems or access block; those describe what the World holds and who touches it,
-and a module is a body of code with an API.
-
-### 11.2 The `fn` entry
-
-```
-fn [<Type>::]<name>(<param>: <Type>, …) [-> <Type>] [@ <path>] [@ spec <ref>]
-  - <bullet>
-  - <bullet>
-```
-
-- **`fn`** opens the line at **column 0**. Both halves of that are checked: a
-  bullet not nested under an entry is a `malformed-api-entry` error (every bullet
-  in `## api` describes some function), and so is a `fn` line indented *under*
-  another entry — otherwise the step parser takes it for a bullet and the
-  function vanishes from the api with nothing to say so.
-- **`<name>`** is snake_case; a leading **`<Type>::`** makes the entry a
-  **method** on a type this module's `## data` declares or imports. The module
-  itself is never the receiver — a function of the module is a plain `fn`,
-  because the file *is* the module. An entry is addressed by its `name`, or
-  `Type::name` for a method ([§5.4](#54-cross-spec-references--spec)), and those
-  must be unique within the file (`duplicate-api-entry`).
-- **Parameters** are `name: Type`, comma-separated. **`-> Type`** is optional (a
-  function that returns nothing omits it). Every type resolves per
-  [§4.3](#43-type-expressions).
-- **`@ path`** (optional) locates the function in the source, repo-relative and
-  optionally `:line`, exactly as a module's `@ path` does ([§3](#3--modules)) —
-  so goto-definition reaches the real function.
-- **`@ spec <ref>`** stays the last annotation on the line.
-- **The bullets** are ordinary steps ([§5](#5--behavior)): the same closed
-  control-flow set, the same 2-space nesting, the same trailing `@ spec` refs. A
-  bullet that calls a collaborator carries `@ spec <unit>::<function>` at the
-  step where the call happens, which is what makes the call graph readable from
-  the spec.
-- An `## api` section with no entries is a warning (`empty-api`): a module spec's
-  whole job is to carry the public surface.
-
-### 11.3 What a module spec deliberately leaves out
-
-- **Private functions.** The bullets describe what the *public* functions do; if
-  the implementation wants a private helper, it factors one out.
-  So "the code resembles the spec" is a claim about behaviour and about the
-  public surface — **not** that every bullet is a statement or every nested tree
-  its own function. Conformance checking tolerates helper extraction rather than
-  reporting it as drift.
-- **Module state and injected dependencies.** `## modules` names the
-  collaborators; how they are held is implementation.
-- **`where:` bindings.** They belong to `## behavior`, so a threshold inside an
-  `## api` bullet is not bindable.
-- **Completeness is not lintable.** "Every public function is present" is an
-  authoring rule ([§13](#13-authoring-checklist)), not a parser check — the
-  parser cannot see the code. A public function missing from the spec is reported
-  by `/hmml-validate` as a warning.
-
-### 11.4 Which module gets a spec
-
-The ones the overview's `## modules` section lists **that have a public surface**
-— a module spec is 1:1 with a behavioural collaborator, not with a file, type, or
-directory. That keeps the overview's `@ spec` module-line ref as the single spine
-between the two layers, and `/hmml-extract` writes both in one pass so a member
-ref never dangles ([§5.4](#54-cross-spec-references--spec)).
-
-A collaborator that exposes nothing gets **no** spec and no `@ spec` ref: there is
-nothing for `## api` to hold, and a spec written anyway would be an empty one
-(`empty-api`). That is the normal case for a binary crate, where every function
-is private to it, and for a collaborator that is one private helper of the unit —
-the implementation §11.3 leaves out, one level up. It still belongs in
-`## modules`, because it still does work in the behaviour.
-
-## 12. Worked examples
-
-The canonical, always-parsing examples are the parser's fixtures — they are
-compiled into the test suite, so they cannot drift:
-
-| File | Shows |
-|---|---|
-| `mml-parser/tests/fixtures/examples/enemy-waves.hmml` | `kind: plugin` — all three world sections, a role-less `## data`, three systems, ordering, a `marker`, a `where:` binding |
-| `mml-parser/tests/fixtures/examples/spawn-enemies.hmml` | `kind: system` — `## access`, imports across specs into both `## data` and a world section, a `-` query exclusion, a Rust reference with a partial body carrying a `# +` change annotation, and a `use extern` import |
-| `mml-parser/tests/fixtures/examples/get-map-tile.hmml` | `kind: endpoint` — `method`, param sources |
-| `mml-parser/tests/fixtures/examples/mesh-terrain-chunks.hmml` | `kind: workflow` — `Queue`/`Stream` in/out |
-| `mml-parser/tests/fixtures/examples/shared-data-imports.hmml` | `use` type imports |
-| `mml-parser/tests/fixtures/examples/cross-spec-refs.hmml` | `@ spec` annotations |
-| `mml-parser/tests/fixtures/examples/wave-table.hmml` | `kind: module` — `## api`, a method entry, a member ref into a second module spec |
-| `mml-parser/tests/fixtures/examples/wave-rng.hmml` | `kind: module` — the target of that member ref, entries carrying `@ path` |
-
-## 13. Authoring checklist
-
-- Filename equals the `unit:` header value, plus `.hmml`.
-- `kind:` set, and only that kind's sections present — in canonical order.
-- Indentation is 2 spaces, no tabs.
-- **Classic kinds:** every type in a field / `in:` / `out:` resolves.
-- **`kind: module`:** `## api` lists **every** public function, standalone or
-  method; each entry is a real signature whose types resolve; a bullet that calls
-  a collaborator carries `@ spec <unit>::<function>`; `## data` holds the public
-  types this module owns, and the units that use them `use`-import from here
-  rather than redeclaring them; no `in:` / `out:`, no private functions, no
-  module state — those are implementation.
-- **Bevy kinds:** every access-list name resolves to a declared, imported, or
-  built-in item, in a role that fits its key; every system has a `schedule:`.
-  Shapes no system accesses directly live in `## data`, not in a world section.
-- **A type this unit does not own is referenced, not restated** — `@ <path>` for
-  code in this checkout ([§4.7](#47-referencing-a-rust-type--path)),
-  `use extern` for a dependency
-  ([§4.8](#48-importing-from-a-dependency-use-extern)). A referenced type's body
-  lists only what changes.
-- **A change in flight is annotated, not applied in place** — every baseline
-  line either untouched or commented out with `# -`, every addition under its
-  own `# +` ([§10](#10-change-annotations)).
-- Behavior control flow uses only the closed keyword set.
-- Declared names are written verbatim in prose so they cross-link.
-- Invariants are checkable claims, not restatements of the behavior.
-- `hobby-mml-parser <file> --lint` exits clean.

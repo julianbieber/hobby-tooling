@@ -1,1210 +1,667 @@
-//! One fixture per diagnostic code, asserting the exact code and span.
+use mml_parser::ast::{Gutter, Role, TestKind};
+use mml_parser::parser::shared_prefix;
+use mml_parser::{Severity, analyze, parse};
 
-use mml_parser::diagnostic::code;
-use mml_parser::{Diagnostic, Severity, analyze};
+const BASE: &str = "\
+repo: demo
+branch: feat
+base: 1111111
+head: 2222222
 
-/// The single diagnostic with the given code (panics if zero or many).
-fn only(src: &str, wanted: &str) -> Diagnostic {
-    let (_doc, diags) = analyze(src);
-    let matches: Vec<_> = diags.iter().filter(|d| d.code == wanted).collect();
-    assert_eq!(
-        matches.len(),
-        1,
-        "expected exactly one `{wanted}` diagnostic, got: {diags:#?}"
+## intent
+  - do a thing
+
+## data
++ struct Foo { a: String }
+
+## unit run — the runner @ run.rs:1
+  - start ^start
++ - do more @ run.rs:2 @ api Mod::go
+  invariants:
+  - holds
+
+## api
+  Mod — does stuff
++   fn go(x: String) -> bool @ m.rs:3
+
+## tests
++ test go_works — it goes @ run_test.rs:1 @ guards ^start
+";
+
+fn codes(src: &str) -> Vec<&'static str> {
+    analyze(src).1.into_iter().map(|d| d.code).collect()
+}
+
+fn with(from: &str, to: &str) -> String {
+    assert!(BASE.contains(from), "BASE lacks {from:?}");
+    BASE.replacen(from, to, 1)
+}
+
+fn assert_code(src: &str, code: &str) {
+    let all = analyze(src).1;
+    assert!(
+        all.iter().any(|d| d.code == code),
+        "expected `{code}`, got {:?}",
+        all.iter()
+            .map(|d| (d.code, d.message.as_str()))
+            .collect::<Vec<_>>()
     );
-    matches[0].clone()
-}
-
-/// Assert the diagnostic's span covers exactly `expected` in `src`.
-fn assert_span(src: &str, d: &Diagnostic, expected: &str) {
-    assert_eq!(
-        &src[d.span.start..d.span.end],
-        expected,
-        "span mismatch for `{}`",
-        d.code
-    );
-}
-
-const VALID_HEADER: &str = "system: s\nunit: u\nkind: job\n\n";
-
-#[test]
-fn undefined_type() {
-    let src = "system: s\nunit: u\nkind: job\n\n\
-## modules\n\n\
-## data\n\
-struct A {\n  x: Bogus,\n}\n\
-in: A\nout: A\n\n\
-## behavior\n- do it\n\n\
-## invariants\n";
-    let d = only(src, code::UNDEFINED_TYPE);
-    assert_eq!(d.severity, Severity::Error);
-    assert_span(src, &d, "Bogus");
 }
 
 #[test]
-fn undefined_type_inside_generic() {
-    let src = "system: s\nunit: u\nkind: job\n\n\
-## modules\n\n\
-## data\n\
-struct A {\n  xs: Vec<Bogus>,\n}\n\
-in: A\nout: A\n\n\
-## behavior\n- do it\n\n\
-## invariants\n";
-    let d = only(src, code::UNDEFINED_TYPE);
-    assert_span(src, &d, "Bogus");
-}
-
-#[test]
-fn duplicate_field() {
-    let src = "system: s\nunit: u\nkind: job\n\n\
-## modules\n\n\
-## data\n\
-struct A {\n  x: String,\n  x: i64,\n}\n\
-in: A\nout: A\n\n\
-## behavior\n- do it\n\n\
-## invariants\n";
-    let d = only(src, code::DUPLICATE_FIELD);
-    // The span points at the *second* `x`.
-    assert_span(src, &d, "x");
-    let second_x = src.rfind("x:").unwrap();
-    assert_eq!(d.span.start, second_x);
-}
-
-#[test]
-fn duplicate_type() {
-    let src = "system: s\nunit: u\nkind: job\n\n\
-## modules\n\n\
-## data\n\
-struct A {\n  x: String,\n}\n\
-struct A {\n  y: i64,\n}\n\
-in: A\nout: A\n\n\
-## behavior\n- do it\n\n\
-## invariants\n";
-    let d = only(src, code::DUPLICATE_TYPE);
-    assert_span(src, &d, "A");
-    // Second definition, i.e. after the first `struct A`.
-    let first = src.find("struct A").unwrap();
-    assert!(d.span.start > first + "struct A".len());
-}
-
-#[test]
-fn duplicate_module() {
-    let src = "system: s\nunit: u\nkind: job\n\n\
-## modules\n\
-Foo — first\n\
-Foo — second\n\n\
-## data\nin: String\nout: String\n\n\
-## behavior\n- do it\n\n\
-## invariants\n";
-    let d = only(src, code::DUPLICATE_MODULE);
-    assert_span(src, &d, "Foo");
-    let second = src.rfind("Foo").unwrap();
-    assert_eq!(d.span.start, second);
+fn base_is_clean() {
+    assert_eq!(codes(BASE), Vec::<&str>::new());
 }
 
 #[test]
 fn missing_header_key() {
-    // No `unit`.
-    let src = "system: s\nkind: job\n\n\
-## modules\n\n## data\nin: String\nout: String\n\n\
-## behavior\n- do it\n\n## invariants\n";
-    let d = only(src, code::MISSING_HEADER_KEY);
-    assert!(d.message.contains("unit"), "message: {}", d.message);
+    assert_code(&with("branch: feat\n", ""), "missing-header-key");
 }
 
 #[test]
-fn bad_kind() {
-    let src = "system: s\nunit: u\nkind: banana\n\n\
-## modules\n\n## data\nin: String\nout: String\n\n\
-## behavior\n- do it\n\n## invariants\n";
-    let d = only(src, code::BAD_KIND);
-    assert_span(src, &d, "banana");
-}
-
-#[test]
-fn malformed_struct_missing_name() {
-    let src = "system: s\nunit: u\nkind: job\n\n\
-## modules\n\n\
-## data\n\
-struct {\n  x: String,\n}\n\
-in: String\nout: String\n\n\
-## behavior\n- do it\n\n## invariants\n";
-    let d = only(src, code::MALFORMED_STRUCT);
-    assert_eq!(d.severity, Severity::Error);
-}
-
-#[test]
-fn malformed_field_no_colon() {
-    let src = "system: s\nunit: u\nkind: job\n\n\
-## modules\n\n\
-## data\n\
-struct A {\n  justtext\n}\n\
-in: String\nout: String\n\n\
-## behavior\n- do it\n\n## invariants\n";
-    let d = only(src, code::MALFORMED_FIELD);
-    assert_span(src, &d, "justtext");
-}
-
-#[test]
-fn tab_indent() {
-    let src = format!(
-        "{VALID_HEADER}## modules\n\n## data\nin: String\nout: String\n\n\
-## behavior\n- outer\n\t- tabbed child\n\n## invariants\n"
-    );
-    let d = only(&src, code::TAB_INDENT);
-    assert_eq!(d.severity, Severity::Error);
-    // Span covers the leading tab.
-    assert_eq!(&src[d.span.start..d.span.end], "\t");
-}
-
-#[test]
-fn missing_section() {
-    // Omit `## invariants`.
-    let src = "system: s\nunit: u\nkind: job\n\n\
-## modules\n\n## data\nin: String\nout: String\n\n## behavior\n- do it\n";
-    let d = only(src, code::MISSING_SECTION);
-    assert!(d.message.contains("invariants"), "message: {}", d.message);
-}
-
-#[test]
-fn dangling_else() {
-    let src = "system: s\nunit: u\nkind: job\n\n\
-## modules\n\n## data\nin: String\nout: String\n\n\
-## behavior\n- do a thing\n- else:\n  - fallback\n\n## invariants\n";
-    let d = only(src, code::DANGLING_ELSE);
-    assert_span(src, &d, "else:");
-}
-
-#[test]
-fn bad_method_value() {
-    let src = "system: s\nunit: u\nkind: endpoint\nmethod: FETCH\n\n\
-## modules\n\n## data\nin: String\nout: String\n\n\
-## behavior\n- do it\n\n## invariants\n";
-    let d = only(src, code::BAD_METHOD);
-    assert_span(src, &d, "FETCH");
-}
-
-#[test]
-fn method_on_non_endpoint_is_flagged() {
-    // Valid verb, wrong kind → exactly one BAD_METHOD (the endpoint-only warning).
-    let src = "system: s\nunit: u\nkind: job\nmethod: GET\n\n\
-## modules\n\n## data\nin: String\nout: String\n\n\
-## behavior\n- do it\n\n## invariants\n";
-    let d = only(src, code::BAD_METHOD);
-    assert_eq!(d.severity, Severity::Warning);
-}
-
-#[test]
-fn bad_param_source() {
-    let src = "system: s\nunit: u\nkind: endpoint\n\n\
-## modules\n\n## data\nstruct Req {\n  a: String @sideways,\n}\nin: Req\nout: String\n\n\
-## behavior\n- do it\n\n## invariants\n";
-    let d = only(src, code::BAD_PARAM_SOURCE);
-    assert_span(src, &d, "sideways");
-}
-
-#[test]
-fn malformed_spec_ref_empty() {
-    let src = "system: s\nunit: u\nkind: job\n\n\
-## modules\n\n## data\nin: String\nout: String\n\n\
-## behavior\n- do it @ spec\n\n## invariants\n";
-    let d = only(src, code::MALFORMED_SPEC_REF);
-    assert_eq!(d.severity, Severity::Error);
-    assert_span(src, &d, "@ spec");
-}
-
-#[test]
-fn malformed_spec_ref_with_spaces() {
-    let src = "system: s\nunit: u\nkind: job\n\n\
-## modules\n\n## data\nin: String\nout: String\n\n\
-## behavior\n- do it @ spec foo bar\n\n## invariants\n";
-    let d = only(src, code::MALFORMED_SPEC_REF);
-    assert_span(src, &d, "foo bar");
-}
-
-#[test]
-fn malformed_spec_ref_two_slashes() {
-    let src = "system: s\nunit: u\nkind: job\n\n\
-## modules\n\n## data\nin: String\nout: String\n\n\
-## behavior\n- do it @ spec a/b/c\n\n## invariants\n";
-    let d = only(src, code::MALFORMED_SPEC_REF);
-    assert_span(src, &d, "a/b/c");
-}
-
-#[test]
-fn malformed_spec_ref_bad_segment() {
-    // A segment must start with a letter.
-    let src = "system: s\nunit: u\nkind: job\n\n\
-## modules\n\n## data\nin: String\nout: String\n\n\
-## behavior\n- do it @ spec sys/-bad\n\n## invariants\n";
-    let d = only(src, code::MALFORMED_SPEC_REF);
-    assert_span(src, &d, "sys/-bad");
-}
-
-#[test]
-fn duplicate_spec_ref() {
-    let src = "system: s\nunit: u\nkind: job\n\n\
-## modules\n\n## data\nin: String\nout: String\n\n\
-## behavior\n- do it @ spec first @ spec second\n\n## invariants\n";
-    let d = only(src, code::DUPLICATE_SPEC_REF);
-    assert_eq!(d.severity, Severity::Error);
-    assert_span(src, &d, "@ spec");
-    // The last ref wins.
-    let (doc, _) = analyze(src);
-    assert_eq!(doc.behavior[0].spec.as_ref().unwrap().value, "second");
-}
-
-#[test]
-fn spec_marker_in_prose_is_not_an_annotation() {
-    // `@ spec` only matches on word boundaries: neither `spec-shaped` nor a
-    // path like `@ spec_utils/x.py` is an annotation.
-    let src = "system: s\nunit: u\nkind: job\n\n\
-## modules\nFoo — reads @ spec_utils/x.py\n\n\
-## data\nin: String\nout: String\n\n\
-## behavior\n- compare against the @ spec-shaped baseline\n\n## invariants\n";
-    let (doc, diags) = analyze(src);
-    assert!(diags.is_empty(), "unexpected diagnostics: {diags:#?}");
-    assert_eq!(doc.modules[0].spec, None);
-    assert_eq!(
-        doc.modules[0].path.as_ref().unwrap().value,
-        "spec_utils/x.py"
-    );
-    assert_eq!(doc.behavior[0].spec, None);
-    assert_eq!(
-        doc.behavior[0].text.value,
-        "compare against the @ spec-shaped baseline"
+fn unknown_header_key() {
+    assert_code(
+        &with("repo: demo\n", "repo: demo\nowner: me\n"),
+        "unknown-header-key",
     );
 }
 
 #[test]
-fn malformed_import_no_colon() {
-    let src = "system: s\nunit: u\nkind: job\n\n\
-## modules\n\n## data\nuse foo/bar\nin: String\nout: String\n\n\
-## behavior\n- do it\n\n## invariants\n";
-    let d = only(src, code::MALFORMED_IMPORT);
-    assert_eq!(d.severity, Severity::Error);
-    assert_span(src, &d, "use foo/bar");
-}
-
-#[test]
-fn malformed_import_empty_type_list() {
-    let src = "system: s\nunit: u\nkind: job\n\n\
-## modules\n\n## data\nuse foo/bar:\nin: String\nout: String\n\n\
-## behavior\n- do it\n\n## invariants\n";
-    let d = only(src, code::MALFORMED_IMPORT);
-    assert_span(src, &d, "use foo/bar:");
-}
-
-#[test]
-fn malformed_import_bad_ref() {
-    // A ref segment must start with a letter (validate: is_valid_spec_ref).
-    let src = "system: s\nunit: u\nkind: job\n\n\
-## modules\n\n## data\nuse sys/-bad: Offer\nin: String\nout: String\n\n\
-## behavior\n- do it\n\n## invariants\n";
-    let d = only(src, code::MALFORMED_IMPORT);
-    assert_span(src, &d, "sys/-bad");
-}
-
-#[test]
-fn malformed_import_non_pascal_type() {
-    let src = "system: s\nunit: u\nkind: job\n\n\
-## modules\n\n## data\nuse foo/bar: offer\nin: String\nout: String\n\n\
-## behavior\n- do it\n\n## invariants\n";
-    let d = only(src, code::MALFORMED_IMPORT);
-    assert_span(src, &d, "offer");
-}
-
-#[test]
-fn duplicate_import_same_type_twice() {
-    let src = "system: s\nunit: u\nkind: job\n\n\
-## modules\n\n## data\nuse a/b: Offer\nuse c/d: Offer\nin: String\nout: String\n\n\
-## behavior\n- do it\n\n## invariants\n";
-    let d = only(src, code::DUPLICATE_IMPORT);
-    assert_eq!(d.severity, Severity::Error);
-    // The span points at the second (offending) import.
-    let second = src.rfind("Offer").unwrap();
-    assert_eq!(d.span.start, second);
-}
-
-#[test]
-fn duplicate_import_collides_with_local_type() {
-    let src = "system: s\nunit: u\nkind: job\n\n\
-## modules\n\n## data\nuse a/b: Foo\nstruct Foo {\n  x: String,\n}\nin: Foo\nout: Foo\n\n\
-## behavior\n- do it\n\n## invariants\n";
-    let d = only(src, code::DUPLICATE_IMPORT);
-    assert_eq!(d.severity, Severity::Error);
-    assert_span(src, &d, "Foo"); // the imported one
-}
-
-#[test]
-fn malformed_binding_no_equals() {
-    let src = "system: s\nunit: u\nkind: job\n\n\
-## modules\n\n## data\nin: String\nout: String\n\n\
-## behavior\n- do it\nwhere:\n  X 4\n\n## invariants\n";
-    let d = only(src, code::MALFORMED_BINDING);
-    assert_eq!(d.severity, Severity::Error);
-}
-
-// ---- Bevy dialect (grammar §7.2, §8) ---------------------------------------
-
-/// A minimal well-formed `kind: plugin` spec with `body` spliced into the
-/// `## systems` section, so a test can vary one entry and nothing else.
-fn plugin_with_systems(systems: &str) -> String {
-    format!(
-        "system: s\nunit: u\nkind: plugin\n\n\
-## components\nmarker Foe\n\n\
-## resources\nstruct Cfg {{\n  n: u32,\n}}\n\n\
-## events\nstruct Cleared {{\n  n: u32,\n}}\n\n\
-## systems\n{systems}\n\n\
-## behavior\n- do it\n\n\
-## invariants\n- always\n"
-    )
-}
-
-#[test]
-fn data_section_declares_role_less_types_in_a_plugin() {
-    // Grammar §4.6: a Bevy kind may declare the shapes that are neither
-    // component nor resource nor event, and use them as field types.
-    let src = "system: s\nunit: u\nkind: plugin\n\n\
-## data\nenum Pattern {\n  ring,\n  line,\n}\n\n\
-## components\nstruct Spawn {\n  pattern: Pattern,\n}\n\n\
-## systems\ngo — does it\n  schedule: Update\n  query: Spawn\n\n\
-## behavior\n- do it\n\n## invariants\n- always\n";
-    let (doc, diags) = analyze(src);
-    assert!(diags.is_empty(), "{diags:#?}");
-    assert_eq!(doc.data.types.len(), 1);
-}
-
-#[test]
-fn in_out_are_rejected_in_a_bevy_data_section() {
-    let src = "system: s\nunit: u\nkind: plugin\n\n\
-## data\nin: String\n\n\
-## systems\ngo — does it\n  schedule: Update\n\n\
-## behavior\n- do it\n\n## invariants\n- always\n";
-    let d = only(src, code::MALFORMED_STRUCT);
-    assert_eq!(d.severity, Severity::Error);
-    assert_span(src, &d, "in: String");
-    assert!(d.message.contains("access block"), "{}", d.message);
-    // Rejected, not recorded: a plugin has no input type.
-    let (doc, _) = analyze(src);
-    assert!(doc.data.input.is_none());
-}
-
-#[test]
-fn marker_in_data_points_at_components() {
-    let src = "system: s\nunit: u\nkind: plugin\n\n\
-## data\nmarker Foe\n\n\
-## systems\ngo — does it\n  schedule: Update\n\n\
-## behavior\n- do it\n\n## invariants\n- always\n";
-    let d = only(src, code::MALFORMED_MARKER);
-    assert_span(src, &d, "marker Foe");
-    assert!(d.message.contains("## components"), "{}", d.message);
-}
-
-#[test]
-fn a_data_type_named_in_an_access_list_is_a_role_mismatch() {
-    let src = "system: s\nunit: u\nkind: plugin\n\n\
-## data\nstruct Pattern {\n  n: u32,\n}\n\n\
-## systems\ngo — does it\n  schedule: Update\n  query: Pattern\n\n\
-## behavior\n- do it\n\n## invariants\n- always\n";
-    let d = only(src, code::ACCESS_ROLE_MISMATCH);
-    assert_eq!(d.severity, Severity::Error);
-    assert_span(src, &d, "Pattern");
-    assert!(d.message.contains("`## data`"), "{}", d.message);
-    assert!(d.message.contains("## components"), "{}", d.message);
-}
-
-#[test]
-fn a_name_in_both_data_and_a_world_section_is_a_duplicate() {
-    // One type namespace across the whole file, so a shape cannot be role-less
-    // and a component at once.
-    let src = "system: s\nunit: u\nkind: plugin\n\n\
-## data\nstruct Foe {\n  n: u32,\n}\n\n\
-## components\nmarker Foe\n\n\
-## systems\ngo — does it\n  schedule: Update\n\n\
-## behavior\n- do it\n\n## invariants\n- always\n";
-    let d = only(src, code::DUPLICATE_TYPE);
-    assert_span(src, &d, "Foe");
-}
-
-#[test]
-fn systems_section_is_not_allowed_in_a_job() {
-    let src = "system: s\nunit: u\nkind: job\n\n\
-## modules\n\n## data\nin: String\nout: String\n\n\
-## systems\ngo — does it\n  schedule: Update\n\n\
-## behavior\n- do it\n\n## invariants\n- always\n";
-    let d = only(src, code::SECTION_NOT_ALLOWED);
-    assert_span(src, &d, "## systems");
-}
-
-#[test]
-fn plugin_without_systems_section_is_missing_it() {
-    let src = "system: s\nunit: u\nkind: plugin\n\n\
-## components\nmarker Foe\n\n\
-## behavior\n- do it\n\n## invariants\n- always\n";
-    let d = only(src, code::MISSING_SECTION);
-    assert_eq!(d.severity, Severity::Error);
-    assert!(d.message.contains("systems"), "{}", d.message);
-    assert!(d.message.contains("kind: plugin"), "{}", d.message);
-}
-
-#[test]
-fn system_kind_requires_an_access_section() {
-    let src = "system: s\nunit: u\nkind: system\n\n\
-## behavior\n- do it\n\n## invariants\n- always\n";
-    let d = only(src, code::MISSING_SECTION);
-    assert!(d.message.contains("access"), "{}", d.message);
-}
-
-#[test]
-fn plugin_keeps_the_four_classic_sections_optional() {
-    // `## modules` is allowed but not required for a plugin, and its absence
-    // must not resurrect the classic schema's `## data` requirement.
-    let (_doc, diags) = analyze(&plugin_with_systems("go — does it\n  schedule: Update"));
-    assert!(diags.is_empty(), "unexpected diagnostics: {diags:#?}");
-}
-
-#[test]
-fn malformed_system_without_separator() {
-    let src = plugin_with_systems("go does it\n  schedule: Update");
-    let d = only(&src, code::MALFORMED_SYSTEM);
-    assert_eq!(d.severity, Severity::Error);
-    assert_span(&src, &d, "go does it");
-}
-
-#[test]
-fn system_name_not_snake_case_warns() {
-    let src = plugin_with_systems("SpawnEnemies — does it\n  schedule: Update");
-    let d = only(&src, code::SYSTEM_NAME_NOT_SNAKE);
-    assert_eq!(d.severity, Severity::Warning);
-    assert_span(&src, &d, "SpawnEnemies");
-}
-
-#[test]
-fn duplicate_system_name() {
-    let src = plugin_with_systems(
-        "go — does it\n  schedule: Update\ngo — does it again\n  schedule: Update",
-    );
-    let d = only(&src, code::DUPLICATE_SYSTEM);
-    assert_eq!(d.severity, Severity::Error);
-}
-
-#[test]
-fn missing_schedule_on_a_system() {
-    let src = plugin_with_systems("go — does it\n  reads: Cfg");
-    let d = only(&src, code::MISSING_SCHEDULE);
-    assert_eq!(d.severity, Severity::Error);
-    assert_span(&src, &d, "go — does it");
-}
-
-#[test]
-fn missing_schedule_in_an_access_section() {
-    let src = "system: s\nunit: u\nkind: system\n\n\
-## access\nreads: Time\n\n\
-## behavior\n- do it\n\n## invariants\n- always\n";
-    let d = only(src, code::MISSING_SCHEDULE);
-    assert!(d.message.contains("## access"), "{}", d.message);
-}
-
-#[test]
-fn unknown_schedule_warns_but_state_schedules_do_not() {
-    let src = plugin_with_systems("go — does it\n  schedule: Whenever");
-    let d = only(&src, code::UNKNOWN_SCHEDULE);
-    assert_eq!(d.severity, Severity::Warning);
-    assert_span(&src, &d, "Whenever");
-
-    // `OnEnter(..)` / `OnExit(..)` are recognised by shape.
-    for label in ["OnEnter(Playing)", "OnExit(Paused)", "FixedPostUpdate"] {
-        let src = plugin_with_systems(&format!("go — does it\n  schedule: {label}"));
-        let (_doc, diags) = analyze(&src);
-        assert!(diags.is_empty(), "{label} should be clean: {diags:#?}");
-    }
-}
-
-#[test]
-fn unknown_access_key() {
-    let src = plugin_with_systems("go — does it\n  schedule: Update\n  mutates: Cfg");
-    let d = only(&src, code::UNKNOWN_ACCESS_KEY);
-    assert_eq!(d.severity, Severity::Error);
-    assert_span(&src, &d, "mutates");
-}
-
-#[test]
-fn duplicate_access_key() {
-    let src = plugin_with_systems("go — does it\n  schedule: Update\n  reads: Cfg\n  reads: Cfg");
-    let d = only(&src, code::DUPLICATE_ACCESS_KEY);
-    assert_eq!(d.severity, Severity::Error);
-}
-
-#[test]
-fn access_attribute_without_a_system_entry() {
-    let src = plugin_with_systems("  schedule: Update");
-    let d = only(&src, code::MALFORMED_ACCESS);
-    assert_eq!(d.severity, Severity::Error);
-}
-
-#[test]
-fn undefined_access_item() {
-    let src = plugin_with_systems("go — does it\n  schedule: Update\n  reads: Nonsense");
-    let d = only(&src, code::UNDEFINED_ACCESS_ITEM);
-    assert_eq!(d.severity, Severity::Error);
-    assert_span(&src, &d, "Nonsense");
-}
-
-#[test]
-fn builtin_bevy_names_need_no_declaration() {
-    let src = plugin_with_systems(
-        "go — does it\n  schedule: Update\n  query: Transform + Foe\n  reads: Time\n  emits: AppExit",
-    );
-    let (_doc, diags) = analyze(&src);
-    assert!(diags.is_empty(), "unexpected diagnostics: {diags:#?}");
-}
-
-#[test]
-fn access_role_mismatch_emitting_a_component() {
-    let src = plugin_with_systems("go — does it\n  schedule: Update\n  emits: Foe");
-    let d = only(&src, code::ACCESS_ROLE_MISMATCH);
-    assert_eq!(d.severity, Severity::Error);
-    assert_span(&src, &d, "Foe");
-    assert!(d.message.contains("component"), "{}", d.message);
-}
-
-#[test]
-fn access_role_mismatch_querying_a_resource() {
-    let src = plugin_with_systems("go — does it\n  schedule: Update\n  query: Cfg");
-    let d = only(&src, code::ACCESS_ROLE_MISMATCH);
-    assert!(d.message.contains("resource"), "{}", d.message);
-}
-
-#[test]
-fn reads_accepts_both_components_and_resources() {
-    let src = plugin_with_systems("go — does it\n  schedule: Update\n  reads: Foe, Cfg");
-    let (_doc, diags) = analyze(&src);
-    assert!(diags.is_empty(), "unexpected diagnostics: {diags:#?}");
-}
-
-#[test]
-fn unresolved_system_ref_warns_in_a_plugin() {
-    let src = plugin_with_systems("go — does it\n  schedule: Update\n  after: nobody");
-    let d = only(&src, code::UNRESOLVED_SYSTEM_REF);
-    assert_eq!(d.severity, Severity::Warning);
-    assert_span(&src, &d, "nobody");
-}
-
-#[test]
-fn ordering_against_a_declared_set_or_system_is_silent() {
-    let src = plugin_with_systems(
-        "first — runs first\n  schedule: Update\n  set: Early\n\
-         second — runs after\n  schedule: Update\n  after: first, Early",
-    );
-    let (_doc, diags) = analyze(&src);
-    assert!(diags.is_empty(), "unexpected diagnostics: {diags:#?}");
-}
-
-#[test]
-fn a_system_kind_may_order_against_specs_elsewhere() {
-    // A standalone `kind: system` file has no local system list, so its
-    // ordering refs are not checked.
-    let src = "system: s\nunit: u\nkind: system\n\n\
-## access\nschedule: Update\nafter: some_other_plugins_system\n\n\
-## behavior\n- do it\n\n## invariants\n- always\n";
-    let (_doc, diags) = analyze(src);
-    assert!(diags.is_empty(), "unexpected diagnostics: {diags:#?}");
-}
-
-#[test]
-fn query_filter_splits_with_and_without() {
-    let src = plugin_with_systems("go — does it\n  schedule: Update\n  query: Foe - Cleared");
-    // `Cleared` is an event, so excluding it is still a role mismatch — the
-    // point here is that the `-` term is parsed as its own item.
-    let d = only(&src, code::ACCESS_ROLE_MISMATCH);
-    assert_span(&src, &d, "Cleared");
-}
-
-#[test]
-fn marker_outside_components_is_rejected() {
-    let src = "system: s\nunit: u\nkind: plugin\n\n\
-## resources\nmarker Foe\n\n\
-## systems\ngo — does it\n  schedule: Update\n\n\
-## behavior\n- do it\n\n## invariants\n- always\n";
-    let d = only(src, code::MALFORMED_MARKER);
-    assert_eq!(d.severity, Severity::Error);
-}
-
-#[test]
-fn in_out_lines_are_rejected_in_a_world_section() {
-    let src = "system: s\nunit: u\nkind: plugin\n\n\
-## components\nin: String\n\n\
-## systems\ngo — does it\n  schedule: Update\n\n\
-## behavior\n- do it\n\n## invariants\n- always\n";
-    let d = only(src, code::MALFORMED_STRUCT);
-    assert!(d.message.contains("access block"), "{}", d.message);
-}
-
-#[test]
-fn a_name_declared_in_two_world_sections_is_a_duplicate() {
-    let src = "system: s\nunit: u\nkind: plugin\n\n\
-## components\nmarker Foe\n\n\
-## resources\nstruct Foe {\n  n: u32,\n}\n\n\
-## systems\ngo — does it\n  schedule: Update\n\n\
-## behavior\n- do it\n\n## invariants\n- always\n";
-    let d = only(src, code::DUPLICATE_TYPE);
-    assert_eq!(d.severity, Severity::Error);
-}
-
-#[test]
-fn plugin_is_offered_as_a_kind() {
-    let src = "system: s\nunit: u\nkind: nonsense\n\n\
-## behavior\n- do it\n\n## invariants\n";
-    let d = only(src, code::BAD_KIND);
-    assert!(d.message.contains("plugin"), "{}", d.message);
-    assert!(d.message.contains("system"), "{}", d.message);
-}
-
-// ---- Rust references (grammar §4.7) and extern imports (§4.8) --------------
-
-/// A `kind: plugin` spec body with `sections` spliced in.
-fn plugin(sections: &str) -> String {
-    format!(
-        "system: s\nunit: u\nkind: plugin\n\n{sections}\n## systems\n\n## behavior\n- x\n\n## invariants\n"
-    )
-}
-
-#[test]
-fn a_reference_may_omit_its_body_entirely() {
-    let src = plugin("## components\nstruct Wave @ src/waves.rs\nmarker Spawner @ src/waves.rs\n");
-    let (doc, diags) = analyze(&src);
-    assert!(diags.is_empty(), "unexpected diagnostics: {diags:#?}");
-    let wave = &doc.components.types[0];
-    assert!(wave.is_reference());
-    assert_eq!(wave.path().unwrap().value, "src/waves.rs");
-    match wave {
-        mml_parser::ast::TypeDef::Struct { fields, .. } => assert!(fields.is_none()),
-        _ => panic!("Wave should be a struct"),
-    }
-}
-
-#[test]
-fn a_body_without_a_path_is_still_required() {
-    let src = plugin("## components\nstruct Wave\n");
-    let d = only(&src, code::MISSING_TYPE_BODY);
-    assert_eq!(d.severity, Severity::Error);
-    assert_span(&src, &d, "Wave");
-}
-
-#[test]
-fn a_type_points_at_code_not_at_a_spec() {
-    let src = plugin("## components\nstruct Wave @ spec other\n");
-    let d = only(&src, code::MALFORMED_TYPE_PATH);
-    assert_eq!(d.severity, Severity::Error);
-}
-
-#[test]
-fn deltas_parse_on_a_reference() {
-    use mml_parser::ast::Delta;
-    let src = plugin(
-        "## components\nstruct Wave @ src/waves.rs {\n  index: u32,\n  + streak: u32,\n  - remaining,\n}\n",
-    );
-    let (doc, diags) = analyze(&src);
-    assert!(diags.is_empty(), "unexpected diagnostics: {diags:#?}");
-    match &doc.components.types[0] {
-        mml_parser::ast::TypeDef::Struct { fields, .. } => {
-            let fields = fields.as_ref().unwrap();
-            let got: Vec<(&str, Delta)> = fields
-                .iter()
-                .map(|f| (f.name.value.as_str(), f.delta))
-                .collect();
-            assert_eq!(
-                got,
-                [
-                    ("index", Delta::Keep),
-                    ("streak", Delta::Add),
-                    ("remaining", Delta::Remove),
-                ]
-            );
-            // A removal needs no type; the field being removed already has one.
-            assert!(fields[2].ty.is_none());
-        }
-        _ => panic!("Wave should be a struct"),
-    }
-}
-
-#[test]
-fn a_delta_on_an_owned_type_is_rejected() {
-    let src = plugin("## components\nstruct Wave {\n  + index: u32,\n}\n");
-    let d = only(&src, code::MALFORMED_FIELD);
-    assert_eq!(d.severity, Severity::Error);
-    assert_span(&src, &d, "+");
-}
-
-#[test]
-fn extern_import_brings_a_crate_type_into_scope_with_the_sections_role() {
-    let src = plugin(
-        "## components\nuse extern avian3d::prelude: Collider\n\n## resources\nstruct Cfg {\n  hit: Collider,\n}\n",
-    );
-    let (doc, diags) = analyze(&src);
-    assert!(diags.is_empty(), "unexpected diagnostics: {diags:#?}");
-    let imp = &doc.components.extern_imports[0];
-    assert_eq!(imp.path.value, "avian3d::prelude");
-    assert_eq!(imp.crate_name(), "avian3d");
-    assert_eq!(
-        imp.docs_url("Collider"),
-        "https://docs.rs/avian3d/latest/avian3d/?search=Collider"
-    );
-    // The role came from the section, so it is queryable like any component.
-    assert_eq!(
-        doc.roles().get("Collider"),
-        Some(&mml_parser::ast::Role::Component)
+fn bad_header_value() {
+    assert_code(&with("head: 2222222", "head: main"), "bad-header-value");
+    assert_code(
+        &with("branch: feat", "branch: two words"),
+        "bad-header-value",
     );
 }
 
 #[test]
-fn a_unit_named_extern_is_still_a_spec_import() {
-    // `use extern: T` has no second token, so the keyword does not steal a
-    // legal unit name.
-    let src = plugin("## components\nuse extern: Wave\n");
-    let (doc, _diags) = analyze(&src);
-    assert_eq!(doc.components.imports[0].spec.value, "extern");
-    assert!(doc.components.extern_imports.is_empty());
+fn unknown_section() {
+    assert_code(&format!("{BASE}\n## notes\n  - x\n"), "unknown-section");
 }
 
 #[test]
-fn a_malformed_crate_path_is_reported() {
-    let src = plugin("## components\nuse extern 3avian::prelude: Collider\n");
-    let d = only(&src, code::MALFORMED_EXTERN_IMPORT);
-    assert_eq!(d.severity, Severity::Error);
-    assert_span(&src, &d, "3avian::prelude");
-}
-
-// ---- change annotations (grammar §10) --------------------------------------
-
-/// A `kind: job` spec whose `## behavior` is `steps`, everything else minimal.
-fn annotated(steps: &[&str]) -> String {
-    format!(
-        "{VALID_HEADER}## modules\n\n## data\nin: String\nout: String\n\n\
-## behavior\n{}\n\n## invariants\n",
-        steps.join("\n")
-    )
-}
-
-/// Without the removed line's text the baseline is gone for good — the one
-/// thing the convention exists to prevent.
-#[test]
-fn empty_change_removal() {
-    let src = annotated(&["- do it", "# -"]);
-    let d = only(&src, code::EMPTY_CHANGE_REMOVAL);
-    assert_eq!(d.severity, Severity::Warning);
-    assert_span(&src, &d, "# -");
-}
-
-/// A `# +` covers the line beneath it; with nothing beneath, it adds nothing.
-#[test]
-fn empty_change_addition() {
-    let src = annotated(&["- do it", "# +"]);
-    let d = only(&src, code::EMPTY_CHANGE_ADDITION);
-    assert_eq!(d.severity, Severity::Warning);
-    assert_span(&src, &d, "# +");
-}
-
-/// The marker's own `-` stands in for the bullet, so a kept one is doubled.
-#[test]
-fn redundant_change_bullet() {
-    let src = annotated(&["- do it", "# - - do it the old way"]);
-    let d = only(&src, code::REDUNDANT_CHANGE_BULLET);
-    assert_eq!(d.severity, Severity::Warning);
-}
-
-/// A repeated sign is a divider, not a marker — otherwise every rule line in a
-/// spec would read as an empty addition or removal.
-#[test]
-fn a_repeated_sign_is_a_comment_not_a_marker() {
-    let src = annotated(&["- do it", "# --- section divider ---", "# +++"]);
-    let (_doc, diags) = analyze(&src);
-    assert!(diags.is_empty(), "expected no diagnostics, got: {diags:#?}");
-}
-
-// Pins that a removed `where:` binding is restored without a bullet while a removed step keeps one.
-#[test]
-fn removals_in_a_where_block_reconstruct_the_baseline() {
-    let src = annotated(&[
-        "- do it N times",
-        "# - stop after it",
-        "where:",
-        "  # - N = 3",
-        "  # +",
-        "  N = 4",
-    ]);
-    let (_doc, diags) = analyze(&src);
-    assert!(
-        !diags.iter().any(|d| d.code == code::UNRECOVERABLE_BASELINE),
-        "{diags:#?}"
+fn section_order() {
+    assert_code(
+        &format!("{BASE}\n## data\n+ struct Bar {{ b: String }}\n"),
+        "section-order",
     );
-    let baseline = mml_parser::annotations::baseline(&src).text;
-    assert!(baseline.contains("\n- stop after it\n"), "{baseline}");
-    assert!(baseline.contains("\n  N = 3\n"), "{baseline}");
-    assert!(!baseline.contains("N = 4"), "{baseline}");
+    assert_code(&format!("{BASE}\n## api\n  Other — x\n"), "section-order");
 }
 
-// Pins that a removed `where:` opener and its bindings are all restored without a bullet.
 #[test]
-fn removed_where_block_reconstructs_the_baseline() {
-    let src = annotated(&["- do it N times", "# - where:", "  # - N = 3"]);
-    let (_doc, diags) = analyze(&src);
-    assert!(
-        !diags.iter().any(|d| d.code == code::UNRECOVERABLE_BASELINE),
-        "{diags:#?}"
+fn missing_intent() {
+    assert_code(&with("## intent\n  - do a thing\n", ""), "missing-intent");
+    assert_code(&with("  - do a thing\n", ""), "missing-intent");
+}
+
+#[test]
+fn no_unit() {
+    let src = with(
+        "## unit run — the runner @ run.rs:1\n  - start ^start\n+ - do more @ run.rs:2 @ api Mod::go\n  invariants:\n  - holds\n",
+        "",
     );
-    let baseline = mml_parser::annotations::baseline(&src).text;
-    assert!(baseline.contains("\nwhere:\n  N = 3\n"), "{baseline}");
+    assert_code(&src, "no-unit");
 }
 
-// Pins that a sign more than one space after `#` is a commented-out bullet, not a marker.
 #[test]
-fn spaced_out_comment_bullet_is_not_a_marker() {
-    let src = annotated(&["- do it", "#     - a/b.rs"]);
-    assert!(mml_parser::annotations::scan(&src).is_empty());
-    let (_doc, diags) = analyze(&src);
-    assert!(diags.is_empty(), "expected no diagnostics, got: {diags:#?}");
+fn bad_gutter() {
+    assert_code(&with("  - start ^start", "* - start ^start"), "bad-gutter");
+    assert_code(&with("  - start ^start", "+- start ^start"), "bad-gutter");
 }
 
-/// Marking as added a type the *baseline* already needs: the annotated spec is
-/// fine, but the baseline it reconstructs to references a type that is no
-/// longer defined — so the unannotated half does not stand on its own.
 #[test]
-fn unrecoverable_baseline() {
-    let src = format!(
-        "{VALID_HEADER}## modules\n\n## data\n\
-# +\nstruct Added {{\n  x: i64,\n}}\n\
-in: Added\nout: String\n\n\
-## behavior\n- do it\n\n## invariants\n"
+fn bad_indent() {
+    assert_code(
+        &with("  invariants:", "   - odd\n  invariants:"),
+        "bad-indent",
     );
-    let d = only(&src, code::UNRECOVERABLE_BASELINE);
-    assert_eq!(d.severity, Severity::Warning);
-    assert!(
-        d.message.contains("Added"),
-        "message should name the broken claim, got: {}",
-        d.message
+    assert_code(
+        &with("  - start ^start", "  - start ^start\n      - too deep"),
+        "bad-indent",
     );
 }
 
-/// The everyday annotated spec — a replaced behavior step and a field added to
-/// a referenced type (§4.7's member delta, now spelled the §10 way) — is clean.
 #[test]
-fn well_formed_annotations_are_silent() {
-    let src = plugin(
-        "## components\nstruct Wave @ src/waves.rs {\n  index: u32,\n  # - stale: u32,\n  # +\n  streak: u32,\n}\n\n\
-## resources\nstruct Cfg {\n  n: u32,\n}\n",
+fn nested_change_mismatch() {
+    let src = with(
+        "  invariants:",
+        "+ - if new:\n    - context under an added line @ run.rs:4\n  invariants:",
     );
-    let src = src.replace(
-        "## behavior\n- x\n",
-        "## behavior\n- read the wave\n# - spawn one enemy per tick\n# +\n- spawn Cfg.n enemies per tick\n# +\n- increment the spawn counter\n",
-    );
-    let (_doc, diags) = analyze(&src);
-    assert!(diags.is_empty(), "expected no diagnostics, got: {diags:#?}");
+    assert_code(&src, "nested-change-mismatch");
 }
 
-/// A `# +` on a whole `## systems` entry covers its indented access block too:
-/// one marker per addition, not one per line.
 #[test]
-fn an_added_marker_covers_the_nested_block() {
-    let src = plugin_with_systems(
-        "go — does it\n  schedule: Update\n# +\nlater — does it later\n  schedule: PostUpdate\n  after: go",
-    );
-    let (_doc, diags) = analyze(&src);
-    assert!(diags.is_empty(), "expected no diagnostics, got: {diags:#?}");
-
-    // The baseline drops the added system with its block, leaving only `go`.
-    let recovered = mml_parser::annotations::baseline(&src).text;
-    assert!(recovered.contains("go — does it"), "{recovered}");
-    assert!(!recovered.contains("later"), "{recovered}");
-    assert!(!recovered.contains("PostUpdate"), "{recovered}");
-}
-
-/// Un-commenting a `# -` restores the bullet the marker's `-` stood in for in a
-/// bulleted section, and restores nothing in a section that has none.
-#[test]
-fn the_baseline_restores_a_bullet_only_where_the_section_has_them() {
-    let src = plugin(
-        "## components\nstruct Wave @ src/waves.rs {\n  # - stale: u32,\n  index: u32,\n}\n",
-    );
-    let src = src.replace("## behavior\n- x\n", "## behavior\n# - do the old thing\n");
-    let recovered = mml_parser::annotations::baseline(&src).text;
-    assert!(recovered.contains("\n  stale: u32,\n"), "{recovered}");
-    assert!(recovered.contains("\n- do the old thing\n"), "{recovered}");
-}
-
-// ---- the module dialect (grammar §11) --------------------------------------
-
-/// A `kind: module` spec with `api` as its `## api` body.
-fn module_spec(api: &str) -> String {
-    format!(
-        "system: s\nunit: u\nkind: module\n\n\
-## modules\n\n\
-## data\n\
-struct Wave {{\n  index: u32,\n}}\n\n\
-## api\n{api}\n\
-## invariants\n"
-    )
-}
-
-/// A signature with no parameter list is not a signature; the entry still
-/// parses so its bullets have somewhere to attach.
-#[test]
-fn api_entry_without_parens() {
-    let src = module_spec("fn spawn\n  - look it up\n");
-    let d = only(&src, code::MALFORMED_API_ENTRY);
-    assert_eq!(d.severity, Severity::Error);
-    assert!(d.message.contains("expected `(`"), "{}", d.message);
-}
-
-/// An unclosed parameter list is reported as such rather than swallowing the
-/// rest of the line as a type.
-#[test]
-fn api_entry_unterminated_params() {
-    let src = module_spec("fn spawn(index: u32\n  - look it up\n");
-    let d = only(&src, code::MALFORMED_API_ENTRY);
-    assert!(d.message.contains("expected `)`"), "{}", d.message);
-}
-
-/// A return type is introduced by `->`; without it the trailing text is not a
-/// type the checker should try to resolve.
-#[test]
-fn api_return_without_arrow() {
-    let src = module_spec("fn spawn(index: u32) Wave\n  - look it up\n");
-    let d = only(&src, code::MALFORMED_API_ENTRY);
-    assert!(d.message.contains("expected `-> Type`"), "{}", d.message);
-}
-
-/// Every parameter is `name: Type`; a bare name has no type to check.
-#[test]
-fn api_param_without_type() {
-    let src = module_spec("fn spawn(index) -> Wave\n  - look it up\n");
-    let d = only(&src, code::MALFORMED_API_ENTRY);
-    assert!(d.message.contains("name: Type"), "{}", d.message);
-}
-
-/// Every bullet in `## api` describes some function, so one at column 0 belongs
-/// to none.
-#[test]
-fn api_bullet_outside_an_entry() {
-    let src = module_spec("- look it up\n");
-    let d = only(&src, code::MALFORMED_API_ENTRY);
-    assert_eq!(d.severity, Severity::Error);
-    assert!(d.message.contains("under a `fn` entry"), "{}", d.message);
-}
-
-/// An entry is addressed by its member name, so two entries may not share one.
-#[test]
-fn duplicate_api_entry() {
-    let src =
-        module_spec("fn spawn(index: u32) -> Wave\n  - a\nfn spawn(index: u32) -> Wave\n  - b\n");
-    let d = only(&src, code::DUPLICATE_API_ENTRY);
-    assert_eq!(d.severity, Severity::Error);
-    assert_span(&src, &d, "spawn");
-}
-
-/// A method and a standalone function of the same name are different entries —
-/// `Wave::spawn` and `spawn` are addressed differently by a `::` ref.
-#[test]
-fn method_and_function_of_the_same_name_are_distinct() {
-    let src = module_spec(
-        "fn spawn(index: u32) -> Wave\n  - a\nfn Wave::spawn(index: u32) -> Wave\n  - b\n",
-    );
-    let (_doc, diags) = analyze(&src);
-    assert!(
-        !diags.iter().any(|d| d.code == code::DUPLICATE_API_ENTRY),
-        "{diags:#?}"
+fn change_in_intent() {
+    assert_code(
+        &with("  - do a thing", "+ - do a thing"),
+        "change-in-intent",
     );
 }
 
-/// A signature's parameter types resolve exactly like a struct field's.
 #[test]
-fn undefined_type_in_a_signature() {
-    let src = module_spec("fn spawn(index: Bogus) -> Wave\n  - look it up\n");
-    let d = only(&src, code::UNDEFINED_TYPE);
-    assert_eq!(d.severity, Severity::Error);
-    assert_span(&src, &d, "Bogus");
-}
-
-/// …and so does a return type, nested containers included.
-#[test]
-fn undefined_return_type_in_a_signature() {
-    let src = module_spec("fn spawn(index: u32) -> Option<Bogus>\n  - look it up\n");
-    let d = only(&src, code::UNDEFINED_TYPE);
-    assert_span(&src, &d, "Bogus");
-}
-
-/// The containers a signature needs to stay faithful to real code resolve
-/// without a declaration (grammar §4.3).
-#[test]
-fn new_containers_resolve() {
-    let src = module_spec(
-        "fn spawn(index: u32) -> Future<Result<Option<Wave>, String>>\n  - look it up\n\
-fn pair(index: u32) -> Tuple<Wave, Wave>\n  - look both up\n\
-fn either(index: u32) -> Either<String, Wave>\n  - look it up\n",
-    );
-    let (_doc, diags) = analyze(&src);
-    assert!(diags.is_empty(), "unexpected diagnostics: {diags:#?}");
-}
-
-/// A receiver has to be a type the module owns: a method on the module itself
-/// is written as a plain `fn`.
-#[test]
-fn unknown_receiver_warns() {
-    let src = module_spec("fn Table::spawn(index: u32) -> Wave\n  - look it up\n");
-    let d = only(&src, code::UNDEFINED_TYPE);
-    assert_eq!(d.severity, Severity::Warning);
-    assert_span(&src, &d, "Table");
-}
-
-/// The section exists to carry the public surface, so an empty one means the
-/// surface has not been captured.
-#[test]
-fn empty_api_section_warns() {
-    let src = module_spec("");
-    let d = only(&src, code::EMPTY_API);
-    assert_eq!(d.severity, Severity::Warning);
-    assert_span(&src, &d, "## api");
-}
-
-/// `## api` and `## behavior` are alternative spellings of one slot, so each is
-/// illegal on the other's kinds — reinterpreting one as the other would
-/// silently discard structurally different content.
-#[test]
-fn behavior_section_on_a_module_is_an_error() {
-    let src = "system: s\nunit: u\nkind: module\n\n\
-## modules\n\n\
-## data\n\n\
-## behavior\n- do it\n\n\
-## invariants\n";
-    let d = only(src, code::SECTION_NOT_ALLOWED);
-    assert_eq!(d.severity, Severity::Error);
-    assert_span(src, &d, "## behavior");
-}
-
-#[test]
-fn api_section_on_a_behavioural_kind_is_an_error() {
-    let src = "system: s\nunit: u\nkind: job\n\n\
-## modules\n\n\
-## data\n\n\
-## api\nfn spawn(index: u32) -> u32\n  - look it up\n\n\
-## invariants\n";
-    let d = only(src, code::SECTION_NOT_ALLOWED);
-    assert_eq!(d.severity, Severity::Error);
-    assert_span(src, &d, "## api");
-}
-
-/// A module has no `in:`/`out:` — its surface is its functions' parameters and
-/// return types.
-#[test]
-fn io_line_on_a_module_is_an_error() {
-    let src = "system: s\nunit: u\nkind: module\n\n\
-## modules\n\n\
-## data\nin: String\n\n\
-## api\nfn spawn(index: u32) -> u32\n  - look it up\n\n\
-## invariants\n";
-    let d = only(src, code::MALFORMED_STRUCT);
-    assert_eq!(d.severity, Severity::Error);
-    assert!(d.message.contains("module spec"), "{}", d.message);
-}
-
-/// A member path is one or two identifier segments; a longer one names nothing.
-#[test]
-fn malformed_member_ref() {
-    let src = module_spec("fn spawn(index: u32) -> Wave\n  - look it up @ spec other::a::b::c\n");
-    let d = only(&src, code::MALFORMED_SPEC_REF);
-    assert_eq!(d.severity, Severity::Error);
-    assert_span(&src, &d, "other::a::b::c");
-}
-
-/// A `use` line imports types out of a spec file, so a member on its ref names
-/// something no type can come from.
-#[test]
-fn member_on_an_import_ref_is_an_error() {
-    let src = "system: s\nunit: u\nkind: module\n\n\
-## modules\n\n\
-## data\nuse other::spawn: Wave\n\n\
-## api\nfn go(w: Wave) -> u32\n  - look it up\n\n\
-## invariants\n";
-    let d = only(src, code::MALFORMED_IMPORT);
-    assert_eq!(d.severity, Severity::Error);
-    assert!(d.message.contains("names a function"), "{}", d.message);
-}
-
-/// A module spec is annotated like any behavioural spec: a `# +` on a `fn` line
-/// covers its whole nested tree, and the baseline still reconstructs.
-#[test]
-fn annotated_module_spec_is_recoverable() {
-    let src = module_spec(
-        "fn spawn(index: u32) -> Wave\n  - look it up\n\
-# +\nfn upsert(wave: Wave) -> u32\n  - store it\n",
-    );
-    let (_doc, diags) = analyze(&src);
-    assert!(
-        !diags.iter().any(
-            |d| d.code == code::UNRECOVERABLE_BASELINE || d.code == code::EMPTY_CHANGE_ADDITION
+fn bad_tilde() {
+    assert_code(
+        &with(
+            "  - start ^start",
+            "~ - start without an arrow ^start @ run.rs:1",
         ),
-        "{diags:#?}"
+        "bad-tilde",
+    );
+    assert_code(
+        &with("  - start ^start", "~ - a → b → c ^start @ run.rs:1"),
+        "bad-tilde",
     );
 }
 
-/// A `fn` indented under another entry is taken for a bullet by the step
-/// parser; left silent it would drop a public function from the api, and the
-/// mistake would surface as an error in whichever *other* spec references it.
 #[test]
-fn nested_api_entry_is_an_error() {
-    let src = module_spec("fn a(index: u32) -> u32\n  - y\n  fn b(index: u32) -> u32\n    - z\n");
-    let d = only(&src, code::MALFORMED_API_ENTRY);
-    assert_eq!(d.severity, Severity::Error);
-    assert_span(&src, &d, "fn b(index: u32) -> u32");
-    assert!(d.message.contains("column 0"), "{}", d.message);
+fn bad_annotation() {
+    assert_code(
+        &with("@ run.rs:2 @ api Mod::go", "@ api Mod::go @ run.rs:2"),
+        "bad-annotation",
+    );
 }
 
-/// `::` with nothing before it names no receiver; a function of the module
-/// itself is a plain `fn`.
 #[test]
-fn empty_receiver_before_separator_is_an_error() {
-    let src = module_spec("fn ::spawn(index: u32) -> u32\n  - look it up\n");
-    let d = only(&src, code::MALFORMED_API_ENTRY);
-    assert_eq!(d.severity, Severity::Error);
-    assert!(d.message.contains("receiver type"), "{}", d.message);
+fn duplicate_anchor() {
+    assert_code(&with("  - holds", "  - holds ^start"), "duplicate-anchor");
 }
 
-/// A doubled arrow is a signature mistake, and must not be reported as a bogus
-/// type name on top of it.
 #[test]
-fn doubled_return_arrow_is_a_signature_error() {
-    let src = module_spec("fn spawn(index: u32) -> -> u32\n  - look it up\n");
-    let d = only(&src, code::MALFORMED_API_ENTRY);
-    assert!(d.message.contains("one `->`"), "{}", d.message);
-    let (_doc, diags) = analyze(&src);
+fn unknown_api_ref() {
+    assert_code(&with("@ api Mod::go", "@ api Mod::stop"), "unknown-api-ref");
+}
+
+#[test]
+fn unknown_anchor() {
+    assert_code(
+        &with("@ guards ^start", "@ guards ^start, ^nope"),
+        "unknown-anchor",
+    );
+}
+
+#[test]
+fn bad_struct() {
+    assert_code(
+        &with(
+            "+ struct Foo { a: String }",
+            "+ struct Foo {\n+   a: String,",
+        ),
+        "bad-struct",
+    );
+    assert_code(
+        &with("+ struct Foo { a: String }", "+ struct foo { a: String }"),
+        "bad-struct",
+    );
+    assert_code(
+        &with("+ struct Foo { a: String }", "+ struct Foo { a: string }"),
+        "bad-struct",
+    );
+    assert_code(
+        &with(
+            "+ struct Foo { a: String }",
+            "+ struct Foo {\n+   a: String,\n  }",
+        ),
+        "bad-struct",
+    );
+}
+
+#[test]
+fn duplicate_type() {
+    assert_code(
+        &with(
+            "+ struct Foo { a: String }",
+            "+ struct Foo { a: String }\n+ enum Foo { x, y }",
+        ),
+        "duplicate-type",
+    );
+}
+
+#[test]
+fn duplicate_unit() {
+    assert_code(
+        &with("## api", "## unit run — again\n  - x\n\n## api"),
+        "duplicate-unit",
+    );
+}
+
+#[test]
+fn bad_unit_header() {
+    assert_code(
+        &with("## unit run — the runner", "## unit run the runner"),
+        "bad-unit-header",
+    );
+    assert_code(
+        &with("## unit run — the runner", "## unit Run — the runner"),
+        "bad-unit-header",
+    );
+    assert_code(
+        &with(
+            "## unit run — the runner",
+            "## unit run (gone) — the runner",
+        ),
+        "bad-unit-header",
+    );
+    assert_code(
+        &with("## unit run — the runner", "## unit"),
+        "bad-unit-header",
+    );
+}
+
+#[test]
+fn misplaced_invariants() {
+    assert_code(
+        &with("  - holds", "  - holds\n    - nested step"),
+        "misplaced-invariants",
+    );
+    assert_code(
+        &with("  - holds", "  - holds\n  invariants:\n  - again"),
+        "misplaced-invariants",
+    );
+}
+
+#[test]
+fn bad_fn() {
+    assert_code(
+        &with("fn go(x: String) -> bool", "fn go(x String) -> bool"),
+        "bad-fn",
+    );
+    assert_code(
+        &with(
+            "  Mod — does stuff",
+            "+ fn loose() @ m.rs:1\n  Mod — does stuff",
+        ),
+        "bad-fn",
+    );
+    assert_code(
+        &with("@ m.rs:3\n", "@ m.rs:3\n+     fn deep() @ m.rs:4\n"),
+        "bad-fn",
+    );
+}
+
+#[test]
+fn duplicate_module() {
+    assert_code(
+        &with("## tests", "  Mod — again\n\n## tests"),
+        "duplicate-module",
+    );
+}
+
+#[test]
+fn duplicate_fn() {
+    assert_code(
+        &with("@ m.rs:3\n", "@ m.rs:3\n+   fn go(y: i32) @ m.rs:9\n"),
+        "duplicate-fn",
+    );
+}
+
+#[test]
+fn bad_test() {
+    assert_code(
+        &with("+ test go_works — it goes", "+ check go_works — it goes"),
+        "bad-test",
+    );
+    assert_code(
+        &with("+ test go_works — it goes", "+ test GoWorks — it goes"),
+        "bad-test",
+    );
+    assert_code(
+        &with("+ test go_works — it goes", "+ tests many — it goes"),
+        "bad-test",
+    );
+}
+
+#[test]
+fn no_change() {
+    let src = BASE.replace("\n+ ", "\n  ");
+    let all = analyze(&src).1;
     assert!(
-        !diags.iter().any(|d| d.code == code::UNDEFINED_TYPE),
-        "{diags:#?}"
+        all.iter()
+            .any(|d| d.code == "no-change" && d.severity == Severity::Warning)
     );
 }
 
-/// The `## api` arm of the baseline reconstruction: a removed `fn` line keeps
-/// no bullet, a removed nested bullet gets its `- ` and indent restored. With
-/// this wrong, `--lint` fails on a legitimately annotated module spec.
 #[test]
-fn removals_in_api_reconstruct_the_baseline() {
-    // Written on one line on purpose: a `\`-continuation would eat the leading
-    // spaces this test is about.
-    let src = module_spec(
-        "fn spawn(index: u32) -> u32\n# - fn upsert(wave: u32) -> u32\n  - build the query\n  # - run the old query\n# +\n  - run the new query\n",
-    );
-    let (_doc, diags) = analyze(&src);
+fn unlinked_change() {
+    let all = analyze(&with(
+        "+ - do more @ run.rs:2 @ api Mod::go",
+        "+ - do more @ api Mod::go",
+    ))
+    .1;
     assert!(
-        !diags.iter().any(|d| d.code == code::UNRECOVERABLE_BASELINE),
-        "{diags:#?}"
+        all.iter()
+            .any(|d| d.code == "unlinked-change" && d.severity == Severity::Warning)
     );
+    assert_code(
+        &with(
+            "+   fn go(x: String) -> bool @ m.rs:3",
+            "+   fn go(x: String) -> bool",
+        ),
+        "unlinked-change",
+    );
+    assert_code(
+        &with(
+            "+ test go_works — it goes @ run_test.rs:1",
+            "+ test go_works — it goes",
+        ),
+        "unlinked-change",
+    );
+}
 
-    let baseline = mml_parser::annotations::baseline(&src).text;
-    assert!(
-        baseline.contains("\nfn upsert(wave: u32) -> u32\n"),
-        "{baseline}"
+#[test]
+fn nesting_rule() {
+    let ok = with(
+        "  invariants:",
+        "- - if gone: @ run.rs:5\n-   - removed body\n~ - check a → check b: @ run.rs:6\n+   - added under changed @ run.rs:7\n    - context under changed\n  - context parent:\n-   - removed under context @ run.rs:8\n  invariants:",
     );
-    assert!(baseline.contains("\n  - run the old query\n"), "{baseline}");
-    assert!(!baseline.contains("run the new query"), "{baseline}");
+    assert_eq!(codes(&ok), Vec::<&str>::new());
+    let bad = with(
+        "  invariants:",
+        "- - if gone: @ run.rs:5\n+   - added under removed @ run.rs:6\n  invariants:",
+    );
+    assert_eq!(codes(&bad), vec!["nested-change-mismatch"]);
+    let new_unit = with(
+        "## api",
+        "## unit fresh (new) — a new one\n+ - first @ x.rs:1\n  - context line\n\n## api",
+    );
+    assert_eq!(codes(&new_unit), vec!["nested-change-mismatch"]);
+}
+
+#[test]
+fn tilde_lines_reconstruct_both_versions() {
+    let src = with(
+        "  - start ^start",
+        "~ - spawn enemies from the table → from the wave table ^start @ run.rs:1",
+    );
+    let doc = parse(&src);
+    assert_eq!(codes(&src), Vec::<&str>::new());
+    let line = doc
+        .lines
+        .iter()
+        .find(|l| l.gutter == Gutter::Changed)
+        .unwrap();
+    let t = line.tilde.as_ref().unwrap();
+    assert_eq!(t.old, "spawn enemies from the table");
+    assert_eq!(t.new, "spawn enemies from the wave table");
+    assert_eq!(line.text, t.new);
+    assert_eq!(&src[t.old_clause.start..t.old_clause.end], "from the table");
+    assert_eq!(
+        &src[t.new_clause.start..t.new_clause.end],
+        "from the wave table"
+    );
+    assert_eq!(line.ann.anchor.as_ref().unwrap().value, "start");
+}
+
+#[test]
+fn tilde_shared_prefix() {
+    assert_eq!(
+        shared_prefix("answer the spec itself", "answer a summary"),
+        0
+    );
+    assert_eq!(
+        shared_prefix("run it and take the rendered table", "take the rows"),
+        "run it and ".len()
+    );
+    assert_eq!(
+        shared_prefix("test x_y — rows passed as data", "a stored result"),
+        "test x_y — ".len()
+    );
+    assert_eq!(
+        shared_prefix(
+            "the agent passes the rows verbatim",
+            "the agent names a chart"
+        ),
+        0
+    );
+}
+
+#[test]
+fn tilde_test_and_field_lines() {
+    let src = with(
+        "+ test go_works — it goes @ run_test.rs:1 @ guards ^start",
+        "~ test go_works — it went → it goes @ run_test.rs:1 @ guards ^start",
+    )
+    .replace(
+        "+ struct Foo { a: String }",
+        "  struct Foo {\n~   a: String → Vec<String>,\n  }",
+    );
+    assert_eq!(codes(&src), Vec::<&str>::new());
+    let doc = parse(&src);
+    assert!(matches!(&doc.tests[0].kind, TestKind::Single(n) if n == "go_works"));
+    assert_eq!(doc.tests[0].description, "it goes");
+    let f = &doc.data[0].fields[0];
+    assert_eq!(f.ty.as_ref().unwrap().value, "Vec<String>");
+    assert_eq!(
+        &src[f.ty.as_ref().unwrap().span.start..f.ty.as_ref().unwrap().span.end],
+        "Vec<String>"
+    );
+}
+
+#[test]
+fn annotation_order() {
+    let all_four = with(
+        "+ test go_works — it goes @ run_test.rs:1 @ guards ^start",
+        "+ test go_works — it goes @ run_test.rs:1 @ guards ^start",
+    )
+    .replace(
+        "+ - do more @ run.rs:2 @ api Mod::go",
+        "+ - do more ^more @ run.rs:2 @ api Mod::go",
+    );
+    assert_eq!(codes(&all_four), Vec::<&str>::new());
+    let doc = parse(&all_four);
+    let line = doc
+        .lines
+        .iter()
+        .find(|l| l.ann.anchor.as_ref().is_some_and(|a| a.value == "more"))
+        .unwrap();
+    assert_eq!(line.text, "do more");
+    assert_eq!(
+        line.ann.link.as_ref().unwrap().line.as_ref().unwrap().value,
+        2
+    );
+    assert_eq!(line.ann.api[0].value, "Mod::go");
+
+    for bad in [
+        "+ - do more @ run.rs:2 ^more @ api Mod::go",
+        "+ - do more @ run.rs:2 @ run.rs:3 @ api Mod::go",
+        "+ - do more @ run.rs:2 @ api Mod::go @ guards ^start",
+        "+ - do more @ run.rs:2 @ api",
+    ] {
+        let src = with("+ - do more @ run.rs:2 @ api Mod::go", bad);
+        assert_code(&src, "bad-annotation");
+    }
+    assert_code(
+        &with("  - holds", "  - holds @ api Mod::go"),
+        "bad-annotation",
+    );
+    assert_code(
+        &with("+ test go_works — it goes", "+ test go_works — it goes ^t"),
+        "bad-annotation",
+    );
+    assert_code(
+        &with("## unit run — the runner", "## unit run — the runner ^r"),
+        "bad-annotation",
+    );
+}
+
+#[test]
+fn same_name_on_both_sides_is_not_a_duplicate() {
+    let src = with(
+        "+   fn go(x: String) -> bool @ m.rs:3",
+        "-   fn go(x: String) @ m.rs:3\n+   fn go(x: String) -> bool @ m.rs:3",
+    )
+    .replace(
+        "+ struct Foo { a: String }",
+        "- struct Foo { a: i32 }\n+ struct Foo { a: String }",
+    );
+    assert_eq!(codes(&src), Vec::<&str>::new());
+}
+
+#[test]
+fn change_block_link_covers_its_lines() {
+    let src = with(
+        "  invariants:",
+        "+ - if new:\n+   - linked child @ run.rs:4\n- - removed parent: @ run.rs:5\n-   - unlinked child\n  invariants:",
+    );
+    assert_eq!(codes(&src), Vec::<&str>::new());
+}
+
+#[test]
+fn roles_and_steps() {
+    let doc = parse(BASE);
+    let unit = &doc.units[0];
+    assert_eq!(unit.name.value, "run");
+    assert_eq!(unit.what, "the runner");
+    assert_eq!(unit.link.as_ref().unwrap().file.value, "run.rs");
+    assert_eq!(unit.steps.len(), 2);
+    assert_eq!(unit.invariants.len(), 1);
+    assert_eq!(doc.lines[unit.invariants[0]].role, Role::Invariant);
+    assert_eq!(doc.api[0].fns[0].name.value, "go");
+    assert_eq!(doc.resolve_api("Mod::go").unwrap().1.name.value, "go");
+}
+
+#[test]
+fn recovers_after_errors() {
+    let src = with("  - start ^start", "* broken\n  - start ^start")
+        .replace("## api", "## bogus\n  junk\n\n## api");
+    let (doc, all) = analyze(&src);
+    let c: Vec<_> = all.iter().map(|d| d.code).collect();
+    assert!(
+        c.contains(&"bad-gutter") && c.contains(&"unknown-section"),
+        "{c:?}"
+    );
+    assert_eq!(doc.units.len(), 1);
+    assert_eq!(doc.api.len(), 1);
+    assert_eq!(doc.tests.len(), 1);
+}
+
+#[test]
+fn comments_and_blank_lines_are_ignored() {
+    let src = format!(
+        "# a comment\n{}",
+        BASE.replace("## data", "#\n# note\n\n## data")
+    );
+    assert_eq!(codes(&src), Vec::<&str>::new());
+}
+
+#[test]
+fn api_takes_several_targets() {
+    let src = "repo: r\nbranch: b\nbase: abcdef1\nhead: abcdef2\n\n## intent\n  - x\n\n## unit u — the unit\n+ - go @ F.rs:1 @ api Mod::go, Other::run\n\n## api\n+ Mod — m\n+   fn go() @ F.rs:2\n+ Other — o\n+   fn run() @ F.rs:3\n";
+    let (doc, diags) = mml_parser::analyze(src);
+    assert!(
+        diags
+            .iter()
+            .all(|d| d.severity != mml_parser::Severity::Error),
+        "{diags:?}"
+    );
+    let line = doc.lines.iter().find(|l| !l.ann.api.is_empty()).unwrap();
+    assert_eq!(line.ann.api.len(), 2);
+    let bad = src.replace("Other::run", "Other::nope");
+    let (_, diags) = mml_parser::analyze(&bad);
+    assert!(diags.iter().any(|d| d.code == "unknown-api-ref"));
+}
+
+#[test]
+fn tilde_on_a_return_type_keeps_the_signature() {
+    let old = "fn lease(contract_id: Uuid) -> Proxy";
+    let cut = shared_prefix(old, "Option<Proxy>");
+    assert_eq!(
+        format!("{}{}", &old[..cut], "Option<Proxy>"),
+        "fn lease(contract_id: Uuid) -> Option<Proxy>"
+    );
+}
+
+#[test]
+fn tilde_with_ellipsis_keeps_the_old_words_and_adds() {
+    let src = "repo: r\nbranch: b\nbase: abcdef1\nhead: abcdef2\n\n## intent\n  - x\n\n## unit u — the unit\n~ - head each section \"### Query N\" → … adding \"(result id: r-x)\" @ F.rs:1\n";
+    let (doc, diags) = analyze(src);
+    assert!(
+        diags.iter().all(|d| d.severity != Severity::Error),
+        "{diags:?}"
+    );
+    let t = doc.lines.iter().find_map(|l| l.tilde.as_ref()).unwrap();
+    assert_eq!(t.old, "head each section \"### Query N\"");
+    assert_eq!(
+        t.new,
+        "head each section \"### Query N\" adding \"(result id: r-x)\""
+    );
+}
+
+#[test]
+fn unit_trigger_schedule_and_observer() {
+    for header in [
+        "## unit run in Update — the runner @ run.rs:1",
+        "## unit run in OnEnter(Screen::Gameplay) — the runner @ run.rs:1",
+        "## unit run on WaveCleared — the runner @ run.rs:1",
+        "## unit run on Add<Enemy> — the runner @ run.rs:1",
+    ] {
+        let src = with("## unit run — the runner @ run.rs:1", header);
+        assert_eq!(codes(&src), Vec::<&str>::new(), "{header}");
+    }
+    let doc = parse(&with(
+        "## unit run — the runner",
+        "## unit run on WaveCleared — the runner",
+    ));
+    let t = doc.units[0].trigger.as_ref().unwrap();
+    assert_eq!(t.keyword(), "on");
+    assert_eq!(t.target().value, "WaveCleared");
+}
+
+#[test]
+fn new_unit_takes_a_trigger_after_its_status() {
+    let src = with(
+        "\n## api",
+        "\n## unit fresh (new) in Update — a new one\n+ - first @ x.rs:1\n\n## api",
+    );
+    assert_eq!(codes(&src), Vec::<&str>::new());
+}
+
+#[test]
+fn bad_unit_trigger() {
+    for header in [
+        "## unit run in update — the runner",
+        "## unit run in — the runner",
+        "## unit run on wave_cleared — the runner",
+        "## unit run in Update extra — the runner",
+        "## unit run at Update — the runner",
+    ] {
+        assert_code(&with("## unit run — the runner", header), "bad-unit-header");
+    }
+}
+
+#[test]
+fn data_types_carry_an_ecs_role() {
+    let src = with(
+        "+ struct Foo { a: String }",
+        "+ component struct Foo { a: String }\n+ resource struct Bar {\n+   b: u32,\n+ }\n+ state enum Screen { title, gameplay }",
+    );
+    let (doc, diags) = analyze(&src);
+    assert!(diags.is_empty(), "{diags:?}");
+    let roles: Vec<_> = doc
+        .data
+        .iter()
+        .map(|t| t.role.map(|r| r.keyword()))
+        .collect();
+    assert_eq!(roles, [Some("component"), Some("resource"), Some("state")]);
+    assert_eq!(doc.data[1].fields.len(), 1);
+}
+
+#[test]
+fn unknown_data_role() {
+    assert_code(
+        &with(
+            "+ struct Foo { a: String }",
+            "+ asset struct Foo { a: String }",
+        ),
+        "bad-struct",
+    );
+}
+
+#[test]
+fn head_may_be_the_worktree() {
+    assert_eq!(
+        codes(&with("head: 2222222", "head: worktree")),
+        Vec::<&str>::new()
+    );
+    assert_code(&with("base: 1111111", "base: worktree"), "bad-header-value");
 }

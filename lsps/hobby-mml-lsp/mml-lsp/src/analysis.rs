@@ -1,66 +1,15 @@
-//! Pure analysis over a parsed [`Document`] and its raw text.
-//!
-//! Everything the LSP needs to answer a request at a cursor lives here as plain
-//! functions of `(text, offset)` or `(&Document)` — no `tower_lsp` types — so the
-//! whole interesting surface is unit-testable with string inputs, mirroring the
-//! `julian-path-lsp` template.
-//!
-//! The parser gives us a fully-spanned AST plus a forward byte-offset →
-//! [`Position`] map ([`mml_parser::LineIndex`]). This module fills the three gaps
-//! the parser API doesn't expose:
-//! - the reverse map ([`offset_of`]): LSP [`Position`] → byte offset,
-//! - section membership ([`section_at`] / [`sections`]): the AST carries no
-//!   section spans,
-//! - the identifier under a cursor ([`word_at`]): behavior [`Step`] text is a
-//!   single span with no sub-tokens, so hover/goto/references scan raw text and
-//!   match against the symbol tables ([`symbols`]).
+//! Cursor logic over a parsed delta, free of protocol types so it can be
+//! unit-tested: definitions, hover text, references, symbols, completions.
 
-use std::ops::Range;
+use std::path::{Path, PathBuf};
 
-use mml_parser::Position;
-use mml_parser::ast::{Document, ExternImport, Role, Step, TypeDef};
-use mml_parser::span::{Span, Spanned};
+use mml_parser::Document;
+use mml_parser::ast::{DiffLink, EcsRole, Line, SectionKind, Side, TestKind, TypeKind};
+use mml_parser::git::{self, GitCache, Resolution};
+use mml_parser::parser::HEADER_KEYS;
+use mml_parser::span::{Position, Span};
 
-// ---- constants -------------------------------------------------------------
-
-// Re-exported from the parser so the two can't drift.
-pub use mml_parser::ast::{ACCESS_KEYS, KIND_VALUES};
-pub use mml_parser::validate::{
-    BUILTIN_COMPONENTS, BUILTIN_EVENTS, BUILTIN_RESOURCES, CONTAINERS, OPAQUE, PRIMITIVES,
-    SCHEDULES,
-};
-
-pub const HEADER_KEYS: &[&str] = &["system", "unit", "kind", "method", "base", "source"];
-pub const SOURCE_KEYS: &[&str] = &["repo", "paths"];
-pub const METHOD_VALUES: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
-pub const SECTION_HEADERS: &[&str] = &[
-    "## modules",
-    "## data",
-    "## components",
-    "## resources",
-    "## events",
-    "## systems",
-    "## access",
-    "## api",
-    "## behavior",
-    "## invariants",
-];
-
-/// Behavior control-flow forms (grammar §5.1); the spellings match
-/// `parser::classify_step`. Offered verbatim as completions.
-pub const CONTROL_FLOW: &[&str] = &["if ", "else:", "for each ", "while ", "try:", "on error:"];
-
-fn is_ident_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
-}
-
-// ---- position mapping ------------------------------------------------------
-
-/// Convert an LSP [`Position`] (0-based line, UTF-16 character) into a byte
-/// offset into `text` — the inverse of [`mml_parser::LineIndex::position`].
-/// A line or column past the end clamps to the end of the line / text.
 pub fn offset_of(text: &str, pos: Position) -> usize {
-    // Byte offset of the start of the target line.
     let mut line_start = 0usize;
     if pos.line > 0 {
         let mut seen = 0u32;
@@ -76,11 +25,9 @@ pub fn offset_of(text: &str, pos: Position) -> usize {
         }
         match found {
             Some(s) => line_start = s,
-            None => return text.len(), // line beyond EOF
+            None => return text.len(),
         }
     }
-
-    // Advance `pos.character` UTF-16 units within the line, stopping at newline.
     let mut utf16 = 0u32;
     for (rel, ch) in text[line_start..].char_indices() {
         if utf16 >= pos.character || ch == '\n' {
@@ -91,1366 +38,836 @@ pub fn offset_of(text: &str, pos: Position) -> usize {
     text.len()
 }
 
-// ---- word under cursor -----------------------------------------------------
-
-/// An identifier found at a cursor, with its absolute byte [`Span`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Word {
-    pub text: String,
-    pub span: Span,
+fn is_word(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
 }
 
-/// The identifier (`alphanumeric` + `_`) under the byte `offset`, if any. When
-/// the cursor sits just after a word (e.g. at end of line), it steps back onto
-/// that word — matching `path_lsp`'s `path_token_at` behaviour.
-pub fn word_at(text: &str, offset: usize) -> Option<Word> {
-    let chars: Vec<(usize, char)> = text.char_indices().collect();
-    if chars.is_empty() {
-        return None;
-    }
+/// The identifier under (or just before) `offset`.
+pub fn word_at(text: &str, offset: usize) -> Option<(Span, &str)> {
     let offset = offset.min(text.len());
-    // Index of the char at (or containing) the cursor.
-    let mut ci = match chars.binary_search_by_key(&offset, |&(b, _)| b) {
-        Ok(i) => i,
-        Err(i) => i.saturating_sub(1),
-    };
-    ci = ci.min(chars.len() - 1);
-
-    // On a word char: use it. Otherwise, if the previous char is a word char
-    // (cursor just past a word), step back. Else: no word here.
-    if !is_ident_char(chars[ci].1) {
-        if ci > 0 && is_ident_char(chars[ci - 1].1) {
-            ci -= 1;
-        } else {
-            return None;
-        }
-    }
-
-    let mut start = ci;
-    while start > 0 && is_ident_char(chars[start - 1].1) {
-        start -= 1;
-    }
-    let mut end = ci;
-    while end + 1 < chars.len() && is_ident_char(chars[end + 1].1) {
-        end += 1;
-    }
-
-    let start_b = chars[start].0;
-    let end_b = chars[end].0 + chars[end].1.len_utf8();
-    Some(Word {
-        text: text[start_b..end_b].to_string(),
-        span: Span::new(start_b, end_b),
-    })
+    let start = text[..offset]
+        .char_indices()
+        .rev()
+        .take_while(|&(_, c)| is_word(c))
+        .last()
+        .map_or(offset, |(i, _)| i);
+    let end = text[offset..]
+        .char_indices()
+        .find(|&(_, c)| !is_word(c))
+        .map_or(text.len(), |(i, _)| offset + i);
+    (start < end).then(|| (Span::new(start, end), &text[start..end]))
 }
 
-// ---- sections --------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SectionKind {
-    Header,
-    Modules,
-    Data,
-    /// One of the Bevy world sections, carrying its ECS role.
-    World(Role),
-    Systems,
-    Access,
-    Behavior,
-    /// `## api` — the third section of a `kind: module` spec (grammar §11).
-    Api,
-    Invariants,
-    Unknown,
+fn within(span: Span, offset: usize) -> bool {
+    span.start <= offset && offset <= span.end
 }
 
-impl SectionKind {
-    /// Whether this section declares types — `## data` and the three world
-    /// sections share a body grammar and therefore a completion behaviour.
-    pub fn declares_types(self) -> bool {
-        matches!(self, SectionKind::Data | SectionKind::World(_))
-    }
-
-    /// Whether this section holds access attribute lines.
-    pub fn has_access(self) -> bool {
-        matches!(self, SectionKind::Systems | SectionKind::Access)
-    }
-}
-
-fn section_kind_from_name(name: &str) -> SectionKind {
-    match name {
-        "modules" => SectionKind::Modules,
-        "data" => SectionKind::Data,
-        "components" => SectionKind::World(Role::Component),
-        "resources" => SectionKind::World(Role::Resource),
-        "events" => SectionKind::World(Role::Event),
-        "systems" => SectionKind::Systems,
-        "access" => SectionKind::Access,
-        "behavior" => SectionKind::Behavior,
-        "api" => SectionKind::Api,
-        "invariants" => SectionKind::Invariants,
-        _ => SectionKind::Unknown,
-    }
-}
-
-/// Which section the byte `offset` falls in. Section boundaries are `##`-at-
-/// column-0 header lines (the lexer's rule); everything before the first one is
-/// the [`SectionKind::Header`].
-pub fn section_at(text: &str, offset: usize) -> SectionKind {
-    let mut current = SectionKind::Header;
-    let mut pos = 0usize;
-    for line in text.split_inclusive('\n') {
-        let line_end = pos + line.len();
-        if line.starts_with("##") {
-            current = section_kind_from_name(line.trim_start_matches('#').trim());
-        }
-        if offset < line_end {
-            return current;
-        }
-        pos = line_end;
-    }
-    current
-}
-
-/// The document's sections as `(kind, byte range)`, each running from its `##`
-/// header line to the next header (or EOF). A leading [`SectionKind::Header`]
-/// range covers the text before the first `##`. Used to build document symbols.
-pub fn sections(text: &str) -> Vec<(SectionKind, Range<usize>)> {
-    let mut headers: Vec<(SectionKind, usize)> = Vec::new();
-    let mut pos = 0usize;
-    for line in text.split_inclusive('\n') {
-        if line.starts_with("##") {
-            headers.push((
-                section_kind_from_name(line.trim_start_matches('#').trim()),
-                pos,
-            ));
-        }
-        pos += line.len();
-    }
-
-    let mut out = Vec::new();
-    let first = headers.first().map(|&(_, s)| s).unwrap_or(text.len());
-    if first > 0 {
-        out.push((SectionKind::Header, 0..first));
-    }
-    for (i, &(kind, start)) in headers.iter().enumerate() {
-        let end = headers.get(i + 1).map(|&(_, s)| s).unwrap_or(text.len());
-        out.push((kind, start..end));
-    }
-    out
-}
-
-// ---- symbol tables ---------------------------------------------------------
-
-#[derive(Debug, Clone)]
-pub struct ModuleSym {
-    pub name: String,
-    pub name_span: Span,
-    pub responsibility: String,
-    pub path: Option<Spanned<String>>,
-}
-
-/// How a type was declared. `Marker` exists only in `## components`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TypeShape {
-    Struct,
-    Enum,
-    Marker,
-}
-
-impl TypeShape {
-    pub fn noun(self) -> &'static str {
-        match self {
-            TypeShape::Struct => "struct",
-            TypeShape::Enum => "enum",
-            TypeShape::Marker => "marker",
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct TypeSym {
-    pub name: String,
-    pub name_span: Span,
-    pub def_span: Span,
-    pub shape: TypeShape,
-    /// The ECS role, for a type declared in a world section; `None` for a
-    /// `## data` type in the classic dialect.
-    pub role: Option<Role>,
-    /// The `@ <path>` of a type that references real code (grammar §4.7).
-    /// `Some` means this spec line is a reference, not a definition — so the
-    /// definition goto should reach is in Rust, not here.
-    pub rust_path: Option<String>,
-}
-
-impl TypeSym {
-    /// What hover and completion call this: `component struct`, `enum`, …
-    pub fn detail(&self) -> String {
-        let base = match self.role {
-            Some(role) => format!("{} {}", role.noun(), self.shape.noun()),
-            None => self.shape.noun().to_string(),
-        };
-        match &self.rust_path {
-            Some(path) => format!("{base} @ {path}"),
-            None => base,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct SystemSym {
-    pub name: String,
-    pub name_span: Span,
-    pub responsibility: String,
-    pub schedule: Option<String>,
-    pub path: Option<Spanned<String>>,
-}
-
-/// One `## api` entry, as the editor addresses it (grammar §11).
-#[derive(Debug, Clone)]
-pub struct ApiSym {
-    /// How a `@ spec unit::member` ref names it: `spawn_wave`, or
-    /// `Wave::advance`.
-    pub member: String,
-    /// The signature as written, for hover and completion detail.
-    pub signature: String,
-    /// Span of the entry's name, receiver included — the goto-definition
-    /// target, and what a cursor must sit in to be on this function.
-    pub name_span: Span,
-    /// Span of the whole entry, signature line through its last bullet.
-    pub def_span: Span,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct Symbols {
-    pub modules: Vec<ModuleSym>,
-    pub types: Vec<TypeSym>,
-    pub systems: Vec<SystemSym>,
-    pub api: Vec<ApiSym>,
-}
-
-impl Symbols {
-    /// Names declared with the given role — the completion list for a
-    /// role-constrained access key.
-    pub fn with_role(&self, role: Role) -> impl Iterator<Item = &TypeSym> {
-        self.types.iter().filter(move |t| t.role == Some(role))
-    }
-}
-
-/// Build the module + type + system symbol tables from a parsed document.
-pub fn symbols(doc: &Document) -> Symbols {
-    let modules = doc
-        .modules
-        .iter()
-        .map(|m| ModuleSym {
-            name: m.name.value.clone(),
-            name_span: m.name.span,
-            responsibility: m.responsibility.value.clone(),
-            path: m.path.clone(),
-        })
-        .collect();
-
-    let to_sym = |t: &TypeDef, role: Option<Role>| {
-        let name = t.name();
-        let shape = match t {
-            TypeDef::Struct { .. } => TypeShape::Struct,
-            TypeDef::Enum { .. } => TypeShape::Enum,
-            TypeDef::Marker { .. } => TypeShape::Marker,
-        };
-        TypeSym {
-            name: name.value.clone(),
-            name_span: name.span,
-            def_span: t.span(),
-            shape,
-            role,
-            rust_path: t.path().map(|p| p.value.clone()),
-        }
-    };
-    let mut types: Vec<TypeSym> = doc.data.types.iter().map(|t| to_sym(t, None)).collect();
-    for section in doc.world_sections() {
-        types.extend(section.types.iter().map(|t| to_sym(t, Some(section.role))));
-        // Imported names resolve in this file too, but their definition lives
-        // in the owning spec — they are handled by the import goto/hover path,
-        // not listed here.
-    }
-
-    let systems = doc
-        .systems
-        .iter()
-        .map(|s| SystemSym {
-            name: s.name.value.clone(),
-            name_span: s.name.span,
-            responsibility: s.responsibility.value.clone(),
-            schedule: s.access.schedule.as_ref().map(|s| s.value.clone()),
-            path: s.path.clone(),
-        })
-        .collect();
-
-    let api = doc
-        .api
-        .iter()
-        .map(|e| ApiSym {
-            member: e.member(),
-            signature: e.signature(),
-            name_span: e.member_span(),
-            def_span: e.span,
-        })
-        .collect();
-
-    Symbols {
-        modules,
-        types,
-        systems,
-        api,
-    }
-}
-
-pub fn module_named<'a>(s: &'a Symbols, name: &str) -> Option<&'a ModuleSym> {
-    s.modules.iter().find(|m| m.name == name)
-}
-
-pub fn type_named<'a>(s: &'a Symbols, name: &str) -> Option<&'a TypeSym> {
-    s.types.iter().find(|t| t.name == name)
-}
-
-pub fn system_named<'a>(s: &'a Symbols, name: &str) -> Option<&'a SystemSym> {
-    s.systems.iter().find(|sy| sy.name == name)
-}
-
-/// The `## api` entry under a cursor at `offset`: the one whose signature line
-/// carries it. Matches on the name span, so a cursor in the bullets below does
-/// not count as being "on" the function.
-pub fn api_entry_at(s: &Symbols, offset: usize) -> Option<&ApiSym> {
-    s.api
-        .iter()
-        .find(|e| offset >= e.name_span.start && offset <= e.name_span.end)
-}
-
-// ---- access blocks (grammar §8.3) -------------------------------------------
-
-/// The access-list entry whose span contains `offset`, with the key it sits
-/// under and the roles that key accepts. Drives hover, goto, and references on
-/// a `reads:` / `query:` / `emits:` name.
-pub fn access_item_at<'a>(
-    doc: &'a Document,
-    offset: usize,
-) -> Option<(&'static str, &'a [Role], &'a Spanned<String>)> {
-    for (_, block) in doc.access_blocks() {
-        for (key, roles, items) in block.world_lists() {
-            for item in items {
-                if offset >= item.span.start && offset <= item.span.end {
-                    return Some((key, roles, item));
-                }
-            }
-        }
-    }
-    None
-}
-
-/// The ordering reference (`after:` / `before:`) whose span contains `offset`.
-pub fn ordering_ref_at(doc: &Document, offset: usize) -> Option<&Spanned<String>> {
-    doc.access_blocks()
-        .into_iter()
-        .flat_map(|(_, b)| b.ordering_refs())
-        .find(|r| offset >= r.span.start && offset <= r.span.end)
-}
-
-/// Every access block that names `name` in a world list, with the key it was
-/// named under — "who writes this component?", the payoff of role-checked
-/// access lists.
-pub fn access_mentions(doc: &Document, name: &str) -> Vec<(&'static str, Span)> {
-    let mut out = Vec::new();
-    for (_, block) in doc.access_blocks() {
-        for (key, _, items) in block.world_lists() {
-            for item in items {
-                if item.value == name {
-                    out.push((key, item.span));
-                }
-            }
-        }
-    }
-    out
-}
-
-// ---- cross-spec references (grammar §5.4) -----------------------------------
-
-/// The `@ spec` ref whose span contains `offset` (inclusive end, so a cursor
-/// just past the ref still hits it). Refs contain `-` and `/`, so callers must
-/// use this rather than [`word_at`].
-pub fn spec_ref_at(doc: &Document, offset: usize) -> Option<&Spanned<String>> {
-    mml_parser::validate::collect_spec_refs(doc)
-        .into_iter()
-        .find(|s| offset >= s.span.start && offset <= s.span.end)
-}
-
-// ---- type imports (grammar §4.5) --------------------------------------------
-
-/// The spec ref of a `use` import whose ref span contains `offset` (inclusive
-/// end). Used for goto/hover on the `use system/unit` part of an import line.
-pub fn import_ref_at(doc: &Document, offset: usize) -> Option<&Spanned<String>> {
-    doc.all_imports()
-        .find_map(|i| (offset >= i.spec.span.start && offset <= i.spec.span.end).then_some(&i.spec))
-}
-
-/// The `(import spec ref, imported type)` whose type name span contains
-/// `offset`. Used for goto/hover on a specific imported type name.
-pub fn import_type_at(
-    doc: &Document,
-    offset: usize,
-) -> Option<(&Spanned<String>, &Spanned<String>)> {
-    for import in doc.all_imports() {
-        for ty in &import.types {
-            if offset >= ty.span.start && offset <= ty.span.end {
-                return Some((&import.spec, ty));
-            }
-        }
-    }
-    None
-}
-
-/// The `use` import whose whole-line span contains `offset` (used by completion
-/// to find which import's target to list types from).
-pub fn import_on_line(doc: &Document, offset: usize) -> Option<&mml_parser::ast::Import> {
-    doc.all_imports()
-        .find(|i| offset >= i.span.start && offset <= i.span.end)
-}
-
-/// The `use extern` import that brought `name` into scope (grammar §4.8), if
-/// any. What tells "this type is in a dependency" from "this type is somewhere
-/// in the checkout" — and therefore whether goto opens docs.rs or a file.
-pub fn extern_named<'a>(doc: &'a Document, name: &str) -> Option<&'a ExternImport> {
-    doc.all_extern_imports()
-        .find(|i| i.types.iter().any(|t| t.value == name))
-}
-
-/// The declared type named `name`, whichever section declared it. Unlike
-/// [`type_named`] this reaches the AST node, so callers can see the `@ <path>`
-/// that makes it a reference.
-pub fn type_def_named<'a>(doc: &'a Document, name: &str) -> Option<&'a TypeDef> {
-    doc.all_type_defs().find(|t| t.name().value == name)
-}
-
-/// The type declaration whose `@ <path>` span contains `offset` — the cursor
-/// sitting on a Rust reference's path.
-pub fn type_path_at(doc: &Document, offset: usize) -> Option<&Spanned<String>> {
-    doc.all_type_defs()
-        .filter_map(TypeDef::path)
-        .find(|p| offset >= p.span.start && offset <= p.span.end)
-}
-
-/// Whether `prefix` (the line text before the cursor) ends inside an `@ spec `
-/// annotation whose ref is still being typed.
-fn in_spec_ref(prefix: &str) -> bool {
-    let Some(pos) = prefix.rfind("@ spec") else {
-        return false;
-    };
-    if pos > 0 && prefix.as_bytes()[pos - 1] != b' ' {
-        return false;
-    }
-    let Some(partial) = prefix[pos + "@ spec".len()..].strip_prefix(' ') else {
-        return false;
-    };
-    partial
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/' | ':'))
-}
-
-// ---- completion context ----------------------------------------------------
-
-/// What an access key's value position accepts (grammar §8.3) — the completion
-/// list for the right-hand side of `schedule:` / `reads:` / `after:` / ….
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AccessValue {
-    /// `schedule:` — the built-in schedule labels.
-    Schedule,
-    /// `after:` / `before:` / `set:` — the systems and sets in this file.
-    Ordering,
-    /// `run_if:` — free prose; nothing useful to offer.
-    Free,
-    /// `query:` / `spawns:` / `despawns:` — components only.
-    Components,
-    /// `reads:` / `writes:` — components and resources.
-    ComponentsOrResources,
-    /// `emits:` / `consumes:` — events only.
-    Events,
-}
-
-impl AccessValue {
-    /// The value kind an access key takes, or `None` if `key` is not one.
-    pub fn of(key: &str) -> Option<AccessValue> {
-        Some(match key {
-            "schedule" => AccessValue::Schedule,
-            "set" | "after" | "before" => AccessValue::Ordering,
-            "run_if" => AccessValue::Free,
-            "query" | "spawns" | "despawns" => AccessValue::Components,
-            "reads" | "writes" => AccessValue::ComponentsOrResources,
-            "emits" | "consumes" => AccessValue::Events,
-            _ => return None,
-        })
-    }
-
-    /// The roles this value position accepts, for filtering completions.
-    pub fn roles(self) -> &'static [Role] {
-        match self {
-            AccessValue::Components => &[Role::Component],
-            AccessValue::ComponentsOrResources => &[Role::Component, Role::Resource],
-            AccessValue::Events => &[Role::Event],
-            _ => &[],
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CompletionContext {
-    /// A `#`-starting line — offer the section headers.
-    SectionHeader,
-    /// Start of an attribute line in `## systems` / `## access` — offer the
-    /// closed access-key set.
-    AccessKey,
-    /// The value position of an access key — offer what that key accepts.
-    AccessValue(AccessValue),
-    /// Start of a header line — offer `system:`/`unit:`/`kind:`/`source:`.
-    HeaderKey,
-    /// After `kind:` — offer `endpoint`/`workflow`/`job`.
-    KindValue,
-    /// After `method:` — offer the HTTP verbs.
-    MethodValue,
-    /// Indented header line inside a `source:` block — offer `repo:`/`paths:`.
-    SourceKey,
-    /// A data type position (`in:`/`out:`/field type) — offer type names.
-    Type,
-    /// After `use ` in `## data` (before the `:`) — offer spec refs, like
-    /// [`SpecRef`](CompletionContext::SpecRef) but for a type import (§4.5).
-    ImportRef,
-    /// After `use <ref>: ` in `## data` — offer the type names the referenced
-    /// unit defines.
-    ImportType,
-    /// After `@ ` on a type declaration (grammar §4.7) — offer the paths this
-    /// spec already names, since a spec's types overwhelmingly live in the
-    /// files its header points at.
-    TypePath,
-    /// After `@ spec ` on a module/behavior/invariant line — offer spec refs.
-    SpecRef,
-    /// After `@ spec <unit>::` — offer the `## api` members of that unit
-    /// (grammar §5.4).
-    SpecMember,
-    /// Start of an `## api` line — offer the `fn` entry form (grammar §11).
-    ApiEntry,
-    /// Start of a behavior bullet — offer control-flow keywords + names.
-    BehaviorKeyword,
-    /// Mid-prose in behavior/invariants — offer module + type names.
-    BehaviorProse,
-    /// No useful completion.
-    Other,
-}
-
-/// Whether `prefix` ends inside a type declaration's `@ <path>` — the cursor is
-/// past an `@` on a `struct` / `enum` / `marker` line, and no `{` has opened the
-/// body yet.
-fn in_type_path(prefix: &str) -> bool {
-    let trimmed = prefix.trim_start();
-    if !["struct ", "enum ", "marker "]
-        .iter()
-        .any(|kw| trimmed.starts_with(kw))
-    {
-        return false;
-    }
-    match trimmed.rfind('@') {
-        Some(at) => !trimmed[at..].contains('{'),
-        None => false,
-    }
-}
-
-/// The `key` part of a `key: …` line, if the cursor prefix already contains a
-/// colon (i.e. we are in value position).
-fn key_before_colon(prefix: &str) -> Option<&str> {
-    prefix.find(':').map(|i| prefix[..i].trim())
-}
-
-/// Classify what completions make sense at `offset`, from the surrounding
-/// section and the current line's text before the cursor.
-pub fn completion_context(text: &str, offset: usize) -> CompletionContext {
-    let offset = offset.min(text.len());
-    let line_start = text[..offset].rfind('\n').map(|i| i + 1).unwrap_or(0);
-    let line_end = text[line_start..]
-        .find('\n')
-        .map(|i| line_start + i)
-        .unwrap_or(text.len());
-    let line = &text[line_start..line_end];
-    let prefix = &text[line_start..offset];
-    let trimmed = line.trim_start();
-
-    if trimmed.starts_with('#') {
-        return CompletionContext::SectionHeader;
-    }
-
-    match section_at(text, offset) {
-        SectionKind::Header => {
-            if let Some(key) = key_before_colon(prefix) {
-                if key == "kind" {
-                    return CompletionContext::KindValue;
-                }
-                if key == "method" {
-                    return CompletionContext::MethodValue;
-                }
-                return CompletionContext::Other;
-            }
-            let indented = line.starts_with(' ') || line.starts_with('\t');
-            if indented {
-                CompletionContext::SourceKey
-            } else {
-                CompletionContext::HeaderKey
-            }
-        }
-        // `## data` and the three world sections share a body grammar.
-        section if section.declares_types() => {
-            // A `use` import line takes precedence over the generic
-            // `key: Type` classification (it also contains a `:`).
-            if let Some(after_use) = prefix.trim_start().strip_prefix("use ") {
-                // `use extern crate::path: T` — the target is a crate path, and
-                // nothing on this machine can enumerate one.
-                if let Some(after_extern) = after_use.strip_prefix("extern ") {
-                    if after_extern.contains(':') && !after_extern.ends_with(':') {
-                        CompletionContext::ImportType
-                    } else {
-                        CompletionContext::Other
-                    }
-                } else if after_use.contains(':') {
-                    CompletionContext::ImportType
-                } else {
-                    CompletionContext::ImportRef
-                }
-            } else if in_type_path(prefix) {
-                CompletionContext::TypePath
-            } else if key_before_colon(prefix).is_some() {
-                CompletionContext::Type
-            } else {
-                CompletionContext::Other
-            }
-        }
-        // A `## systems` entry line sits at column 0 and reads like a module
-        // line; its indented attributes, and every line of a `## access`
-        // section, are access keys.
-        section if section.has_access() => {
-            if in_spec_ref(prefix) {
-                return CompletionContext::SpecRef;
-            }
-            let is_attribute =
-                section == SectionKind::Access || line.starts_with(' ') || line.starts_with('\t');
-            if !is_attribute {
-                return CompletionContext::Other;
-            }
-            match key_before_colon(prefix) {
-                Some(key) => match AccessValue::of(key) {
-                    Some(v) => CompletionContext::AccessValue(v),
-                    None => CompletionContext::Other,
-                },
-                None => CompletionContext::AccessKey,
-            }
-        }
-        SectionKind::Api => {
-            if in_spec_ref(prefix) {
-                return spec_ref_context(prefix);
-            }
-            // A signature line takes types inside an open parameter list or
-            // after the `->`; anything indented under it is an ordinary bullet.
-            let indented = line.starts_with(' ');
-            if !indented && (trimmed.starts_with("fn") || trimmed.is_empty()) {
-                let in_params = prefix
-                    .rfind('(')
-                    .is_some_and(|p| !prefix[p..].contains(')'));
-                if in_params || prefix.trim_end().ends_with("->") {
-                    return CompletionContext::Type;
-                }
-                return CompletionContext::ApiEntry;
-            }
-            if indented {
-                behavior_body_context(line, offset - line_start)
-            } else {
-                CompletionContext::ApiEntry
-            }
-        }
-        SectionKind::Behavior => {
-            if in_spec_ref(prefix) {
-                return spec_ref_context(prefix);
-            }
-            behavior_body_context(line, offset - line_start)
-        }
-        SectionKind::Invariants => {
-            if in_spec_ref(prefix) {
-                return spec_ref_context(prefix);
-            }
-            CompletionContext::BehaviorProse
-        }
-        SectionKind::Modules if in_spec_ref(prefix) => spec_ref_context(prefix),
-        _ => CompletionContext::Other,
-    }
-}
-
-/// Bullet-line classification, shared by `## behavior` and the bullets nested
-/// under an `## api` entry (grammar §11): the control-flow slot at the start of
-/// the bullet, prose once a word has been typed.
-fn behavior_body_context(line: &str, cursor_in_line: usize) -> CompletionContext {
-    let trimmed = line.trim_start();
-    let body = trimmed
-        .strip_prefix("- ")
-        .or_else(|| trimmed.strip_prefix('-'))
-        .unwrap_or(trimmed);
-    let body_start = line.len() - body.len(); // leading ws + dash bytes
-    if cursor_in_line <= body_start {
-        return CompletionContext::BehaviorKeyword;
-    }
-    let body_prefix = &line[body_start..cursor_in_line.min(line.len())];
-    if body_prefix.contains(' ') {
-        CompletionContext::BehaviorProse
-    } else {
-        CompletionContext::BehaviorKeyword
-    }
-}
-
-/// Whether the `@ spec` ref being typed has already reached its `::member`
-/// part, which is completed from the target spec rather than from the
-/// directory.
-fn spec_ref_context(prefix: &str) -> CompletionContext {
-    match spec_ref_partial(prefix) {
-        Some(partial) if partial.contains(mml_parser::ast::MEMBER_SEP) => {
-            CompletionContext::SpecMember
-        }
-        _ => CompletionContext::SpecRef,
-    }
-}
-
-/// The partial `@ spec` ref on the line before the cursor — everything after
-/// the marker, so `wave-table::sp` while a member is being typed.
-pub fn spec_ref_partial(prefix: &str) -> Option<&str> {
-    let pos = prefix.rfind("@ spec")?;
-    if pos > 0 && prefix.as_bytes()[pos - 1] != b' ' {
-        return None;
-    }
-    prefix[pos + "@ spec".len()..].strip_prefix(' ')
-}
-
-/// The partial ref at `offset` in the whole document text — the completion
-/// handler works from `(text, offset)` rather than from a line prefix.
-pub fn spec_ref_partial_at(text: &str, offset: usize) -> Option<&str> {
-    let offset = offset.min(text.len());
-    let line_start = text[..offset].rfind('\n').map(|i| i + 1).unwrap_or(0);
-    spec_ref_partial(&text[line_start..offset])
-}
-
-// ---- mentions (references) -------------------------------------------------
-
-/// All whole-word occurrences of `name` across every step tree in the document
-/// — `## behavior`, plus the bullets of each `## api` entry (grammar §11).
-///
-/// Whole-word so `Proxy` does not match inside `ProxyPool`.
-pub fn find_mentions_in_doc(doc: &Document, name: &str) -> Vec<Span> {
-    let mut out = find_mentions(&doc.behavior, name);
-    for entry in &doc.api {
-        out.extend(find_mentions(&entry.steps, name));
-    }
-    out.sort_by_key(|s| s.start);
-    out
-}
-
-/// All whole-word occurrences of `name` in one step tree, as absolute spans.
-pub fn find_mentions(steps: &[Step], name: &str) -> Vec<Span> {
-    let mut out = Vec::new();
-    collect_mentions(steps, name, &mut out);
-    out
-}
-
-fn collect_mentions(steps: &[Step], name: &str, out: &mut Vec<Span>) {
-    if name.is_empty() {
-        return;
-    }
-    for step in steps {
-        let base = step.text.span.start;
-        let hay = step.text.value.as_str();
-        for (idx, _) in hay.match_indices(name) {
-            let end = idx + name.len();
-            let before_ok = hay[..idx]
-                .chars()
-                .next_back()
-                .map(|c| !is_ident_char(c))
-                .unwrap_or(true);
-            let after_ok = hay[end..]
+/// Whole-word occurrences of `word` in `text`.
+pub fn occurrences(text: &str, word: &str) -> Vec<Span> {
+    text.match_indices(word)
+        .filter(|&(i, _)| {
+            let before = text[..i].chars().next_back().is_none_or(|c| !is_word(c));
+            let after = text[i + word.len()..]
                 .chars()
                 .next()
-                .map(|c| !is_ident_char(c))
-                .unwrap_or(true);
-            if before_ok && after_ok {
-                out.push(Span::new(base + idx, base + end));
+                .is_none_or(|c| !is_word(c));
+            before && after
+        })
+        .map(|(i, _)| Span::new(i, i + word.len()))
+        .collect()
+}
+
+#[derive(Debug, Clone)]
+pub enum Definition {
+    Local(Span),
+    Link(DiffLink, Side),
+}
+
+pub fn definition(doc: &Document, text: &str, offset: usize) -> Option<Definition> {
+    for line in &doc.lines {
+        if let Some(a) = line.ann.api.iter().find(|a| within(a.span, offset)) {
+            let (_, f) = doc.resolve_api(&a.value)?;
+            return Some(Definition::Local(doc.lines[f.line].span));
+        }
+        for g in line.ann.guards.iter().flatten() {
+            if within(g.span, offset) {
+                let target = doc
+                    .lines
+                    .iter()
+                    .find(|l| l.ann.anchor.as_ref().is_some_and(|a| a.value == g.value))?;
+                return Some(Definition::Local(target.span));
             }
         }
-        collect_mentions(&step.children, name, out);
     }
+    if let Some((link, side)) = doc.link_at(offset) {
+        return Some(Definition::Link(link.clone(), side));
+    }
+    let (_, word) = word_at(text, offset)?;
+    if let Some(t) = doc.type_def(word) {
+        return Some(Definition::Local(t.name.span));
+    }
+    doc.module(word).map(|m| Definition::Local(m.name.span))
+}
+
+/// The file and 0-based line a diff link points at, from the checkout.
+pub fn link_target(
+    cache: &mut GitCache,
+    doc: &Document,
+    delta: &Path,
+    home: &Path,
+    cache_dir: &Path,
+    link: &DiffLink,
+    side: Side,
+) -> Option<(PathBuf, u32)> {
+    let t = git::target(cache, doc, delta, home)?;
+    let sha = t.sha(side)?.to_owned();
+    let base = t.base.clone().unwrap_or_else(|| sha.clone());
+    let Resolution::Found(path) =
+        git::resolve_file(cache, &t.checkout, &base, &t.head, &sha, &link.file.value)
+    else {
+        return None;
+    };
+    let file = git::source_file(&t.checkout, &sha, &path, cache_dir)?;
+    let line = link.line.as_ref().map_or(0, |n| n.value.saturating_sub(1));
+    Some((file, line))
+}
+
+pub fn hover(doc: &Document, text: &str, offset: usize) -> Option<String> {
+    for line in &doc.lines {
+        if let Some(a) = line.ann.api.iter().find(|a| within(a.span, offset)) {
+            let (m, f) = doc.resolve_api(&a.value)?;
+            return Some(format!(
+                "```hmml\nfn {}\n```\n{} — {}",
+                f.signature.trim_start_matches("fn "),
+                m.name.value,
+                m.responsibility
+            ));
+        }
+    }
+    if let Some(i) = doc.line_at(offset)
+        && let Some(t) = &doc.lines[i].tilde
+    {
+        let in_ann = doc.lines[i].ann.span.is_some_and(|s| within(s, offset));
+        if !in_ann {
+            return Some(format!("**before:** {}\n\n**after:** {}", t.old, t.new));
+        }
+    }
+    let (_, word) = word_at(text, offset)?;
+    if let Some(t) = doc.type_def(word) {
+        let span = if t.span.end > t.span.start {
+            t.span
+        } else {
+            t.name.span
+        };
+        let src = &text[span.start.min(text.len())..span.end.min(text.len())];
+        let body: Vec<&str> = src.lines().map(|l| l.get(2..).unwrap_or("")).collect();
+        return Some(format!("```hmml\n{}\n```", body.join("\n")));
+    }
+    doc.module(word)
+        .map(|m| format!("**{}** — {}", m.name.value, m.responsibility))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum RefKey {
+    Anchor,
+    Fn(usize, usize),
+}
+
+fn api_key(doc: &Document, path: &str) -> Option<RefKey> {
+    let (m, f) = doc.resolve_api(path)?;
+    let mi = doc.api.iter().position(|x| std::ptr::eq(x, m))?;
+    let fi = m.fns.iter().position(|x| std::ptr::eq(x, f))?;
+    Some(RefKey::Fn(mi, fi))
+}
+
+pub fn references(doc: &Document, text: &str, offset: usize, include_decl: bool) -> Vec<Span> {
+    let mut found: Option<(RefKey, String)> = None;
+    for line in &doc.lines {
+        if let Some(a) = &line.ann.anchor
+            && within(a.span, offset)
+        {
+            found = Some((RefKey::Anchor, a.value.clone()));
+        }
+        for g in line.ann.guards.iter().flatten() {
+            if within(g.span, offset) {
+                found = Some((RefKey::Anchor, g.value.clone()));
+            }
+        }
+        if let Some(a) = line.ann.api.iter().find(|a| within(a.span, offset))
+            && let Some(k) = api_key(doc, &a.value)
+        {
+            found = Some((k, String::new()));
+        }
+    }
+    for (mi, m) in doc.api.iter().enumerate() {
+        for (fi, f) in m.fns.iter().enumerate() {
+            if within(f.name.span, offset) {
+                found = Some((RefKey::Fn(mi, fi), String::new()));
+            }
+        }
+    }
+    match found {
+        Some((RefKey::Anchor, name)) => {
+            let mut out = Vec::new();
+            for line in &doc.lines {
+                if include_decl
+                    && let Some(a) = &line.ann.anchor
+                    && a.value == name
+                {
+                    out.push(a.span);
+                }
+                out.extend(
+                    line.ann
+                        .guards
+                        .iter()
+                        .flatten()
+                        .filter(|g| g.value == name)
+                        .map(|g| g.span),
+                );
+            }
+            out
+        }
+        Some((key @ RefKey::Fn(mi, fi), _)) => {
+            let mut out = Vec::new();
+            if include_decl {
+                out.push(doc.api[mi].fns[fi].name.span);
+            }
+            out.extend(doc.lines.iter().flat_map(|l| {
+                l.ann
+                    .api
+                    .iter()
+                    .filter(|a| api_key(doc, &a.value) == Some(key))
+                    .map(|a| a.span)
+            }));
+            out
+        }
+        None => {
+            let Some((_, word)) = word_at(text, offset) else {
+                return Vec::new();
+            };
+            let decls: Vec<Span> = doc
+                .data
+                .iter()
+                .filter(|t| t.name.value == word)
+                .map(|t| t.name.span)
+                .chain(
+                    doc.api
+                        .iter()
+                        .filter(|m| m.name.value == word)
+                        .map(|m| m.name.span),
+                )
+                .collect();
+            if decls.is_empty() {
+                return Vec::new();
+            }
+            occurrences(text, word)
+                .into_iter()
+                .filter(|s| include_decl || !decls.contains(s))
+                .collect()
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SymKind {
+    Namespace,
+    Unit,
+    Anchor,
+    Struct,
+    Enum,
+    Field,
+    Variant,
+    Module,
+    Function,
+    Test,
+    Text,
+}
+
+#[derive(Debug, Clone)]
+pub struct Sym {
+    pub name: String,
+    pub detail: Option<String>,
+    pub kind: SymKind,
+    pub span: Span,
+    pub selection: Span,
+    pub children: Vec<Sym>,
+}
+
+fn sym(name: impl Into<String>, kind: SymKind, span: Span, selection: Span) -> Sym {
+    Sym {
+        name: name.into(),
+        detail: None,
+        kind,
+        span,
+        selection,
+        children: Vec::new(),
+    }
+}
+
+fn section_span(doc: &Document, kind: SectionKind) -> Option<(Span, Span)> {
+    doc.sections
+        .iter()
+        .find(|s| s.kind == kind)
+        .map(|s| (s.span, s.header))
+}
+
+pub fn symbols(doc: &Document) -> Vec<Sym> {
+    let mut out = Vec::new();
+    if let Some((span, header)) = section_span(doc, SectionKind::Intent) {
+        let mut s = sym("intent", SymKind::Namespace, span, header);
+        for &li in &doc.intent {
+            let l = &doc.lines[li];
+            s.children
+                .push(sym(l.text.clone(), SymKind::Text, l.span, l.span));
+        }
+        out.push(s);
+    }
+    for t in &doc.data {
+        let kind = match t.kind {
+            TypeKind::Struct => SymKind::Struct,
+            TypeKind::Enum => SymKind::Enum,
+        };
+        let span = Span::new(t.span.start, t.span.end.max(t.name.span.end));
+        let mut s = sym(t.name.value.clone(), kind, span, t.name.span);
+        s.detail = t.role.map(|r| r.keyword().to_owned());
+        for f in &t.fields {
+            let fk = if f.ty.is_some() {
+                SymKind::Field
+            } else {
+                SymKind::Variant
+            };
+            let mut c = sym(f.name.value.clone(), fk, f.name.span, f.name.span);
+            c.detail = f.ty.as_ref().map(|t| t.value.clone());
+            s.children.push(c);
+        }
+        out.push(s);
+    }
+    for u in &doc.units {
+        let mut s = sym(
+            format!("unit {}", u.name.value),
+            SymKind::Unit,
+            u.span,
+            u.name.span,
+        );
+        s.detail = Some(match &u.trigger {
+            Some(t) => format!("{} {} — {}", t.keyword(), t.target().value, u.what),
+            None => u.what.clone(),
+        });
+        for &li in u.steps.iter().chain(&u.invariants) {
+            if let Some(a) = &doc.lines[li].ann.anchor {
+                let mut c = sym(
+                    format!("^{}", a.value),
+                    SymKind::Anchor,
+                    doc.lines[li].span,
+                    a.span,
+                );
+                c.detail = Some(doc.lines[li].text.clone());
+                s.children.push(c);
+            }
+        }
+        s.children.sort_by_key(|c| c.span.start);
+        out.push(s);
+    }
+    for m in &doc.api {
+        let mut s = sym(m.name.value.clone(), SymKind::Module, m.span, m.name.span);
+        s.detail = Some(m.responsibility.clone());
+        for f in &m.fns {
+            let line = &doc.lines[f.line];
+            let mut c = sym(
+                f.name.value.clone(),
+                SymKind::Function,
+                line.span,
+                f.name.span,
+            );
+            c.detail = Some(f.signature.clone());
+            s.children.push(c);
+        }
+        out.push(s);
+    }
+    if let Some((span, header)) = section_span(doc, SectionKind::Tests) {
+        let mut s = sym("tests", SymKind::Namespace, span, header);
+        for t in &doc.tests {
+            let name = match &t.kind {
+                TestKind::Single(n) => format!("test {n}"),
+                TestKind::Group(n) => format!("tests {n}"),
+            };
+            let mut c = sym(name, SymKind::Test, doc.lines[t.line].span, t.label.span);
+            c.detail = Some(t.description.clone());
+            s.children.push(c);
+        }
+        out.push(s);
+    }
+    out.sort_by_key(|s| s.span.start);
+    out
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ItemKind {
+    Section,
+    Key,
+    Member,
+    Anchor,
+    Keyword,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Item {
+    pub label: String,
+    pub insert: String,
+    pub replace: Span,
+    pub kind: ItemKind,
+    pub detail: Option<String>,
+}
+
+pub const STEP_KEYWORDS: [&str; 6] = ["if ", "else:", "for each ", "while ", "try:", "on error "];
+
+fn line_start(text: &str, offset: usize) -> usize {
+    text[..offset].rfind('\n').map_or(0, |i| i + 1)
+}
+
+fn section_at(doc: &Document, offset: usize) -> Option<SectionKind> {
+    doc.sections
+        .iter()
+        .rev()
+        .find(|s| s.header.start <= offset)
+        .map(|s| s.kind)
+}
+
+fn api_members(doc: &Document) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for m in &doc.api {
+        for f in &m.fns {
+            let prefix = format!("{}::", m.name.value);
+            let label = if f.name.value.starts_with(&prefix) {
+                f.name.value.clone()
+            } else {
+                format!("{prefix}{}", f.name.value)
+            };
+            out.push((label, f.signature.clone()));
+        }
+    }
+    out
+}
+
+fn anchors(doc: &Document) -> Vec<&Line> {
+    doc.lines
+        .iter()
+        .filter(|l| l.ann.anchor.is_some())
+        .collect()
+}
+
+pub fn completions(doc: &Document, text: &str, offset: usize) -> Vec<Item> {
+    let offset = offset.min(text.len());
+    let ls = line_start(text, offset);
+    let prefix = &text[ls..offset];
+    let first_section = doc.sections.first().map(|s| s.header.start);
+    let item =
+        |label: &str, insert: &str, replace: Span, kind: ItemKind, detail: Option<String>| Item {
+            label: label.to_owned(),
+            insert: insert.to_owned(),
+            replace,
+            kind,
+            detail,
+        };
+
+    if prefix.starts_with('#') {
+        let whole = Span::new(ls, offset);
+        return ["## intent", "## data", "## unit ", "## api", "## tests"]
+            .iter()
+            .map(|h| item(h.trim_end(), h, whole, ItemKind::Section, None))
+            .collect();
+    }
+
+    if first_section.is_none_or(|f| offset <= f)
+        && !prefix.contains(':')
+        && !prefix.starts_with(' ')
+    {
+        let whole = Span::new(ls, offset);
+        return HEADER_KEYS
+            .iter()
+            .filter(|k| doc.header.get(k).is_none())
+            .map(|k| item(k, &format!("{k}: "), whole, ItemKind::Key, None))
+            .collect();
+    }
+
+    if let Some(i) = prefix.rfind("@ api ") {
+        let partial = &prefix[i + 6..];
+        if !partial.contains(' ') {
+            let replace = Span::new(offset - partial.len(), offset);
+            return api_members(doc)
+                .into_iter()
+                .map(|(label, sig)| item(&label, &label, replace, ItemKind::Member, Some(sig)))
+                .collect();
+        }
+    }
+
+    if let Some(i) = prefix.rfind("@ guards ") {
+        let list = &prefix[i + 9..];
+        if list.chars().all(|c| {
+            c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '^' | ',' | ' ')
+        }) {
+            let partial = list.rsplit([',', ' ']).next().unwrap_or("");
+            let replace = Span::new(offset - partial.len(), offset);
+            return anchors(doc)
+                .into_iter()
+                .filter_map(|l| {
+                    let a = l.ann.anchor.as_ref()?;
+                    let label = format!("^{}", a.value);
+                    Some(item(
+                        &label,
+                        &label,
+                        replace,
+                        ItemKind::Anchor,
+                        Some(l.text.clone()),
+                    ))
+                })
+                .collect();
+        }
+    }
+
+    if section_at(doc, offset) == Some(SectionKind::Data)
+        && let Some(partial) = prefix.get(2..)
+        && !partial.is_empty()
+        && partial.chars().all(|c| c.is_ascii_lowercase())
+    {
+        let replace = Span::new(offset - partial.len(), offset);
+        return EcsRole::ALL
+            .iter()
+            .map(|r| r.keyword())
+            .chain(["struct", "enum"])
+            .filter(|k| k.starts_with(partial))
+            .map(|k| item(k, &format!("{k} "), replace, ItemKind::Keyword, None))
+            .collect();
+    }
+
+    if section_at(doc, offset) == Some(SectionKind::Unit) && prefix.len() >= 2 {
+        let content = prefix[2..].trim_start_matches(' ');
+        let indent = prefix.len() - 2 - content.len();
+        if indent.is_multiple_of(2)
+            && let Some(partial) = content.strip_prefix("- ")
+            && partial.chars().all(|c| c.is_ascii_lowercase() || c == ' ')
+            && STEP_KEYWORDS.iter().any(|k| k.starts_with(partial))
+        {
+            let replace = Span::new(offset - partial.len(), offset);
+            return STEP_KEYWORDS
+                .iter()
+                .filter(|k| k.starts_with(partial))
+                .map(|k| item(k.trim_end(), k, replace, ItemKind::Keyword, None))
+                .collect();
+        }
+    }
+    Vec::new()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mml_parser::{LineIndex, analyze};
+    use mml_parser::parse;
 
-    const SAMPLE: &str =
-        include_str!("../../mml-parser/tests/fixtures/examples/mesh-terrain-chunks.hmml");
+    const FIXTURE: &str = include_str!("../../mml-parser/tests/fixtures/delta-wave-bounties.hmml");
 
-    fn pos(line: u32, character: u32) -> Position {
-        Position { line, character }
+    fn at(needle: &str, extra: usize) -> usize {
+        FIXTURE.find(needle).expect("needle in fixture") + extra
     }
 
-    // --- offset_of ---
+    fn line_of(span: Span) -> &'static str {
+        let s = line_start(FIXTURE, span.start);
+        FIXTURE[s..].lines().next().unwrap()
+    }
 
     #[test]
-    fn offset_of_round_trips_with_line_index() {
-        let idx = LineIndex::new(SAMPLE);
-        // Every byte offset that is a char boundary should round-trip.
-        for (o, _) in SAMPLE.char_indices() {
-            let p = idx.position(o);
-            assert_eq!(offset_of(SAMPLE, p), o, "offset {o} did not round-trip");
+    fn goto_api_ref_lands_on_the_fn_line() {
+        let doc = parse(FIXTURE);
+        let off = at("@ api WaveTable::bounty", 8);
+        let Some(Definition::Local(span)) = definition(&doc, FIXTURE, off) else {
+            panic!("no definition");
+        };
+        assert!(line_of(span).contains("fn bounty(wave: u32)"));
+    }
+
+    #[test]
+    fn goto_type_qualified_api_ref() {
+        let doc = parse(FIXTURE);
+        let off = at("@ api Purse::spend", 8);
+        let Some(Definition::Local(span)) = definition(&doc, FIXTURE, off) else {
+            panic!("no definition");
+        };
+        assert!(line_of(span).contains("fn Purse::spend("));
+    }
+
+    #[test]
+    fn goto_guard_lands_on_the_anchored_line() {
+        let doc = parse(FIXTURE);
+        let off = at("@ guards ^wave_bonus", 12);
+        let Some(Definition::Local(span)) = definition(&doc, FIXTURE, off) else {
+            panic!("no definition");
+        };
+        assert!(line_of(span).contains("^wave_bonus @ waves.rs:92"));
+    }
+
+    #[test]
+    fn goto_type_name_in_prose() {
+        let doc = parse(FIXTURE);
+        let off = at("each Enemy a", 6);
+        let Some(Definition::Local(span)) = definition(&doc, FIXTURE, off) else {
+            panic!("no definition");
+        };
+        assert_eq!(&FIXTURE[span.start..span.end], "Enemy");
+        assert!(line_of(span).starts_with("  component struct Enemy"));
+    }
+
+    #[test]
+    fn goto_observer_event_in_unit_header() {
+        let doc = parse(FIXTURE);
+        let off = at("on EnemyDied —", 4);
+        let Some(Definition::Local(span)) = definition(&doc, FIXTURE, off) else {
+            panic!("no definition");
+        };
+        assert!(line_of(span).starts_with("+ event struct EnemyDied"));
+    }
+
+    #[test]
+    fn goto_module_name_in_prose() {
+        let doc = parse(FIXTURE);
+        let off = at("check the Score covers", 11);
+        let Some(Definition::Local(span)) = definition(&doc, FIXTURE, off) else {
+            panic!("no definition");
+        };
+        assert!(line_of(span).starts_with("  Score — "));
+    }
+
+    #[test]
+    fn goto_diff_link_reports_the_side() {
+        let doc = parse(FIXTURE);
+        let off = at("@ waves.rs:96", 4);
+        match definition(&doc, FIXTURE, off) {
+            Some(Definition::Link(l, side)) => {
+                assert_eq!(l.file.value, "waves.rs");
+                assert_eq!(l.line.map(|n| n.value), Some(96));
+                assert_eq!(side, Side::Base);
+            }
+            other => panic!("unexpected {other:?}"),
         }
     }
 
     #[test]
-    fn offset_of_multiline_and_clamp() {
-        let src = "ab\ncde\n\nf";
-        assert_eq!(offset_of(src, pos(0, 0)), 0);
-        assert_eq!(offset_of(src, pos(1, 0)), 3); // start of "cde"
-        assert_eq!(offset_of(src, pos(1, 2)), 5);
-        assert_eq!(offset_of(src, pos(3, 0)), 8); // "f"
-        assert_eq!(offset_of(src, pos(3, 99)), 9); // column past EOL clamps
-        assert_eq!(offset_of(src, pos(99, 0)), src.len()); // line past EOF clamps
+    fn hover_api_ref_shows_signature() {
+        let doc = parse(FIXTURE);
+        let h = hover(&doc, FIXTURE, at("@ api Purse::credit, WaveTable", 8)).unwrap();
+        assert!(h.contains("credit(coins: u32)"), "{h}");
+        assert!(h.contains("Purse — the coins the player holds this run"));
     }
 
     #[test]
-    fn offset_of_utf16() {
-        // "é" = 1 UTF-16 unit / 2 bytes; "𝄞" = 2 UTF-16 units / 4 bytes.
-        let src = "é𝄞x";
-        assert_eq!(offset_of(src, pos(0, 0)), 0);
-        assert_eq!(offset_of(src, pos(0, 1)), 2); // after é
-        assert_eq!(offset_of(src, pos(0, 3)), 6); // after 𝄞
-        assert_eq!(offset_of(src, pos(0, 4)), 7); // after x
-    }
-
-    // --- word_at ---
-
-    #[test]
-    fn word_mid_and_end() {
-        let text = "get a proxy from ProxyPool now";
-        let at = text.find("ProxyPool").unwrap();
-        assert_eq!(word_at(text, at + 3).unwrap().text, "ProxyPool");
-        // cursor just past the end of the word steps back onto it.
-        let end = at + "ProxyPool".len();
-        assert_eq!(word_at(text, end).unwrap().text, "ProxyPool");
-    }
-
-    #[test]
-    fn word_none_on_whitespace() {
-        assert_eq!(word_at("a   b", 2), None);
-    }
-
-    #[test]
-    fn word_with_underscore_and_span() {
-        let text = "  from_cache: bool";
-        let w = word_at(text, 4).unwrap();
-        assert_eq!(w.text, "from_cache");
-        assert_eq!(&text[w.span.start..w.span.end], "from_cache");
-    }
-
-    // --- sections ---
-
-    #[test]
-    fn section_at_each_region() {
-        assert_eq!(section_at(SAMPLE, 0), SectionKind::Header); // system:
-        let m = SAMPLE.find("ChunkScheduler").unwrap();
-        assert_eq!(section_at(SAMPLE, m), SectionKind::Modules);
-        let d = SAMPLE.find("struct ChunkCoord").unwrap();
-        assert_eq!(section_at(SAMPLE, d), SectionKind::Data);
-        let b = SAMPLE.find("pull up to X chunk coords").unwrap();
-        assert_eq!(section_at(SAMPLE, b), SectionKind::Behavior);
-        let i = SAMPLE.find("at most X chunks").unwrap();
-        assert_eq!(section_at(SAMPLE, i), SectionKind::Invariants);
-    }
-
-    #[test]
-    fn section_header_line_belongs_to_its_section() {
-        let hdr = SAMPLE.find("## data").unwrap();
-        assert_eq!(section_at(SAMPLE, hdr), SectionKind::Data);
-    }
-
-    #[test]
-    fn sections_partition_the_document() {
-        let secs = sections(SAMPLE);
-        // Header + four sections.
-        let kinds: Vec<_> = secs.iter().map(|(k, _)| *k).collect();
-        assert_eq!(
-            kinds,
-            vec![
-                SectionKind::Header,
-                SectionKind::Modules,
-                SectionKind::Data,
-                SectionKind::Behavior,
-                SectionKind::Invariants,
-            ]
-        );
-        // Contiguous, covering [0, len).
-        assert_eq!(secs.first().unwrap().1.start, 0);
-        assert_eq!(secs.last().unwrap().1.end, SAMPLE.len());
-        for w in secs.windows(2) {
-            assert_eq!(w[0].1.end, w[1].1.start);
-        }
-    }
-
-    // --- symbols ---
-
-    #[test]
-    fn symbols_from_sample() {
-        let (doc, _) = analyze(SAMPLE);
-        let syms = symbols(&doc);
-        let names: Vec<&str> = syms.modules.iter().map(|m| m.name.as_str()).collect();
-        assert_eq!(
-            names,
-            [
-                "ChunkScheduler",
-                "HeightSampler",
-                "ChunkMesher",
-                "MeshCache"
-            ]
-        );
-        let cs = module_named(&syms, "ChunkScheduler").unwrap();
-        assert!(cs.responsibility.contains("pulls chunk coords"));
-        assert_eq!(cs.path.as_ref().unwrap().value, "src/chunk/scheduler.rs");
-
-        let tnames: Vec<&str> = syms.types.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(tnames, ["ChunkCoord", "HeightTile", "ChunkMesh"]);
-        let mesh = type_named(&syms, "ChunkMesh").unwrap();
-        assert_eq!(mesh.shape, TypeShape::Struct);
-        // A classic-dialect type carries no ECS role.
-        assert_eq!(mesh.role, None);
-        assert_eq!(
-            &SAMPLE[mesh.name_span.start..mesh.name_span.end],
-            "ChunkMesh"
-        );
-    }
-
-    // --- completion_context ---
-
-    fn ctx(text: &str, needle: &str, extra: usize) -> CompletionContext {
-        let at = text.find(needle).unwrap() + extra;
-        completion_context(text, at)
-    }
-
-    #[test]
-    fn completion_contexts() {
-        // section header line
-        assert_eq!(ctx(SAMPLE, "## data", 3), CompletionContext::SectionHeader);
-        // kind value
-        assert_eq!(
-            completion_context("kind: ", "kind: ".len()),
-            CompletionContext::KindValue
-        );
-        // header key at start of an empty line
-        assert_eq!(completion_context("", 0), CompletionContext::HeaderKey);
-        // in:/out: type position
-        assert_eq!(
-            ctx(SAMPLE, "in:  Queue", "in:  ".len()),
-            CompletionContext::Type
-        );
-        assert_eq!(
-            ctx(SAMPLE, "out: Stream", "out: ".len()),
-            CompletionContext::Type
-        );
-        // field type position
-        let field = "## data\nstruct P {\n  price: ";
-        assert_eq!(
-            completion_context(field, field.len()),
-            CompletionContext::Type
-        );
-        // behavior: first token → keyword; mid-prose → prose
-        let beh = "## behavior\n- ";
-        assert_eq!(
-            completion_context(beh, beh.len()),
-            CompletionContext::BehaviorKeyword
-        );
-        let beh2 = "## behavior\n- get a proxy ";
-        assert_eq!(
-            completion_context(beh2, beh2.len()),
-            CompletionContext::BehaviorProse
-        );
-        // invariants → prose
-        let inv = "## invariants\n- ";
-        assert_eq!(
-            completion_context(inv, inv.len()),
-            CompletionContext::BehaviorProse
-        );
-    }
-
-    #[test]
-    fn source_block_keys() {
-        let text = "system: x\nsource:\n  ";
-        assert_eq!(
-            completion_context(text, text.len()),
-            CompletionContext::SourceKey
-        );
-    }
-
-    // --- spec refs ---
-
-    #[test]
-    fn spec_ref_completion_contexts() {
-        // Fresh annotation, partial system, and after the slash — in behavior,
-        // invariants, and modules.
-        let beh = "## behavior\n- do it @ spec ";
-        assert_eq!(
-            completion_context(beh, beh.len()),
-            CompletionContext::SpecRef
-        );
-        let beh2 = "## behavior\n- do it @ spec goo";
-        assert_eq!(
-            completion_context(beh2, beh2.len()),
-            CompletionContext::SpecRef
-        );
-        let inv = "## invariants\n- holds @ spec sys/";
-        assert_eq!(
-            completion_context(inv, inv.len()),
-            CompletionContext::SpecRef
-        );
-        let m = "## modules\nFoo — does @ spec ";
-        assert_eq!(completion_context(m, m.len()), CompletionContext::SpecRef);
-        // Not an annotation: prose containing the word spec, or ref already done.
-        let prose = "## behavior\n- follow the spec ";
-        assert_eq!(
-            completion_context(prose, prose.len()),
-            CompletionContext::BehaviorProse
-        );
-        let after = "## behavior\n- do it @ spec sys/unit more";
-        assert_eq!(
-            completion_context(after, after.len()),
-            CompletionContext::BehaviorProse
-        );
-    }
-
-    #[test]
-    fn spec_ref_at_finds_by_containment() {
-        let src = "system: s\nunit: u\nkind: job\n\n\
-## modules\nFoo — does things @ spec other-system/other-unit\n\n\
-## data\nin: String\nout: String\n\n\
-## behavior\n- do it @ spec bare-unit\n\n\
-## invariants\n- holds\n";
-        let (doc, _) = analyze(src);
-        let at = src.find("other-system/other-unit").unwrap();
-        let r = spec_ref_at(&doc, at + 5).expect("module ref");
-        assert_eq!(r.value, "other-system/other-unit");
-        // Cursor at the very end of the ref still hits it.
-        let bare = src.find("bare-unit").unwrap();
-        let r2 = spec_ref_at(&doc, bare + "bare-unit".len()).expect("step ref");
-        assert_eq!(r2.value, "bare-unit");
-        // Elsewhere: no ref.
-        assert!(spec_ref_at(&doc, src.find("do it").unwrap()).is_none());
-    }
-
-    // --- type imports ---
-
-    #[test]
-    fn import_completion_contexts() {
-        // Typing the ref (before the colon) → ImportRef.
-        let a = "## data\nuse goo";
-        assert_eq!(completion_context(a, a.len()), CompletionContext::ImportRef);
-        let b = "## data\nuse terrain-erosion/mesh-terrain-chunks: ";
-        assert_eq!(
-            completion_context(b, b.len()),
-            CompletionContext::ImportType
-        );
-        // A second type after a comma is still ImportType.
-        let c = "## data\nuse foo/bar: Offer, ";
-        assert_eq!(
-            completion_context(c, c.len()),
-            CompletionContext::ImportType
-        );
-        // A normal `in:`/field position is unaffected.
-        let d = "## data\nin: ";
-        assert_eq!(completion_context(d, d.len()), CompletionContext::Type);
-    }
-
-    #[test]
-    fn import_ref_and_type_at() {
-        let src = "system: s\nunit: u\nkind: job\n\n\
-## modules\n\n\
-## data\nuse other-system/thing: Alpha, Beta\nin: Alpha\nout: Beta\n\n\
-## behavior\n- do it\n\n## invariants\n";
-        let (doc, _) = analyze(src);
-        // Cursor on the ref.
-        let r = import_ref_at(&doc, src.find("other-system/thing").unwrap() + 3).unwrap();
-        assert_eq!(r.value, "other-system/thing");
-        // Cursor on the second imported type.
-        let (spec, ty) = import_type_at(&doc, src.find("Beta").unwrap() + 1).unwrap();
-        assert_eq!(spec.value, "other-system/thing");
-        assert_eq!(ty.value, "Beta");
-        // import_on_line finds the whole import.
-        let imp = import_on_line(&doc, src.find("use other").unwrap() + 2).unwrap();
-        assert_eq!(imp.types.len(), 2);
-    }
-
-    // --- find_mentions ---
-
-    #[test]
-    fn mentions_whole_word_only() {
-        let (doc, _) = analyze(SAMPLE);
-        let hits = find_mentions(&doc.behavior, "HeightSampler");
-        assert_eq!(hits.len(), 1);
-        assert_eq!(&SAMPLE[hits[0].start..hits[0].end], "HeightSampler");
-
-        // "MeshCache" must not be matched by a prefix of it.
-        let partial = find_mentions(&doc.behavior, "Mesh");
-        for h in &partial {
-            assert_eq!(&SAMPLE[h.start..h.end], "Mesh");
-        }
-    }
-
-    #[test]
-    fn mentions_nested_steps() {
-        let (doc, _) = analyze(SAMPLE);
-        // MeshCache is mentioned inside nested if/else branches.
-        let hits = find_mentions(&doc.behavior, "MeshCache");
-        assert_eq!(hits.len(), 2);
-    }
-
-    // --- Bevy dialect ---
-
-    const PLUGIN: &str = include_str!("../../mml-parser/tests/fixtures/examples/enemy-waves.hmml");
-    const SYSTEM: &str =
-        include_str!("../../mml-parser/tests/fixtures/examples/spawn-enemies.hmml");
-
-    #[test]
-    fn sections_cover_the_bevy_kinds() {
-        let kinds: Vec<_> = sections(PLUGIN).iter().map(|(k, _)| *k).collect();
-        assert_eq!(
-            kinds,
-            vec![
-                SectionKind::Header,
-                SectionKind::Modules,
-                // A Bevy kind may declare role-less shapes in `## data` too.
-                SectionKind::Data,
-                SectionKind::World(Role::Component),
-                SectionKind::World(Role::Resource),
-                SectionKind::World(Role::Event),
-                SectionKind::Systems,
-                SectionKind::Behavior,
-                SectionKind::Invariants,
-            ]
-        );
-        // A `kind: system` file has an `## access` section instead.
+    fn hover_tilde_line_shows_both_sentences() {
+        let doc = parse(FIXTURE);
+        let h = hover(&doc, FIXTURE, at("~   - check the Score", 8)).unwrap();
         assert!(
-            sections(SYSTEM)
-                .iter()
-                .any(|(k, _)| *k == SectionKind::Access)
+            h.contains("**before:** check the Score covers the price"),
+            "{h}"
         );
-        // The classifiers agree with the section list.
-        assert!(SectionKind::World(Role::Event).declares_types());
-        assert!(SectionKind::Data.declares_types());
-        assert!(SectionKind::Systems.has_access());
-        assert!(SectionKind::Access.has_access());
-        assert!(!SectionKind::Behavior.has_access());
+        assert!(
+            h.contains("**after:** check the Purse covers the price"),
+            "{h}"
+        );
     }
 
     #[test]
-    fn symbols_carry_roles_and_systems() {
-        let (doc, _) = analyze(PLUGIN);
+    fn hover_type_shows_its_block_with_its_role() {
+        let doc = parse(FIXTURE);
+        let h = hover(&doc, FIXTURE, at("no Enemy is", 4)).unwrap();
+        assert!(h.contains("component struct Enemy {"), "{h}");
+        assert!(h.contains("bounty: u32,"), "{h}");
+    }
+
+    #[test]
+    fn references_anchor_and_guards() {
+        let doc = parse(FIXTURE);
+        let refs = references(&doc, FIXTURE, at("^paid_once\n", 3), true);
+        assert_eq!(refs.len(), 2);
+        let only_uses = references(&doc, FIXTURE, at("^paid_once\n", 3), false);
+        assert_eq!(only_uses.len(), 1);
+        assert!(line_of(only_uses[0]).starts_with("+ tests 2"));
+    }
+
+    #[test]
+    fn references_fn_and_linking_steps() {
+        let doc = parse(FIXTURE);
+        let decl = doc.resolve_api("Purse::spend").unwrap().1.name.span;
+        let refs = references(&doc, FIXTURE, decl.start + 1, true);
+        assert_eq!(refs.len(), 2);
+        assert!(line_of(refs[1]).contains("the Purse covers the price"));
+    }
+
+    #[test]
+    fn references_type_name() {
+        let doc = parse(FIXTURE);
+        let refs = references(&doc, FIXTURE, at("struct Enemy {", 8), true);
+        assert!(refs.len() >= 3, "{refs:?}");
+    }
+
+    #[test]
+    fn symbols_cover_every_section() {
+        let doc = parse(FIXTURE);
         let syms = symbols(&doc);
-
-        let system_names: Vec<&str> = syms.systems.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(
-            system_names,
-            ["tick_wave_timer", "spawn_enemies", "detect_cleared"]
+        let names: Vec<&str> = syms.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names.first(), Some(&"intent"));
+        assert!(names.contains(&"Enemy"));
+        assert!(names.contains(&"unit pay-bounty"));
+        assert!(names.contains(&"WaveTable"));
+        assert_eq!(names.last(), Some(&"tests"));
+        let enemy = syms.iter().find(|s| s.name == "Enemy").unwrap();
+        assert_eq!(enemy.detail.as_deref(), Some("component"));
+        let unit = syms.iter().find(|s| s.name == "unit pay-bounty").unwrap();
+        assert!(
+            unit.detail
+                .as_deref()
+                .is_some_and(|d| d.starts_with("on EnemyDied — "))
         );
-        let spawn = system_named(&syms, "spawn_enemies").unwrap();
-        assert_eq!(spawn.schedule.as_deref(), Some("FixedUpdate"));
-
-        // Every declared type knows its ECS role, and a marker keeps its shape.
-        let wave = type_named(&syms, "Wave").unwrap();
-        assert_eq!(wave.role, Some(Role::Component));
-        assert_eq!(wave.detail(), "component struct");
-        let spawner = type_named(&syms, "Spawner").unwrap();
-        assert_eq!(spawner.shape, TypeShape::Marker);
-        let state = type_named(&syms, "WaveState").unwrap();
-        assert_eq!(state.role, Some(Role::Resource));
-        let cleared = type_named(&syms, "WaveCleared").unwrap();
-        assert_eq!(cleared.role, Some(Role::Event));
-
-        let components: Vec<&str> = syms
-            .with_role(Role::Component)
-            .map(|t| t.name.as_str())
-            .collect();
-        assert_eq!(components, ["Wave", "EnemyHealth", "Spawner"]);
+        let anchors: Vec<&str> = unit.children.iter().map(|c| c.name.as_str()).collect();
+        assert!(anchors.contains(&"^coin_burst"));
+        assert!(anchors.contains(&"^paid_once"));
     }
 
-    #[test]
-    fn access_item_and_ordering_lookups() {
-        let (doc, _) = analyze(PLUGIN);
-
-        // Cursor on `WaveState` in spawn_enemies' `writes:` line.
-        let off = PLUGIN
-            .find(
-                "writes:   WaveState
-  spawns",
-            )
-            .unwrap()
-            + "writes:   ".len();
-        let (key, roles, item) = access_item_at(&doc, off).expect("access item");
-        assert_eq!(key, "writes");
-        assert_eq!(item.value, "WaveState");
-        assert!(roles.contains(&Role::Resource));
-
-        // Cursor on the `after:` target.
-        let off = PLUGIN.find("after:    tick_wave_timer").unwrap() + "after:    ".len();
-        assert_eq!(
-            ordering_ref_at(&doc, off).map(|r| r.value.as_str()),
-            Some("tick_wave_timer")
-        );
-        // An access item is not an ordering ref and vice versa.
-        assert!(access_item_at(&doc, off).is_none());
-    }
-
-    #[test]
-    fn access_mentions_answer_who_touches_this() {
-        let (doc, _) = analyze(PLUGIN);
-        let mut keys: Vec<&str> = access_mentions(&doc, "WaveState")
+    fn complete(text: &str, cursor: &str) -> Vec<String> {
+        let doc = parse(text);
+        let off = text.find(cursor).unwrap() + cursor.len();
+        completions(&doc, text, off)
             .into_iter()
-            .map(|(k, _)| k)
-            .collect();
-        keys.sort_unstable();
-        // tick_wave_timer writes it, spawn_enemies writes it, detect_cleared reads it.
-        assert_eq!(keys, ["reads", "writes", "writes"]);
+            .map(|i| i.label)
+            .collect()
+    }
 
-        // A component named in a query and a spawn list.
-        let keys: Vec<&str> = access_mentions(&doc, "Spawner")
+    #[test]
+    fn complete_api_members() {
+        let text = FIXTURE.replace("@ api WaveTable::bounty", "@ api Wa");
+        let labels = complete(&text, "@ api Wa");
+        assert!(labels.contains(&"WaveTable::bonus".to_owned()));
+        assert!(labels.contains(&"Purse::spend".to_owned()));
+    }
+
+    #[test]
+    fn complete_anchors_after_guards() {
+        let text = FIXTURE.replace("@ guards ^wave_bonus", "@ guards ^wa");
+        let labels = complete(&text, "@ guards ^wa");
+        assert!(labels.contains(&"^wave_bonus".to_owned()));
+        assert!(labels.contains(&"^paid_once".to_owned()));
+    }
+
+    #[test]
+    fn complete_step_keywords() {
+        let text = FIXTURE.replace("  - refresh the button labels", "  - o");
+        let labels = complete(&text, "\n  - o");
+        assert_eq!(labels, vec!["on error".to_owned()]);
+    }
+
+    #[test]
+    fn complete_data_roles() {
+        let text = FIXTURE.replace("+ resource struct Purse", "+ res");
+        assert_eq!(complete(&text, "\n+ res"), vec!["resource".to_owned()]);
+        let text = FIXTURE.replace("+ state enum Shop", "+ s");
+        assert_eq!(
+            complete(&text, "\n+ s"),
+            vec!["state".to_owned(), "struct".to_owned()]
+        );
+    }
+
+    #[test]
+    fn complete_section_headers_and_header_keys() {
+        let labels = complete(FIXTURE, "\n#");
+        assert!(labels.contains(&"## unit".to_owned()));
+        let text = FIXTURE.replace(
+            "pr:     https://github.com/example/bevy_survivor/pull/42",
+            "p",
+        );
+        let doc = parse(&text);
+        let off = text.find("\np\n").unwrap() + 2;
+        let labels: Vec<String> = completions(&doc, &text, off)
             .into_iter()
-            .map(|(k, _)| k)
+            .map(|i| i.label)
             .collect();
-        assert_eq!(keys, ["query"]);
-        assert!(access_mentions(&doc, "Nonexistent").is_empty());
+        assert_eq!(labels, vec!["pr".to_owned()]);
     }
 
     #[test]
-    fn access_completion_contexts() {
-        // Attribute key position: indented, no colon yet.
-        let a = "## systems\ngo — does it\n  ";
-        assert_eq!(completion_context(a, a.len()), CompletionContext::AccessKey);
-        // Every line of a `## access` section is an attribute, unindented.
-        let b = "## access\n";
-        assert_eq!(completion_context(b, b.len()), CompletionContext::AccessKey);
-
-        // Value positions, one per accepted role set.
-        let cases = [
-            ("  schedule: ", AccessValue::Schedule),
-            ("  after: ", AccessValue::Ordering),
-            ("  set: ", AccessValue::Ordering),
-            ("  run_if: ", AccessValue::Free),
-            ("  query: ", AccessValue::Components),
-            ("  spawns: ", AccessValue::Components),
-            ("  reads: ", AccessValue::ComponentsOrResources),
-            ("  writes: ", AccessValue::ComponentsOrResources),
-            ("  emits: ", AccessValue::Events),
-            ("  consumes: ", AccessValue::Events),
-        ];
-        for (line, want) in cases {
-            let text = format!("## systems\ngo — does it\n{line}");
-            assert_eq!(
-                completion_context(&text, text.len()),
-                CompletionContext::AccessValue(want),
-                "for {line:?}"
-            );
-        }
-
-        // A system declaration line itself offers nothing type-ish.
-        let d = "## systems\ngo — does ";
-        assert_eq!(completion_context(d, d.len()), CompletionContext::Other);
-        // `@ spec` on a system entry still completes spec refs.
-        let e = "## systems\ngo — does it @ spec ";
-        assert_eq!(completion_context(e, e.len()), CompletionContext::SpecRef);
+    fn word_and_occurrences() {
+        assert_eq!(word_at("a Purse b", 4).unwrap().1, "Purse");
+        assert_eq!(occurrences("Purse Purses Purse::spend", "Purse").len(), 2);
     }
 
-    #[test]
-    fn world_sections_complete_like_data() {
-        let a = "## components\nstruct A {\n  x: ";
-        assert_eq!(completion_context(a, a.len()), CompletionContext::Type);
-        let b = "## resources\nuse ";
-        assert_eq!(completion_context(b, b.len()), CompletionContext::ImportRef);
-        let c = "## events\nuse other: ";
-        assert_eq!(
-            completion_context(c, c.len()),
-            CompletionContext::ImportType
+    fn git(dir: &Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
         );
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
     }
 
     #[test]
-    fn access_value_role_mapping() {
-        assert_eq!(AccessValue::of("mutates"), None);
-        assert_eq!(
-            AccessValue::of("query").unwrap().roles(),
-            &[Role::Component]
+    fn goto_diff_link_opens_the_file_at_its_side() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let repo = home.join("fun_worktrees/demo/t/task");
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        git(&repo, &["init", "-q"]);
+        std::fs::write(repo.join("src/run.rs"), "base 1\nbase 2\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-q", "-m", "base"]);
+        let base = git(&repo, &["rev-parse", "HEAD"]);
+        std::fs::write(repo.join("src/run.rs"), "head 1\nhead 2\nhead 3\n").unwrap();
+        git(&repo, &["commit", "-q", "-am", "head"]);
+        let head = git(&repo, &["rev-parse", "HEAD"]);
+
+        let notes = tmp.path().join("notes/demo/t/task");
+        std::fs::create_dir_all(&notes).unwrap();
+        let delta = notes.join("delta-x.hmml");
+        let src = format!(
+            "repo: demo\nbranch: x\nbase: {base}\nhead: {head}\n\n## intent\n  - x\n\n## unit run — r\n+ - new @ run.rs:3\n- - old @ run.rs:2\n"
         );
-        assert_eq!(AccessValue::of("emits").unwrap().roles(), &[Role::Event]);
+        let doc = parse(&src);
+        let cache_dir = tmp.path().join("cache");
+        let mut cache = GitCache::new();
+        let resolve = |cache: &mut GitCache, needle: &str| {
+            let Some(Definition::Link(link, side)) =
+                definition(&doc, &src, src.find(needle).unwrap() + 3)
+            else {
+                panic!("no link at {needle}");
+            };
+            link_target(cache, &doc, &delta, &home, &cache_dir, &link, side).unwrap()
+        };
+
+        let (file, line) = resolve(&mut cache, "@ run.rs:3");
+        assert_eq!(file, repo.join("src/run.rs"));
+        assert_eq!(line, 2);
+
+        let (file, line) = resolve(&mut cache, "@ run.rs:2");
+        assert_eq!(file, cache_dir.join(&base).join("src/run.rs"));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "base 1\nbase 2\n");
+        assert_eq!(line, 1);
+
+        git(&repo, &["checkout", "-q", &base]);
+        let (file, _) = resolve(&mut cache, "@ run.rs:3");
+        assert_eq!(file, cache_dir.join(&head).join("src/run.rs"));
         assert_eq!(
-            AccessValue::of("reads").unwrap().roles(),
-            &[Role::Component, Role::Resource]
+            std::fs::read_to_string(&file).unwrap(),
+            "head 1\nhead 2\nhead 3\n"
         );
-        // Non-role keys constrain nothing.
-        assert!(AccessValue::of("schedule").unwrap().roles().is_empty());
-    }
-
-    #[test]
-    fn imports_are_found_across_world_sections() {
-        let (doc, _) = analyze(SYSTEM);
-        // `use enemy-waves: ...` in `## resources`, not `## data`.
-        let off = SYSTEM.find("use enemy-waves: WaveConfig").unwrap() + "use ".len();
-        assert_eq!(
-            import_ref_at(&doc, off).map(|r| r.value.as_str()),
-            Some("enemy-waves")
-        );
-        let off = SYSTEM.find("WaveConfig, WaveState").unwrap() + 1;
-        let (spec, ty) = import_type_at(&doc, off).expect("imported type");
-        assert_eq!(spec.value, "enemy-waves");
-        assert_eq!(ty.value, "WaveConfig");
-    }
-}
-
-#[cfg(test)]
-mod rust_ref_completion_tests {
-    use super::*;
-
-    const SPEC: &str = "system: s\nunit: u\nkind: plugin\nsource:\n  repo: r\n  paths:\n    - src/waves/mod.rs\n\n## components\nstruct Wave @ src/waves/mod.rs\nuse extern avian3d::prelude: Collider\n";
-
-    fn ctx_at(needle: &str, extra: usize) -> CompletionContext {
-        let off = SPEC.find(needle).unwrap() + needle.len() + extra;
-        completion_context(SPEC, off)
-    }
-
-    #[test]
-    fn a_types_at_path_offers_paths_not_types() {
-        assert_eq!(ctx_at("struct Wave @", 0), CompletionContext::TypePath);
-        assert_eq!(ctx_at("struct Wave @ src", 0), CompletionContext::TypePath);
-    }
-
-    #[test]
-    fn a_body_after_the_path_is_a_type_position_again() {
-        let src = "system: s\nunit: u\nkind: plugin\n\n## components\nstruct Wave @ waves.rs {\n  hp: \n}\n";
-        let off = src.find("hp: ").unwrap() + 4;
-        assert_eq!(completion_context(src, off), CompletionContext::Type);
-    }
-
-    #[test]
-    fn an_extern_crate_path_has_nothing_to_offer_but_its_types_do() {
-        // Nothing on this machine can enumerate a crate path…
-        assert_eq!(ctx_at("use extern ", 0), CompletionContext::Other);
-        // …but past the colon we are naming types, like any other import.
-        assert_eq!(
-            ctx_at("use extern avian3d::prelude: ", 0),
-            CompletionContext::ImportType
-        );
-    }
-
-    #[test]
-    fn a_plain_use_line_is_unaffected() {
-        let src = "system: s\nunit: u\nkind: plugin\n\n## components\nuse other\n";
-        let off = src.find("use other").unwrap() + 9;
-        assert_eq!(completion_context(src, off), CompletionContext::ImportRef);
     }
 }

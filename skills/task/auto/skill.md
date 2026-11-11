@@ -99,7 +99,7 @@ Task context from `pwd` (`~/fun_worktrees/PROJECT/TOPIC/TASK`). State file at
     "case": "", "check": "", "run": "", "log": "", "pr": "" },
   "play": { "command": "", "log": "", "pid": "" }, "feedback": [], "rounds": 0,
   "todo": [ { "text": "<plan step>", "status": "pending" } ],
-  "waiting_on": null, "delta": false, "hmml_units": [],
+  "waiting_on": null, "delta": false, "hmml_delta": "",
   "written": "<RFC 3339>", "phase_since": "<RFC 3339>" }
 ```
 
@@ -280,8 +280,10 @@ Set `phase: delta` when `delta` is true, `comments` otherwise, and fall through.
 
 **Delta** — only when `delta` is true. `/hmml-extract --against <ref>`, with
 `<ref>` the merge base of the worktree and the default branch: it writes the
-units the diff touches as the worktree leaves them, `# -` / `# +` marking what
-the change did, into the task's notes dir. Record `hmml_units`. It is derived,
+units the diff touches as the worktree leaves them, `+` / `-` / `~` marking what
+the change did, as one `delta-<branch>.hmml` in the task's notes dir, with
+`head: worktree` since nothing is committed until after the last gate. Record
+its path as `hmml_delta`. It is derived,
 never edited, and rerun after any later behaviour change (feedback, a repair).
 The play gate prints it; unattended, `hcoord wait`'s reader finds it in the
 notes. `phase: comments`.
@@ -372,8 +374,8 @@ what I am handed.
 3. Print:
    - **what to try** — the acceptance observation verbatim, and where the app is;
    - the diff, one line per file, and any deviation from the plan;
-   - when `delta` is on, the derived delta — every `# -` / `# +` line grouped
-     by section, with a count;
+   - when `delta` is on, the derived delta — the file as it stands, with its
+     count of `+` / `-` / `~` lines per section;
    - build and test evidence, truncated as run;
    - declined comment-pass findings, deviations from the plan, standards
      delta and any regression, prior art from the plan;

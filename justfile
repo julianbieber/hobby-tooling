@@ -351,7 +351,7 @@ install-lsps:
     fi
     cargo install --path "$src"
 
-# The parser CLI matters: the hmml-* skills shell out to `hobby-mml-parser --lint`.
+# The parser CLI matters: `/hmml-extract` shells out to `hobby-mml-parser --lint`.
 
 # Build + install the forked HMML language server and parser CLI
 install-mml:

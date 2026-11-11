@@ -1,28 +1,21 @@
-//! `mml-parser` CLI — validate a `.hmml` file and report diagnostics.
+//! `hobby-mml-parser` CLI — check an HMML v3 delta and report diagnostics.
 //!
 //! Usage:
-//!   mml-parser <file>           # same as --check
-//!   mml-parser <file> --check   # human-readable diagnostics (file:line:col)
-//!   mml-parser <file> --lint    # --check + filesystem checks (source paths)
-//!   mml-parser <file> --json    # { "ast": ..., "diagnostics": [...] } as JSON
+//!   hobby-mml-parser <file>           # same as --check
+//!   hobby-mml-parser <file> --check   # grammar checks, `file:line:col: severity [code]: message`
+//!   hobby-mml-parser <file> --lint    # --check + diff links against the checkout (grammar §8)
+//!   hobby-mml-parser <file> --json    # { "ast": ..., "diagnostics": [...] }
 //!
-//! Every mode also runs the change-annotation checks (grammar §10): the `# +` /
-//! `# -` markers must still reconstruct to a baseline that parses and validates.
-//!
-//! All modes run the filesystem-aware reference checks from `mml_parser::lint`
-//! (`@ spec` refs, `use` imports); `--lint` adds the source-linkage check —
-//! every header `source.paths` entry and module `@ path` must resolve to a
-//! real file, using the same search order as the LSP's goto-definition.
-//!
-//! Exit status: 0 = ok, 1 = at least one error-severity diagnostic (under
-//! `--lint`: any diagnostic at all — the linter is a gate), 2 = usage / I/O
-//! error. The MML skills shell out to `--lint` after writing a spec.
+//! Exit status: 0 ok; 1 any error, or under `--lint` any error or warning;
+//! 2 usage or I/O error. Info never gates.
 
-use mml_parser::{LineIndex, Severity, analyze, lint};
+use mml_parser::git::{GitCache, check_links, home_dir};
+use mml_parser::{LineIndex, Severity, analyze};
 use serde_json::json;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+#[derive(PartialEq)]
 enum Mode {
     Check,
     Lint,
@@ -38,6 +31,10 @@ fn main() -> ExitCode {
             "--check" => mode = Mode::Check,
             "--lint" => mode = Mode::Lint,
             "--json" => mode = Mode::Json,
+            "-V" | "--version" => {
+                println!("hobby-mml-parser {}", env!("CARGO_PKG_VERSION"));
+                return ExitCode::SUCCESS;
+            }
             "-h" | "--help" => {
                 print_usage();
                 return ExitCode::SUCCESS;
@@ -72,28 +69,19 @@ fn main() -> ExitCode {
     };
 
     let (doc, mut diagnostics) = analyze(&src);
-    // Filesystem checks resolve against the file's real location; a relative
-    // CLI argument is canonicalized so worktree/`~/projects` lookups work.
-    if let Ok(abs) = Path::new(&path).canonicalize() {
-        // `--lint` is the full filesystem pass; the other modes keep the two
-        // reference checks that were always cheap. Go through `lint::lint`
-        // rather than naming the checks one by one — a hand-picked list silently
-        // omits every check added after it was written, which is exactly how the
-        // Rust-reference checks came to be invisible from the binary the
-        // `hmml-*` skills shell out to.
-        if matches!(mode, Mode::Lint) {
-            diagnostics.extend(lint::lint(&doc, &src, &abs, None));
-        } else {
-            diagnostics.extend(lint::unresolved_spec_refs(&doc, &abs, None));
-            diagnostics.extend(lint::unresolved_imports(&doc, &abs, None));
-        }
+    if mode == Mode::Lint {
+        let abs = Path::new(&path)
+            .canonicalize()
+            .unwrap_or_else(|_| PathBuf::from(&path));
+        let home = home_dir().unwrap_or_default();
+        let mut cache = GitCache::new();
+        diagnostics.extend(check_links(&mut cache, &doc, &abs, &home));
         diagnostics.sort_by_key(|d| (d.span.start, d.span.end));
     }
     let index = LineIndex::new(&src);
-    let has_error = diagnostics.iter().any(|d| d.severity == Severity::Error);
     let failed = match mode {
-        Mode::Lint => !diagnostics.is_empty(),
-        Mode::Check | Mode::Json => has_error,
+        Mode::Lint => diagnostics.iter().any(|d| d.severity != Severity::Info),
+        Mode::Check | Mode::Json => diagnostics.iter().any(|d| d.severity == Severity::Error),
     };
 
     match mode {
@@ -148,5 +136,5 @@ fn main() -> ExitCode {
 }
 
 fn print_usage() {
-    eprintln!("usage: mml-parser <file> [--check | --lint | --json]");
+    eprintln!("usage: hobby-mml-parser <file> [--check | --lint | --json]");
 }

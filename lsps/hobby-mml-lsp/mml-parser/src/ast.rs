@@ -1,895 +1,456 @@
-//! The MML AST.
+//! The HMML v3 AST: one PR delta.
 //!
-//! Every node carries a [`Span`]. The tree is built to survive errors: any
-//! section that fails to parse simply contributes fewer nodes (and diagnostics),
-//! so the rest of the document is still represented. See `grammar.md` for the
-//! authoritative shape.
+//! Every body line of every section is kept in [`Document::lines`], in file
+//! order, with its gutter, content depth, annotations and parent in the
+//! indentation tree. The section structures ([`Unit`], [`TypeDef`],
+//! [`Module`], [`TestEntry`], …) refer to those lines by index.
 
 use crate::diagnostic::Diagnostic;
 use crate::span::{Span, Spanned};
 use serde::Serialize;
 
-/// A parsed `.hmml` document. `diagnostics` holds parse-time diagnostics only;
-/// run [`crate::validate::validate`] to add semantic ones.
-///
-/// Which of the section fields are populated depends on the header `kind`
-/// (grammar §7.2): the classic kinds (`endpoint`/`workflow`/`job`) use
-/// [`Document::data`] for their whole data model, while the Bevy kinds
-/// (`plugin`/`system`) use [`components`](Document::components) /
-/// [`resources`](Document::resources) / [`events`](Document::events) plus
-/// [`systems`](Document::systems) or [`access`](Document::access) — and may use
-/// [`data`](Document::data) for the shapes that carry no ECS role at all
-/// (grammar §4.6). A section used by the wrong kind still parses
-/// (so the LSP keeps working mid-edit) but carries a
-/// [`SECTION_NOT_ALLOWED`](crate::diagnostic::code::SECTION_NOT_ALLOWED)
-/// diagnostic.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct Document {
     pub header: Header,
-    pub modules: Vec<Module>,
-    pub data: DataSection,
-    /// `## components` — entity data (grammar §8.1).
-    pub components: WorldSection,
-    /// `## resources` — global singletons (grammar §8.1).
-    pub resources: WorldSection,
-    /// `## events` — message payloads (grammar §8.1).
-    pub events: WorldSection,
-    /// `## systems` — one entry per system a `kind: plugin` registers (§8.2).
-    pub systems: Vec<SystemDef>,
-    /// `## access` — the lone access block of a `kind: system` file (§8.3).
-    pub access: Option<AccessBlock>,
-    pub behavior: Vec<Step>,
-    /// `## api` — one entry per public function of a `kind: module` spec
-    /// (grammar §11), each owning the bullet tree that describes it. Empty for
-    /// every other kind, which writes `## behavior` in that slot instead.
-    pub api: Vec<ApiEntry>,
-    /// `where:` symbol bindings at the end of `## behavior` (grammar §5.3).
-    pub bindings: Vec<Binding>,
-    pub invariants: Vec<Invariant>,
+    pub sections: Vec<Section>,
+    pub intent: Vec<usize>,
+    pub data: Vec<TypeDef>,
+    pub units: Vec<Unit>,
+    pub api: Vec<Module>,
+    pub tests: Vec<TestEntry>,
+    pub lines: Vec<Line>,
+    #[serde(skip)]
     pub diagnostics: Vec<Diagnostic>,
 }
 
-impl Document {
-    /// The three world sections in canonical order, for consumers that treat
-    /// components / resources / events uniformly (validation, symbols, index).
-    pub fn world_sections(&self) -> [&WorldSection; 3] {
-        [&self.components, &self.resources, &self.events]
-    }
-
-    /// Every type definition in the document, whichever dialect declared it —
-    /// `## data` plus the three world sections.
-    pub fn all_type_defs(&self) -> impl Iterator<Item = &TypeDef> {
-        self.data.types.iter().chain(
-            self.world_sections()
-                .into_iter()
-                .flat_map(|w| w.types.iter()),
-        )
-    }
-
-    /// Every `use` import in the document, from `## data` and the three world
-    /// sections alike.
-    pub fn all_imports(&self) -> impl Iterator<Item = &Import> {
-        self.data.imports.iter().chain(
-            self.world_sections()
-                .into_iter()
-                .flat_map(|w| w.imports.iter()),
-        )
-    }
-
-    /// Every `use extern` import in the document (grammar §4.8), from `## data`
-    /// and the three world sections alike.
-    pub fn all_extern_imports(&self) -> impl Iterator<Item = &ExternImport> {
-        self.data.extern_imports.iter().chain(
-            self.world_sections()
-                .into_iter()
-                .flat_map(|w| w.extern_imports.iter()),
-        )
-    }
-
-    /// Every type declaration that references real code (grammar §4.7), paired
-    /// with the ECS role of the section it sits in — `None` for `## data`.
-    /// This is what the filesystem-aware checks walk.
-    pub fn rust_refs(&self) -> Vec<(&TypeDef, Option<Role>)> {
-        let mut out: Vec<(&TypeDef, Option<Role>)> = self
-            .data
-            .types
-            .iter()
-            .filter(|t| t.is_reference())
-            .map(|t| (t, None))
-            .collect();
-        for section in self.world_sections() {
-            out.extend(
-                section
-                    .types
-                    .iter()
-                    .filter(|t| t.is_reference())
-                    .map(|t| (t, Some(section.role))),
-            );
-        }
-        out
-    }
-
-    /// Every name `## data` brings into scope — declared and imported alike.
-    /// In the Bevy dialect these are the role-less shapes (grammar §4.6): legal
-    /// as a field type, illegal in an access list.
-    pub fn data_names(&self) -> impl Iterator<Item = &Spanned<String>> {
-        self.data
-            .types
-            .iter()
-            .map(TypeDef::name)
-            .chain(self.data.imports.iter().flat_map(|i| i.types.iter()))
-            .chain(self.data.extern_imports.iter().flat_map(|i| i.types.iter()))
-    }
-
-    /// The ECS role of every declared and imported world name. Used to check
-    /// that an access-list entry fits the key it appears under. `## data` names
-    /// are deliberately absent — the section assigns no role, which is what
-    /// makes them unusable in an access list.
-    pub fn roles(&self) -> std::collections::HashMap<&str, Role> {
-        let mut out = std::collections::HashMap::new();
-        for section in self.world_sections() {
-            for name in section.names() {
-                out.entry(name.value.as_str()).or_insert(section.role);
-            }
-        }
-        out
-    }
-
-    /// Every access block in the document: one per `## systems` entry, plus the
-    /// `## access` block of a `kind: system` file. The [`Spanned`] name is the
-    /// system's own name where there is one, and the header `unit` otherwise —
-    /// it is what diagnostics anchor to.
-    pub fn access_blocks(&self) -> Vec<(Option<&Spanned<String>>, &AccessBlock)> {
-        let mut out: Vec<(Option<&Spanned<String>>, &AccessBlock)> = self
-            .systems
-            .iter()
-            .map(|s| (Some(&s.name), &s.access))
-            .collect();
-        if let Some(access) = &self.access {
-            out.push((None, access));
-        }
-        out
-    }
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Header {
+    pub entries: Vec<HeaderEntry>,
 }
 
-// ---- header ----------------------------------------------------------------
+#[derive(Debug, Clone, Serialize)]
+pub struct HeaderEntry {
+    pub key: Spanned<String>,
+    pub value: Spanned<String>,
+    pub span: Span,
+}
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Header {
-    pub system: Option<Spanned<String>>,
-    pub unit: Option<Spanned<String>>,
-    pub kind: Option<Spanned<Kind>>,
-    /// HTTP method for `kind: endpoint` (`GET`/`POST`/…); grammar §2. Optional.
-    pub method: Option<Spanned<String>>,
-    /// Base directory that relative `source.paths` and module `@ path` entries
-    /// resolve against (tilde-expanded; may itself be relative). Optional.
-    pub base: Option<Spanned<String>>,
-    pub source: Option<Source>,
+impl Header {
+    pub fn get(&self, key: &str) -> Option<&Spanned<String>> {
+        self.entries
+            .iter()
+            .find(|e| e.key.value == key)
+            .map(|e| &e.value)
+    }
+
+    pub fn value(&self, key: &str) -> Option<&str> {
+        self.get(key).map(|v| v.value.as_str())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Kind {
-    Endpoint,
-    Workflow,
-    Job,
-    /// A Bevy `Plugin`: what it registers into the `App` and in what order.
-    Plugin,
-    /// One Bevy system split out of a plugin, with its own access block.
-    System,
-    /// One module's public surface — the types it owns and the functions it
-    /// exposes, each described in full (grammar §11). The detail layer beneath
-    /// a behavioural unit's `## modules` line.
-    Module,
+pub enum SectionKind {
+    Intent,
+    Data,
+    Unit,
+    Api,
+    Tests,
 }
 
-/// Every `kind:` value, in the order the LSP offers them.
-pub const KIND_VALUES: &[&str] = &["endpoint", "workflow", "job", "plugin", "system", "module"];
+impl SectionKind {
+    pub fn rank(self) -> u8 {
+        match self {
+            SectionKind::Intent => 0,
+            SectionKind::Data => 1,
+            SectionKind::Unit => 2,
+            SectionKind::Api => 3,
+            SectionKind::Tests => 4,
+        }
+    }
 
-impl Kind {
-    pub fn parse(s: &str) -> Option<Kind> {
-        match s {
-            "endpoint" => Some(Kind::Endpoint),
-            "workflow" => Some(Kind::Workflow),
-            "job" => Some(Kind::Job),
-            "plugin" => Some(Kind::Plugin),
-            "system" => Some(Kind::System),
-            "module" => Some(Kind::Module),
+    pub fn title(self) -> &'static str {
+        match self {
+            SectionKind::Intent => "intent",
+            SectionKind::Data => "data",
+            SectionKind::Unit => "unit",
+            SectionKind::Api => "api",
+            SectionKind::Tests => "tests",
+        }
+    }
+}
+
+/// A `##` section: its header line and the whole extent through its last line.
+#[derive(Debug, Clone, Serialize)]
+pub struct Section {
+    pub kind: SectionKind,
+    pub header: Span,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Gutter {
+    Context,
+    Added,
+    Removed,
+    Changed,
+}
+
+impl Gutter {
+    pub fn from_char(c: char) -> Option<Gutter> {
+        match c {
+            ' ' => Some(Gutter::Context),
+            '+' => Some(Gutter::Added),
+            '-' => Some(Gutter::Removed),
+            '~' => Some(Gutter::Changed),
             _ => None,
         }
     }
 
-    pub fn as_str(self) -> &'static str {
+    pub fn as_char(self) -> char {
         match self {
-            Kind::Endpoint => "endpoint",
-            Kind::Workflow => "workflow",
-            Kind::Job => "job",
-            Kind::Plugin => "plugin",
-            Kind::System => "system",
-            Kind::Module => "module",
+            Gutter::Context => ' ',
+            Gutter::Added => '+',
+            Gutter::Removed => '-',
+            Gutter::Changed => '~',
         }
     }
 
-    /// Whether this kind's `## data` may carry `in:` / `out:` (grammar §4.4).
-    /// A Bevy kind's interface is its access block; a module's is its
-    /// functions' parameters and return types (§11). Only the classic kinds
-    /// have a slot for an input and an output type.
-    pub fn takes_io(self) -> bool {
-        matches!(self, Kind::Endpoint | Kind::Workflow | Kind::Job)
+    pub fn is_change(self) -> bool {
+        self != Gutter::Context
     }
 
-    /// The name this kind spells its third section with: `api` for a module
-    /// (grammar §11), `behavior` for everything else. The two are alternative
-    /// spellings of one slot, which is why neither is legal on the other's
-    /// kinds.
-    pub fn steps_section(self) -> &'static str {
-        match self {
-            Kind::Module => SECTION_API,
-            _ => SECTION_BEHAVIOR,
+    /// The commit side a diff link on a line with this gutter counts on.
+    pub fn side(self) -> Side {
+        if self == Gutter::Removed {
+            Side::Base
+        } else {
+            Side::Head
         }
     }
 
-    /// Whether this kind models a Bevy ECS unit, and therefore carries its
-    /// interface in the component/resource/event/system sections rather than in
-    /// `## data`'s `in:`/`out:`. A Bevy kind may still declare role-less shapes
-    /// in `## data` (grammar §4.6).
-    pub fn is_bevy(self) -> bool {
-        matches!(self, Kind::Plugin | Kind::System)
+    pub fn on_head(self) -> bool {
+        self != Gutter::Removed
     }
 
-    /// The sections this kind must declare (grammar §7.2). Absent ones are a
-    /// [`MISSING_SECTION`](crate::diagnostic::code::MISSING_SECTION) error.
-    pub fn required_sections(self) -> &'static [&'static str] {
-        match self {
-            Kind::Plugin => &["systems", "behavior", "invariants"],
-            Kind::System => &["access", "behavior", "invariants"],
-            Kind::Module => MODULE_SECTIONS,
-            _ => LEGACY_SECTIONS,
-        }
-    }
-
-    /// The sections this kind may declare — a superset of
-    /// [`required_sections`](Kind::required_sections). Anything else is a
-    /// [`SECTION_NOT_ALLOWED`](crate::diagnostic::code::SECTION_NOT_ALLOWED)
-    /// error.
-    pub fn allowed_sections(self) -> &'static [&'static str] {
-        match self {
-            Kind::Plugin => &[
-                "modules",
-                "data",
-                "components",
-                "resources",
-                "events",
-                "systems",
-                "behavior",
-                "invariants",
-            ],
-            Kind::System => &[
-                "modules",
-                "data",
-                "components",
-                "resources",
-                "events",
-                "access",
-                "behavior",
-                "invariants",
-            ],
-            Kind::Module => MODULE_SECTIONS,
-            _ => LEGACY_SECTIONS,
-        }
+    pub fn on_base(self) -> bool {
+        self != Gutter::Added
     }
 }
 
-/// The `## behavior` section name — the third section of every kind but
-/// `module`.
-pub const SECTION_BEHAVIOR: &str = "behavior";
-/// The `## api` section name — the third section of a `kind: module` (§11).
-pub const SECTION_API: &str = "api";
-
-/// The four sections of a `kind: module` spec (grammar §11) — required and
-/// allowed alike. `## api` takes the slot `## behavior` holds elsewhere.
-pub const MODULE_SECTIONS: &[&str] = &["modules", "data", "api", "invariants"];
-
-/// The four sections of the classic (non-Bevy) dialect — required and allowed
-/// alike, and the fallback schema when `kind:` is missing or unparsable.
-pub const LEGACY_SECTIONS: &[&str] = &["modules", "data", "behavior", "invariants"];
-
-/// Canonical section order across both dialects (grammar §1). A section that
-/// appears after one with a higher index warns as out-of-order.
-pub const SECTION_ORDER: &[&str] = &[
-    "modules",
-    "data",
-    "components",
-    "resources",
-    "events",
-    "systems",
-    "access",
-    "api",
-    "behavior",
-    "invariants",
-];
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Source {
-    pub repo: Option<Spanned<String>>,
-    pub paths: Vec<Spanned<String>>,
-    pub span: Span,
-}
-
-// ---- modules ---------------------------------------------------------------
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Module {
-    pub name: Spanned<String>,
-    pub responsibility: Spanned<String>,
-    pub path: Option<Spanned<String>>,
-    /// Trailing `@ spec <system>/<unit>` or `@ spec <unit>` annotation
-    /// (grammar §5.4). Raw ref text; split with [`split_spec_ref`].
-    pub spec: Option<Spanned<String>>,
-    pub span: Span,
-}
-
-/// The separator between a spec ref's unit and a member of it:
-/// `unit::function`, `unit::Type::method` (grammar §5.4).
-pub const MEMBER_SEP: &str = "::";
-
-/// Split a raw spec ref into `(system, unit)`, dropping any `::member` path so
-/// the result always names a *file*. A bare ref (no `/`) has no system — it
-/// resolves within the referencing file's own directory.
-pub fn split_spec_ref(raw: &str) -> (Option<&str>, &str) {
-    let (unit, _member) = split_member(raw);
-    match unit.split_once('/') {
-        Some((system, unit)) => (Some(system), unit),
-        None => (None, unit),
-    }
-}
-
-/// Split a raw spec ref into its unit part and its optional member path — the
-/// `spawn_wave` of `wave-table::spawn_wave`, or the `Wave::advance` of
-/// `wave-table::Wave::advance` (grammar §5.4).
-pub fn split_member(raw: &str) -> (&str, Option<&str>) {
-    match raw.split_once(MEMBER_SEP) {
-        Some((unit, member)) => (unit, Some(member)),
-        None => (raw, None),
-    }
-}
-
-/// The member path of a spec ref, if it names one.
-pub fn spec_ref_member(raw: &str) -> Option<&str> {
-    split_member(raw).1
-}
-
-/// Whether `raw` is a well-formed spec ref: `system/unit` or `unit`, each
-/// segment matching the header ident rule (grammar §2)
-/// `[A-Za-z][A-Za-z0-9._-]*`, optionally followed by a `::member` path of one
-/// or two identifier segments (`::function` or `::Type::method`, §5.4).
-pub fn is_valid_spec_ref(raw: &str) -> bool {
-    let (unit, member) = split_member(raw);
-    let unit_ok = unit.matches('/').count() <= 1
-        && unit.split('/').all(|seg| {
-            seg.starts_with(|c: char| c.is_ascii_alphabetic())
-                && seg
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-        });
-    let member_ok = match member {
-        None => true,
-        Some(path) => {
-            let segments: Vec<&str> = path.split(MEMBER_SEP).collect();
-            (1..=2).contains(&segments.len()) && segments.iter().all(|seg| is_member_ident(seg))
-        }
-    };
-    unit_ok && member_ok
-}
-
-/// Whether `s` names a function or a receiver type in a member path:
-/// `[A-Za-z_][A-Za-z0-9_]*`, which covers a snake_case function and a
-/// PascalCase type alike.
-fn is_member_ident(s: &str) -> bool {
-    s.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
-        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-}
-
-// ---- data ------------------------------------------------------------------
-
-/// `## data`. In the classic dialect it is the whole data model, `in:`/`out:`
-/// included. In the Bevy dialect it holds the shapes that are *not* components,
-/// resources, or events (grammar §4.6) — a field type, a config struct, an enum
-/// a component is built from — and `in:`/`out:` are rejected there.
-#[derive(Debug, Clone, PartialEq, Serialize, Default)]
-pub struct DataSection {
-    /// `use <system>/<unit>: Type, …` type imports (grammar §4.5), which pull
-    /// type definitions from another unit into this file's scope, role-less.
-    pub imports: Vec<Import>,
-    /// `use extern <crate::path>: Type, …` imports (grammar §4.8) — types from a
-    /// dependency, which no path in this checkout can name.
-    pub extern_imports: Vec<ExternImport>,
-    pub types: Vec<TypeDef>,
-    /// `in:` — the unit's input type. Classic kinds only.
-    pub input: Option<TypeExpr>,
-    /// `out:` — the unit's output type. Classic kinds only.
-    pub output: Option<TypeExpr>,
-}
-
-/// A `use` line in `## data` (grammar §4.5): `use <spec-ref>: Type, Type`.
-/// It brings the named types from the referenced unit's `## data` into this
-/// file's type namespace (name only — the definitions are not copied).
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Import {
-    /// The raw `<system>/<unit>` or bare `<unit>` ref (split with
-    /// [`split_spec_ref`]); same resolution as an `@ spec` annotation.
-    pub spec: Spanned<String>,
-    /// The imported type names (PascalCase), each carrying its own span.
-    pub types: Vec<Spanned<String>>,
-    pub span: Span,
-}
-
-/// A `use extern <crate::path>: Type, Type` line (grammar §4.8): types that come
-/// from a dependency rather than from this checkout.
-///
-/// It brings names into scope and takes the declaring section's ECS role,
-/// exactly like an [`Import`] — and offers **nothing else**. There is no file to
-/// resolve, no derive to check against, and no fields. That asymmetry is why it
-/// is a separate keyword rather than a path that happens not to resolve: the
-/// guarantee differs, so the syntax should too.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct ExternImport {
-    /// The `::`-separated crate path (`avian3d::prelude`), first segment being
-    /// the crate. Never resolved against the filesystem.
-    pub path: Spanned<String>,
-    pub types: Vec<Spanned<String>>,
-    pub span: Span,
-}
-
-impl ExternImport {
-    /// The crate name — the first `::` segment, which is what docs.rs is
-    /// addressed by.
-    pub fn crate_name(&self) -> &str {
-        self.path
-            .value
-            .split("::")
-            .next()
-            .unwrap_or(&self.path.value)
-    }
-
-    /// The docs.rs URL for one of this import's types. Uses rustdoc's search
-    /// form rather than a guessed `struct.<Name>.html`: a `use extern` line
-    /// carries no item kind, and a wrong guess is a 404 while a search always
-    /// lands somewhere useful.
-    pub fn docs_url(&self, ty: &str) -> String {
-        let krate = self.crate_name();
-        format!("https://docs.rs/{krate}/latest/{krate}/?search={ty}")
-    }
-}
-
-/// Whether `s` is a well-formed `::`-separated Rust path — the target of a
-/// `use extern` line. Each segment matches `[A-Za-z_][A-Za-z0-9_]*`; a single
-/// segment (a bare crate name) is fine.
-pub fn is_valid_crate_path(s: &str) -> bool {
-    !s.is_empty()
-        && s.split("::").all(|seg| {
-            seg.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
-                && seg.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-        })
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "lowercase")]
-pub enum TypeDef {
-    Struct {
-        name: Spanned<String>,
-        /// The field list, or `None` when the `{ … }` body was omitted
-        /// entirely — legal only for a type that references real code
-        /// (grammar §4.7). `Some(vec![])` is an explicit empty `{}`, which is a
-        /// different statement and stays distinguishable.
-        fields: Option<Vec<Field>>,
-        /// `@ <path>` — the real code this type is declared in (grammar §4.7).
-        /// When set, the body is a **delta**, not a definition.
-        path: Option<Spanned<String>>,
-        span: Span,
-    },
-    Enum {
-        name: Spanned<String>,
-        variants: Option<Vec<Variant>>,
-        path: Option<Spanned<String>>,
-        span: Span,
-    },
-    /// `marker Name` — a zero-sized component (grammar §8.1). Legal only in the
-    /// Bevy world sections; markers are common enough in Bevy that spelling one
-    /// as an empty `struct` reads badly.
-    Marker {
-        name: Spanned<String>,
-        path: Option<Spanned<String>>,
-        span: Span,
-    },
-}
-
-impl TypeDef {
-    pub fn name(&self) -> &Spanned<String> {
-        match self {
-            TypeDef::Struct { name, .. }
-            | TypeDef::Enum { name, .. }
-            | TypeDef::Marker { name, .. } => name,
-        }
-    }
-
-    pub fn span(&self) -> Span {
-        match self {
-            TypeDef::Struct { span, .. }
-            | TypeDef::Enum { span, .. }
-            | TypeDef::Marker { span, .. } => *span,
-        }
-    }
-
-    /// The `@ <path>` annotation, when this declaration references a type that
-    /// already exists in real code (grammar §4.7).
-    pub fn path(&self) -> Option<&Spanned<String>> {
-        match self {
-            TypeDef::Struct { path, .. }
-            | TypeDef::Enum { path, .. }
-            | TypeDef::Marker { path, .. } => path.as_ref(),
-        }
-    }
-
-    /// Whether this declaration points at existing code rather than defining a
-    /// new shape. A reference's body lists only the members it wants **added**
-    /// (`+`), **removed** (`-`), or asserted to exist (unmarked); everything it
-    /// does not mention stays as it is.
-    pub fn is_reference(&self) -> bool {
-        self.path().is_some()
-    }
-}
-
-/// What a member line in a referenced type's body asks for (grammar §4.7).
-/// Meaningless — and rejected — in a type that declares its own shape.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Delta {
-    /// Unmarked: the member is asserted to already exist as written. The only
-    /// variant that a filesystem-aware check can contradict.
-    #[default]
-    Keep,
-    /// `+ name: Type` — add this member to the real type.
-    Add,
-    /// `- name` — remove this member from the real type.
-    Remove,
+pub enum Side {
+    Base,
+    Head,
 }
 
-impl Delta {
-    pub fn marker(self) -> &'static str {
-        match self {
-            Delta::Keep => "",
-            Delta::Add => "+",
-            Delta::Remove => "-",
+/// What a body line is, decided by the section that holds it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Role {
+    Intent,
+    Step,
+    InvariantsLabel,
+    Invariant,
+    TypeHeader,
+    Field,
+    TypeClose,
+    Module,
+    Fn,
+    Test,
+    Other,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Line {
+    pub span: Span,
+    pub gutter: Gutter,
+    pub depth: usize,
+    pub section: SectionKind,
+    pub role: Role,
+    pub bullet: bool,
+    /// The content as `head` leaves it: after the bullet, without
+    /// annotations. For a `~` line, the reconstructed new sentence.
+    pub text: String,
+    /// Byte offset of `text`'s first byte in the source (for a `~` line, of
+    /// the shared prefix, which is also where the old wording starts).
+    pub text_start: usize,
+    pub tilde: Option<Tilde>,
+    pub ann: Annotations,
+    pub parent: Option<usize>,
+}
+
+impl Line {
+    /// The source span of `len` bytes at offset `rel` of [`Line::text`].
+    pub fn sub_span(&self, rel: usize, len: usize) -> Span {
+        match &self.tilde {
+            Some(t) if rel >= t.prefix_len => {
+                let start = t.new_clause.start + (rel - t.prefix_len);
+                Span::new(start, (start + len).min(t.new_clause.end))
+            }
+            _ => Span::new(self.text_start + rel, self.text_start + rel + len),
         }
+    }
+
+    /// The span of the whole content, from the bullet to the last annotation.
+    pub fn content_span(&self) -> Span {
+        Span::new(self.span.start + 2, self.span.end)
     }
 }
 
-/// One `enum` variant. Carries a [`Delta`] for the same reason a [`Field`] does:
-/// a referenced enum's body adds and removes variants rather than restating the
-/// whole set.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Variant {
-    pub name: Spanned<String>,
-    pub delta: Delta,
+/// A `~` line split into its two versions.
+#[derive(Debug, Clone, Serialize)]
+pub struct Tilde {
+    pub old: String,
+    pub new: String,
+    pub prefix_len: usize,
+    pub old_clause: Span,
+    pub new_clause: Span,
+    pub arrow: Span,
 }
 
-// ---- Bevy world sections (grammar §8.1) ------------------------------------
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Annotations {
+    pub anchor: Option<Spanned<String>>,
+    pub link: Option<DiffLink>,
+    pub api: Vec<Spanned<String>>,
+    pub guards: Option<Vec<Spanned<String>>>,
+    pub span: Option<Span>,
+}
 
-/// The ECS role of a type definition, taken from the section that declares it.
-/// Role is what makes an access list checkable: a component cannot be emitted,
-/// an event cannot be queried.
+impl Annotations {
+    pub fn is_empty(&self) -> bool {
+        self.span.is_none()
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DiffLink {
+    pub file: Spanned<String>,
+    pub line: Option<Spanned<u32>>,
+    pub span: Span,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Role {
+pub enum UnitStatus {
+    Present,
+    New,
+    Removed,
+}
+
+/// What runs a Bevy unit: a schedule for a system, an event for an observer.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Trigger {
+    Schedule(Spanned<String>),
+    Observer(Spanned<String>),
+}
+
+impl Trigger {
+    pub fn keyword(&self) -> &'static str {
+        match self {
+            Trigger::Schedule(_) => "in",
+            Trigger::Observer(_) => "on",
+        }
+    }
+
+    pub fn target(&self) -> &Spanned<String> {
+        match self {
+            Trigger::Schedule(t) | Trigger::Observer(t) => t,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Unit {
+    pub name: Spanned<String>,
+    pub status: UnitStatus,
+    pub trigger: Option<Trigger>,
+    pub what: String,
+    pub link: Option<DiffLink>,
+    pub header: Span,
+    pub span: Span,
+    pub steps: Vec<usize>,
+    pub invariants: Vec<usize>,
+}
+
+impl Unit {
+    pub fn link_side(&self) -> Side {
+        if self.status == UnitStatus::Removed {
+            Side::Base
+        } else {
+            Side::Head
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TypeKind {
+    Struct,
+    Enum,
+}
+
+/// The ECS role a `## data` type is registered with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EcsRole {
     Component,
     Resource,
     Event,
+    Message,
+    State,
 }
 
-impl Role {
-    pub fn section(self) -> &'static str {
+impl EcsRole {
+    pub const ALL: [EcsRole; 5] = [
+        EcsRole::Component,
+        EcsRole::Resource,
+        EcsRole::Event,
+        EcsRole::Message,
+        EcsRole::State,
+    ];
+
+    pub fn keyword(self) -> &'static str {
         match self {
-            Role::Component => "components",
-            Role::Resource => "resources",
-            Role::Event => "events",
+            EcsRole::Component => "component",
+            EcsRole::Resource => "resource",
+            EcsRole::Event => "event",
+            EcsRole::Message => "message",
+            EcsRole::State => "state",
         }
     }
 
-    pub fn noun(self) -> &'static str {
-        match self {
-            Role::Component => "component",
-            Role::Resource => "resource",
-            Role::Event => "event",
-        }
+    pub fn from_keyword(word: &str) -> Option<EcsRole> {
+        EcsRole::ALL.into_iter().find(|r| r.keyword() == word)
     }
 }
 
-/// One of `## components` / `## resources` / `## events`. Body grammar is the
-/// `## data` type-definition grammar minus `in:`/`out:`, plus `marker`. A `use`
-/// import here takes the section's role, so a type imported into
-/// `## components` is a component in this file.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct WorldSection {
-    pub role: Role,
-    pub imports: Vec<Import>,
-    pub extern_imports: Vec<ExternImport>,
-    pub types: Vec<TypeDef>,
-}
-
-impl WorldSection {
-    pub fn new(role: Role) -> WorldSection {
-        WorldSection {
-            role,
-            imports: Vec::new(),
-            extern_imports: Vec::new(),
-            types: Vec::new(),
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.imports.is_empty() && self.extern_imports.is_empty() && self.types.is_empty()
-    }
-
-    /// Every name this section brings into scope — defined, imported from a
-    /// sibling spec, and imported from a dependency alike. All three take the
-    /// section's role; that is the whole of what the section decides.
-    pub fn names(&self) -> impl Iterator<Item = &Spanned<String>> {
-        self.types
-            .iter()
-            .map(TypeDef::name)
-            .chain(self.imports.iter().flat_map(|i| i.types.iter()))
-            .chain(self.extern_imports.iter().flat_map(|i| i.types.iter()))
-    }
-}
-
-// ---- Bevy systems (grammar §8.2) -------------------------------------------
-
-/// One `## systems` entry: a module-shaped declaration line plus an indented
-/// [`AccessBlock`].
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct SystemDef {
+#[derive(Debug, Clone, Serialize)]
+pub struct Field {
     pub name: Spanned<String>,
-    pub responsibility: Spanned<String>,
-    pub path: Option<Spanned<String>>,
-    /// Trailing `@ spec <unit>`: the system is specced in full in its own file.
-    pub spec: Option<Spanned<String>>,
-    pub access: AccessBlock,
-    pub span: Span,
+    pub ty: Option<Spanned<String>>,
+    pub line: usize,
 }
 
-/// The closed set of access-block keys (grammar §8.3), in canonical order —
-/// also the LSP's completion list.
-pub const ACCESS_KEYS: &[&str] = &[
-    "schedule", "set", "after", "before", "run_if", "query", "reads", "writes", "spawns",
-    "despawns", "emits", "consumes",
-];
-
-/// A system's world access: what schedules and orders it, and what it touches.
-/// This is the ECS replacement for `in:` / `out:` — data flows through the
-/// World, so a system's interface is the set of things it reads and writes.
-#[derive(Debug, Clone, PartialEq, Serialize, Default)]
-pub struct AccessBlock {
-    /// `schedule:` — the schedule label it runs in (`Update`, `FixedUpdate`,
-    /// `OnEnter(Playing)`, …). Required.
-    pub schedule: Option<Spanned<String>>,
-    /// `set:` — system-set membership.
-    pub sets: Vec<Spanned<String>>,
-    /// `after:` / `before:` — ordering against systems or sets.
-    pub after: Vec<Spanned<String>>,
-    pub before: Vec<Spanned<String>>,
-    /// `run_if:` — a run condition, kept as free text.
-    pub run_if: Option<Spanned<String>>,
-    /// The declaration line this block hangs off — a `## systems` entry line, or
-    /// the `## access` section header. Where block-level diagnostics anchor.
-    pub anchor: Span,
-    /// `query:` — the matched component set.
-    pub query: Option<QueryFilter>,
-    /// `reads:` / `writes:` — components and resources accessed.
-    pub reads: Vec<Spanned<String>>,
-    pub writes: Vec<Spanned<String>>,
-    /// `spawns:` / `despawns:` — components on entities created / destroyed.
-    pub spawns: Vec<Spanned<String>>,
-    pub despawns: Vec<Spanned<String>>,
-    /// `emits:` / `consumes:` — events written / read.
-    pub emits: Vec<Spanned<String>>,
-    pub consumes: Vec<Spanned<String>>,
+#[derive(Debug, Clone, Serialize)]
+pub struct TypeDef {
+    pub kind: TypeKind,
+    pub role: Option<EcsRole>,
+    pub name: Spanned<String>,
+    pub line: usize,
     pub span: Span,
+    pub fields: Vec<Field>,
 }
 
-impl AccessBlock {
-    /// The access lists that name world items, paired with the key they came
-    /// from and the roles that key accepts. Drives validation and hover.
-    pub fn world_lists(&self) -> Vec<(&'static str, &[Role], &[Spanned<String>])> {
-        const RW: &[Role] = &[Role::Component, Role::Resource];
-        const C: &[Role] = &[Role::Component];
-        const E: &[Role] = &[Role::Event];
-        let mut out: Vec<(&'static str, &[Role], &[Spanned<String>])> = vec![
-            ("reads", RW, &self.reads),
-            ("writes", RW, &self.writes),
-            ("spawns", C, &self.spawns),
-            ("despawns", C, &self.despawns),
-            ("emits", E, &self.emits),
-            ("consumes", E, &self.consumes),
-        ];
-        if let Some(q) = &self.query {
-            out.push(("query", C, &q.with));
-            out.push(("query", C, &q.without));
+#[derive(Debug, Clone, Serialize)]
+pub struct Module {
+    pub name: Spanned<String>,
+    pub responsibility: String,
+    pub line: usize,
+    pub span: Span,
+    pub fns: Vec<ApiFn>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ApiFn {
+    /// As written, including any `Type::` qualifier.
+    pub name: Spanned<String>,
+    pub signature: String,
+    pub line: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TestKind {
+    Single(String),
+    Group(u32),
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TestEntry {
+    pub kind: TestKind,
+    pub label: Spanned<String>,
+    pub description: String,
+    pub line: usize,
+}
+
+impl Document {
+    pub fn line_at(&self, offset: usize) -> Option<usize> {
+        self.lines
+            .iter()
+            .position(|l| l.span.start <= offset && offset <= l.span.end)
+    }
+
+    pub fn anchor_line(&self, name: &str) -> Option<usize> {
+        self.lines.iter().position(|l| {
+            l.ann
+                .anchor
+                .as_ref()
+                .is_some_and(|a| a.value == name && matches!(l.role, Role::Step | Role::Invariant))
+        })
+    }
+
+    /// The `## api` entry an `@ api Module::fn` (or `Module::Type::fn`) ref
+    /// names. A fn written `fn Module::f` also answers to `Module::f`.
+    pub fn resolve_api(&self, path: &str) -> Option<(&Module, &ApiFn)> {
+        let (module, rest) = path.split_once("::")?;
+        let m = self.api.iter().find(|m| m.name.value == module)?;
+        let qualified = format!("{module}::{rest}");
+        let f = m
+            .fns
+            .iter()
+            .find(|f| f.name.value == rest)
+            .or_else(|| m.fns.iter().find(|f| f.name.value == qualified))?;
+        Some((m, f))
+    }
+
+    pub fn type_def(&self, name: &str) -> Option<&TypeDef> {
+        let mut defs = self.data.iter().filter(|t| t.name.value == name);
+        let first = defs.next()?;
+        if self.lines[first.line].gutter.on_head() {
+            return Some(first);
         }
+        defs.find(|t| self.lines[t.line].gutter.on_head())
+            .or(Some(first))
+    }
+
+    pub fn module(&self, name: &str) -> Option<&Module> {
+        self.api.iter().find(|m| m.name.value == name)
+    }
+
+    /// Every diff link in the file with the commit side it counts on.
+    pub fn links(&self) -> Vec<(&DiffLink, Side)> {
+        let mut out: Vec<(&DiffLink, Side)> = Vec::new();
+        for u in &self.units {
+            if let Some(l) = &u.link {
+                out.push((l, u.link_side()));
+            }
+        }
+        for line in &self.lines {
+            if let Some(l) = &line.ann.link {
+                out.push((l, line.gutter.side()));
+            }
+        }
+        out.sort_by_key(|(l, _)| l.span.start);
         out
     }
 
-    /// The ordering references — `after:` / `before:` — that should name a
-    /// system or set declared somewhere. `set:` is excluded: it *declares*
-    /// membership rather than referencing an existing name.
-    pub fn ordering_refs(&self) -> impl Iterator<Item = &Spanned<String>> {
-        self.after.iter().chain(self.before.iter())
-    }
-}
-
-/// A `query:` value — `Transform + Spawner - Dead`. `+` (or a bare leading
-/// term) adds a required component; `-` excludes one.
-#[derive(Debug, Clone, PartialEq, Serialize, Default)]
-pub struct QueryFilter {
-    pub with: Vec<Spanned<String>>,
-    pub without: Vec<Spanned<String>>,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Field {
-    pub name: Spanned<String>,
-    /// `None` only for a `- name` removal, which needs no type — the field
-    /// being removed already has one, in the code.
-    pub ty: Option<TypeExpr>,
-    /// Endpoint parameter source (`path`/`query`/`body`/`header`); grammar §4.1.
-    /// `None` when the field carries no `@source` annotation.
-    pub source: Option<Spanned<String>>,
-    /// Whether this line adds, removes, or asserts the field (grammar §4.7).
-    /// Always [`Delta::Keep`] in a type that declares its own shape.
-    pub delta: Delta,
-    pub span: Span,
-}
-
-/// A type expression: an identifier with optional generic arguments,
-/// e.g. `Vec<Offer>`, `Map<String, i64>`, `String`.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct TypeExpr {
-    pub ident: Spanned<String>,
-    pub args: Vec<TypeExpr>,
-    pub span: Span,
-}
-
-impl TypeExpr {
-    /// The type as written — `Map<String, Vec<Offer>>` — rebuilt from the tree,
-    /// for hover and for an `## api` signature.
-    pub fn render(&self) -> String {
-        if self.args.is_empty() {
-            return self.ident.value.clone();
-        }
-        let args: Vec<String> = self.args.iter().map(TypeExpr::render).collect();
-        format!("{}<{}>", self.ident.value, args.join(", "))
-    }
-}
-
-// ---- behavior --------------------------------------------------------------
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Step {
-    /// The full prose text of the step (without the leading `- ` and without a
-    /// trailing `@ spec` annotation).
-    pub text: Spanned<String>,
-    pub kind: StepKind,
-    /// Trailing `@ spec` annotation (grammar §5.4).
-    pub spec: Option<Spanned<String>>,
-    pub children: Vec<Step>,
-    pub span: Span,
-}
-
-/// The closed set of soft control-flow forms (grammar §5.1); anything else is
-/// [`StepKind::Prose`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StepKind {
-    Prose,
-    If,
-    Else,
-    ForEach,
-    While,
-    Try,
-    OnError,
-}
-
-// ---- api (grammar §11) -----------------------------------------------------
-
-/// One entry of a module spec's `## api` section: a public function's
-/// signature plus the bullet tree describing what it does.
-///
-/// The bullets are ordinary [`Step`]s — same control-flow forms, same nesting,
-/// same trailing `@ spec` refs — so a step that calls a collaborator carries
-/// the ref at the point of the call.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct ApiEntry {
-    /// The receiver type of a method: the `Wave` of `fn Wave::advance(…)`.
-    /// `None` for a standalone function.
-    pub receiver: Option<Spanned<String>>,
-    pub name: Spanned<String>,
-    pub params: Vec<Param>,
-    /// The return type after `->`. `None` when the function returns nothing.
-    pub ret: Option<TypeExpr>,
-    /// Trailing ` @ <path>` locating the function in the source, repo-relative
-    /// and optionally `:line` — the annotation a module line carries (§3).
-    pub path: Option<Spanned<String>>,
-    /// Trailing `@ spec` annotation (§5.4) — the last annotation on the line.
-    pub spec: Option<Spanned<String>>,
-    /// The nested bullets describing the function's behaviour.
-    pub steps: Vec<Step>,
-    pub span: Span,
-}
-
-impl ApiEntry {
-    /// How a `@ spec unit::<member>` ref addresses this entry: the bare
-    /// function name, or `Type::method` for a method (grammar §5.4).
-    pub fn member(&self) -> String {
-        match &self.receiver {
-            Some(receiver) => format!("{}{MEMBER_SEP}{}", receiver.value, self.name.value),
-            None => self.name.value.clone(),
-        }
+    /// The diff link at `offset`, with the side it counts on.
+    pub fn link_at(&self, offset: usize) -> Option<(&DiffLink, Side)> {
+        self.links()
+            .into_iter()
+            .find(|(l, _)| l.span.start <= offset && offset <= l.span.end)
     }
 
-    /// The span of the entry's whole name, receiver included — what a cursor
-    /// must sit in to be "on" this function.
-    pub fn member_span(&self) -> Span {
-        match &self.receiver {
-            Some(receiver) => Span::new(receiver.span.start, self.name.span.end),
-            None => self.name.span,
-        }
-    }
-
-    /// The signature as written, rebuilt for hover and completion —
-    /// `fn spawn_wave(index: u32) -> Vec<Entity>`.
-    pub fn signature(&self) -> String {
-        let params: Vec<String> = self
-            .params
+    pub fn children(&self, idx: usize) -> impl Iterator<Item = usize> + '_ {
+        self.lines
             .iter()
-            .map(|p| format!("{}: {}", p.name.value, p.ty.render()))
-            .collect();
-        let ret = match &self.ret {
-            Some(ty) => format!(" -> {}", ty.render()),
-            None => String::new(),
-        };
-        format!("fn {}({}){ret}", self.member(), params.join(", "))
+            .enumerate()
+            .filter(move |(_, l)| l.parent == Some(idx))
+            .map(|(i, _)| i)
     }
-}
-
-/// One parameter of an [`ApiEntry`]: `name: Type`.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Param {
-    pub name: Spanned<String>,
-    pub ty: TypeExpr,
-    pub span: Span,
-}
-
-// ---- where: bindings -------------------------------------------------------
-
-/// A `where:` binding (grammar §5.3): `Symbol = value [@ config-source]`.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Binding {
-    pub symbol: Spanned<String>,
-    /// The literal value as written (an integer or a quoted string).
-    pub value: Spanned<String>,
-    /// Optional `@ config-source` — env var, constant, or parameter default.
-    pub config: Option<Spanned<String>>,
-    pub span: Span,
-}
-
-// ---- invariants ------------------------------------------------------------
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Invariant {
-    /// The invariant prose (without a trailing `@ spec` annotation).
-    pub text: Spanned<String>,
-    /// Trailing `@ spec` annotation (grammar §5.4).
-    pub spec: Option<Spanned<String>>,
-    pub span: Span,
 }

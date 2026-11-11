@@ -1,134 +1,104 @@
 # hobby-mml-lsp
 
-| Field        | Value                                              |
-| ------------ | -------------------------------------------------- |
-| Type         | lsp + CLI                                          |
-| Binaries     | `hobby-mml-lsp`, `hobby-mml-parser`                |
-| Owner        | @julianbieber                                      |
-| Dependencies | tree-sitter-mml grammar (from the work tooling repo) |
-| Status       | experimental                                       |
+| Field        | Value                                                 |
+| ------------ | ----------------------------------------------------- |
+| Type         | lsp + CLI                                             |
+| Binaries     | `hobby-mml-lsp`, `hobby-mml-parser`                   |
+| Owner        | @julianbieber                                         |
+| Dependencies | `git` on `PATH`; `tree-sitter-hmml` in the Helix fork |
+| Status       | experimental                                          |
 
 ## Description
 
-Fork of the work `mml-lsp` for hobby specs, now carrying its **own grammar**
-([`grammar.md`](grammar.md), HMML v2). Language server (completion, hover,
-goto-definition, references, document symbols, diagnostics) plus the
-`hobby-mml-parser --lint` CLI the `hmml-*` skills shell out to.
+Language tooling for **HMML** (`.hmml`), the hobby dialect of the work MML. An
+`.hmml` file is the **review delta of one pull request**: a header naming the
+repo, branch and the `base`/`head` commits, then `## intent`, `## data`, one
+`## unit` per touched entry point, `## api` and `## tests`. Every body line
+carries a gutter (` ` context, `+` added, `-` removed, `~` changed as
+`<old> → <new>`), and a changed line points at the place in the diff that makes
+it true with a diff link `@ <file>[:<line>]`.
 
-## Why a fork rather than a shared binary
+[`grammar.md`](grammar.md) is the source of truth. `/hmml-extract` writes the
+files; nothing else edits them.
 
-Originally: spec→source path resolution.
+This is a Cargo workspace:
 
-| | work | hobby |
+- **`mml-parser`** (package `hobby-mml-parser`) — `.hmml` text → AST with byte
+  spans and recoverable diagnostics, the semantic checks, the diff-link checks
+  against the checkout, and the CLI.
+- **`mml-lsp`** (package `hobby-mml-lsp`) — the `tower-lsp` server wrapping it.
+
+## How it differs from the work `mml-lsp`
+
+The two share a grammar shape and most of their code; this copy was taken from
+the work MML v2 rewrite and changed in two places.
+
+| | work (`.mml`) | hobby (`.hmml`) |
 |---|---|---|
-| spec | `notes/{topic}/{task}/<unit>.hmml` | `notes/{project}/{topic}/{task}/<unit>.hmml` |
-| checkout | `~/worktrees/{topic}/{task}/{repo}` | `~/fun_worktrees/{project}/{topic}/{task}` |
-| fallback | `~/projects/<repo>` | `~/fun_repos/<repo>` |
+| delta lives in | `notes/{topic}/{task}/aspect_{id}/` | `notes/{project}/{topic}/{task}/`, or its `aspects/{name}/` |
+| checkout | `~/worktrees/{topic}/{task}[/aspects/{id}]/{repo}` | `~/fun_aspects/{p}/{t}/{task}/{name}`, then `~/fun_worktrees/{p}/{t}/{task}` |
+| fallback | `~/projects/{repo}` | `~/fun_repos/{repo}` |
+| Bevy | — | `in <Schedule>` / `on <Event>` on a unit; an ECS role on a `## data` type |
+| `head` | a commit | a commit, or `worktree` for an uncommitted change |
 
-The hobby layout has **no repo level** — a task is one repo, so the task
-directory *is* the checkout.
+The task directory *is* the checkout here, so the first two candidates are only
+tried when the header's `repo` names the delta's project.
 
-Since **v2 the fork is a genuine dialect, not a path tweak.** Hobby projects are
-overwhelmingly Bevy games, and MML v1's founding assumption — a unit is a
-function with `in: T` / `out: T` — does not hold in an ECS, where data flows
-through the World. v2 adds `kind: plugin` / `kind: system` and the sections
-`## components`, `## resources`, `## events`, `## systems`, `## access`, and
-makes the legal section set a function of `kind:`. The classic kinds are
-untouched, so every v1 spec still parses.
+The **Bevy layer** is deliberately light (grammar §6.1, §7.1). A unit names the
+schedule that runs it or the event its observer takes, and a type may say it is
+a `component`, `resource`, `event`, `message` or `state`. Neither is checked
+against the code or against each other: they are there so a changed system or a
+changed ECS shape reads as one, not to type-check access. The v2 dialect's
+world sections, access blocks and role checks did that for a spec maintained by
+hand, and a delta derived from the diff has no use for them.
 
-v2.1 hands `## data` back to the Bevy kinds for the shapes that carry **no** ECS
-role — a field type, an enum a component is built from. `in:`/`out:` stay
-illegal there, and a `## data` name in an access list is a role mismatch: the
-section is a type namespace in this dialect, not an interface.
+## hobby-mml-parser CLI
 
-v2.2 lets a spec **point at a type instead of restating it**. `struct Wave @
-src/waves/mod.rs` says the type is already there: the body becomes optional, and
-when present it is partial — it lists the members the spec asserts, and anything
-unlisted stays as it is. (v2.2's inline `+` / `-` member markers still parse but
-are legacy; v2.3's `# +` / `# -` are the one change spelling.) Because the target is
-real Rust on disk, the reference is checked: the type must exist, its
-`#[derive(…)]` must match the section's role (filing a `Resource` under
-`## components` is the classic spec error, and now a warning), and
-goto-definition lands on the struct. `use extern avian3d::prelude: Collider`
-covers a dependency's type, which nothing local can verify — a second keyword,
-because the guarantee differs and a reader should not have to resolve a path to
-tell which they are looking at. Reading the Rust is `mml-parser/src/rust_source.rs`,
-via the vendored `tree-sitter-rust` grammar rather than the Helix grammar cache,
-so `hobby-mml-parser --lint` keeps working on a machine with no built grammars.
+```bash
+hobby-mml-parser <delta.hmml>           # grammar checks (same as --check)
+hobby-mml-parser <delta.hmml> --check   # file:line:col: severity [code]: message
+hobby-mml-parser <delta.hmml> --lint    # --check + diff links against the checkout
+hobby-mml-parser <delta.hmml> --json    # { "ast": ..., "diagnostics": [...] }
+hobby-mml-parser --version              # hobby-mml-parser 3.x for this grammar
+```
 
-v2.3 makes the spec hold **both** versions of the unit: the baseline it started
-from, and the change written on top of it as `# +` / `# -` comment markers
-(grammar §10). See [Change annotations](#change-annotations-grammar-10) below for
-the checks; the reason it is worth a convention is that the delta then survives
-being committed. `/hmml-extract --against <ref>` writes that delta from a
-branch's diff, so a change is read as a change to the mental model before
-merge.
+Exit status: `0` ok; `1` any error, or under `--lint` any error or warning; `2`
+usage or I/O error. Info diagnostics never gate. The codes and their severities
+are grammar §11.
 
-v2.4 adds the **detail layer**: `kind: module`, whose third section is `## api` —
-one `fn` signature per public function, the bullets describing it nested beneath
-(grammar §11). An `@ spec` ref may name one of those entries
-(`wave-table::entry_for`, `wave-rng::WaveRng::next_u32`), and the two ref
-failures get different severities on purpose: a missing target file stays a
-warning because the spec may be planned and not yet written, while a member the
-target file does not define is an error — the file is right there to check the
-name against. `Future`, `Result`, `Either` and `Tuple` join the containers so a
-signature can stay faithful to the code it is read beside.
+`head: worktree` is the one hobby addition to the header: the change is not
+committed yet, so the head side is the checkout's files on disk, untracked ones
+included, and the checkout is the candidate that holds `base`. `/task:build`
+derives its delta before GATE 2, when nothing is committed.
 
-That divergence ends any prospect of re-merging with the work binary, and makes
-upstream `mml-parser` cherry-picks a manual job — a cost accepted deliberately,
-since the Bevy dialect has no business in a work repo.
+Each `@ <file>[:<line>]` is matched by whole path components from the end, first
+among the files `git diff --name-only base...head` lists, then among all files
+at that side's commit; the line is checked on the `head` side for context, `+`
+and `~` lines and on the `base` side for `-` lines.
 
-## Grammar
+## hobby-mml-lsp server
 
-[`grammar.md`](grammar.md) in this directory is the source of truth, and the
-`hmml-*` skills point at it. The work `01-language-spec/grammar.md` describes v1
-and no longer governs anything here.
-
-The always-parsing examples are the parser's own fixtures under
-`mml-parser/tests/fixtures/examples/` — they are compiled into the test suite, so
-docs and parser cannot drift:
-
-| Fixture | Shows |
-|---|---|
-| `enemy-waves.hmml` | `kind: plugin` — world sections, role-less `## data`, systems, ordering, `marker`, `where:` |
-| `spawn-enemies.hmml` | `kind: system` — `## access`, cross-spec imports into `## data` and a world section, query exclusion, a Rust reference with a partial body carrying a `# +` annotation, `use extern` |
-| `get-map-tile.hmml` | `kind: endpoint` — `method`, param sources |
-| `mesh-terrain-chunks.hmml` | `kind: workflow` — `Queue`/`Stream` |
-| `shared-data-imports.hmml` / `cross-spec-refs.hmml` | `use` imports, `@ spec` refs |
-| `wave-table.hmml` / `wave-rng.hmml` | `kind: module` — `## api`, a method entry, a `unit::Type::method` member ref between the two |
-
-### Change annotations (grammar §10)
-
-A spec carries a change as `# +` / `# - <text>` comment markers on top of the
-baseline — the version the change starts from. The markers stay after the change
-lands, so the spec keeps representing it. They are comments, so no other pass
-sees them — and the property that makes the convention work, **baseline
-recoverability**, is therefore checked in `mml-parser/src/annotations.rs`:
-dropping every `# +` block and un-commenting every `# -` line must give back the
-baseline spec, coherent on its own.
-
-`unrecoverable-baseline` is the check that earns its keep. The reconstructed
-baseline is re-parsed and re-validated, and an **error it has that the annotated
-spec does not** is reported against the line that caused it — typically a `# +`
-on something the baseline itself already needs, which means the two versions the
-file is supposed to hold are not both coherent. The rest are shape checks:
-`empty-change-removal` (a `# -` that kept no text, so the baseline is gone),
-`empty-change-addition` (a `# +` with nothing beneath it), and
-`redundant-change-bullet` (a removed line that kept the bullet the marker's own
-`-` stands in for).
-
-All four are **warnings**, so `--lint` gates on them. The work copy makes
-`redundant-change-bullet` an info hint instead, because its `--lint` does not
-gate on info severity; this one does gate on any diagnostic at all, so an info
-hint here would gate anyway while claiming not to. A doubled bullet is a
-one-character fix, so gating on it costs nothing.
+- **diagnostics** — parse, semantic and diff-link checks on open and change.
+- **goto-definition** — `@ api X::f` → the `fn` line; `^a` in `@ guards` → the
+  anchored line; a type or module name in prose or in `on <Event>` → its
+  definition; `@ file:line` → that line in the checkout. The head side opens the
+  working file when the checkout's `HEAD` is `head`, otherwise a copy of
+  `git show head:path` under `$XDG_CACHE_HOME/hobby-mml-lsp/<sha>/<path>`;
+  `-` lines open the `base` side the same way.
+- **hover** — an `@ api` ref shows the signature and its module; a `~` line
+  shows both sentences in full; a type shows its block, role included.
+- **document symbols** — intent, each data type with its role and fields, each
+  unit with its trigger and anchors, each api module with its fns, the tests.
+- **references** — an anchor and the `@ guards` naming it; an api fn and the
+  steps linking it; a type or module name and every mention of it.
+- **completion** — section headers, missing header keys, `Module::fn` after
+  `@ api `, anchors after `@ guards `, ECS roles at the start of a `## data`
+  line, and control-flow keywords at the start of a step.
 
 ## Helix routing
 
-Two binaries on `PATH` would fight, since Helix maps a language to one server.
-The file extension keeps them apart: `.hmml` is its own language, `.mml` stays
-the work one. No path globs, no block ordering. The Helix fork's own
-`languages.toml` carries it:
+The extension keeps the two dialects apart: `.hmml` is its own language and
+`.mml` stays the work one. The Helix fork's `languages.toml` carries it:
 
 ```toml
 [language-server]
@@ -141,37 +111,31 @@ file-types = ["hmml"]
 language-servers = ["hobby-mml-lsp"]
 ```
 
-There is no `grammar =` line: HMML has its own grammar, `tree-sitter-hmml`,
-which lives in the Helix fork under `grammars/`. It used to
-borrow `grammar = "mml"`, which quietly made highlighting depend on the work
-checkout being present.
+Highlighting is `tree-sitter-hmml`, under the Helix fork's `grammars/`, with its
+queries in `runtime/queries/hmml/`.
 
-Helix resolves highlight queries by **language name**, not grammar, so
-`runtime/queries/hmml/highlights.scm` must exist; it is committed in the Helix
-fork. (It used to contain only `; inherits: mml` — a second hidden
-dependency on the work grammar.)
-
-Verify with `hx --health hmml` and `hx --health mml` — each should bind its own
-server, and both should show a tree-sitter parser and highlight queries.
-
-## Installation
+## Install
 
 ```bash
 just install-mml     # installs hobby-mml-lsp, hobby-mml-parser
 ```
 
-## Known Limitations
+## Develop
 
-- **The grammar knows v2's shapes, not v2's rules.** `tree-sitter-hmml` now
-  parses the Bevy sections, `marker Name` and the access block, so they highlight
-  distinctly rather than as generic lines. It still validates nothing: which
-  sections a `kind:` may use, whether a name in `reads:` is a component or a
-  resource, whether a schedule label exists — all of that comes from
-  `hobby-mml-parser`. A spec that parses cleanly can still be full of diagnostics.
-- Upstream `mml-parser` fixes must be cherry-picked by hand, and v2 has moved
-  the two apart far enough that this is real work rather than a patch apply.
-- The built-in Bevy name lists (`BUILTIN_COMPONENTS`, `BUILTIN_RESOURCES`,
-  `BUILTIN_EVENTS` in `mml-parser/src/validate.rs`) are hand-maintained and
-  cover the common engine types, not all of Bevy. An unlisted engine type reads
-  as `undefined-access-item`; the fix is to add it to the list, not to declare
-  it locally.
+```bash
+cargo test                    # parser, CLI, git-link and LSP tests
+cargo clippy --all-targets
+cargo fmt
+```
+
+The git-link tests build throwaway repos under a temporary `$HOME`, so they need
+`git` on `PATH` and nothing else.
+
+## Known limitations
+
+- **`tree-sitter-hmml` still parses v2.** It lives in the Helix fork and has to
+  be ported from the work `tree-sitter-mml` v2 grammar, with the trigger and the
+  role added; until then a v3 delta highlights only partly. Diagnostics are
+  unaffected — they come from this server.
+- Work `mml-parser` fixes are taken by hand. The shared code is close enough
+  that most apply as they are, outside `git.rs` and the two Bevy additions.

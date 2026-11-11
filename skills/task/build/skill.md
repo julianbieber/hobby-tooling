@@ -101,7 +101,7 @@ represents the implemented change, never a plan.
    ```json
    { "phase": "assess-split", "brief_source": "issue|description|notes",
      "brief": "<the brief>", "plan": "<plan file name>",
-     "hmml_units": ["<unit>"],
+     "hmml_delta": "<delta-<branch>.hmml path>",
      "no_hmml": false, "no_context": false, "no_split": false,
      "is_aspect": false,
      "split": { "assessed": "<YYYY-MM-DD>", "outcome": "none|split",
@@ -136,7 +136,9 @@ represents the implemented change, never a plan.
    **Migrate an old record** before anything else, and say so in one line: a
    phase of `await-hmml-review` or `revise` becomes `implement` (its annotated
    `.hmml` and review plan stay in the notes dir as notes; nothing is
-   re-reviewed), `hmml_unit` becomes `hmml_units`, and `rounds` is dropped. A
+   re-reviewed), `hmml_unit` and `hmml_units` become `hmml_delta` (empty until
+   `delta` runs again; the old per-unit `.hmml` specs stay as notes), and
+   `rounds` is dropped. A
    leftover `dev-flow.json` in the same directory is read once for its `phase`,
    then ignored — never written to again. A state file with no
    `split` record and a phase past `plan` gets
@@ -503,9 +505,12 @@ only, config values, a mechanical rename — saying so in one line.
 Run `/hmml-extract --against <ref>`, with `<ref>` the merge base of the
 worktree and the default branch
 (`git merge-base HEAD "origin/$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)"`).
-It picks the units the diff touches, writes each as the worktree leaves it with
-what the change did marked `# -` / `# +`, and lints the set; if it asks which
-units, surface the question. Record `hmml_units`.
+Nothing is committed yet, so the delta's header says `head: worktree` and its
+links point into the files on disk. It writes one `delta-<branch>.hmml` into
+the notes dir: the touched units'
+walks as the worktree leaves them, each changed step marked `+` / `-` / `~` and
+linked to the diff, the data and signatures the change touches, and its tests
+in summary, then lints it. Record its path as `hmml_delta`.
 
 The delta is **derived, never maintained**: do not edit it, and rerun this phase
 after any later change to the code's behaviour — a fix I ask for at GATE 2, a
@@ -577,9 +582,8 @@ overview is what I read every time, so keep it short enough to read in one go.
 
 - **what changes**, in two or three sentences, for a person using the program,
   not in terms of files;
-- **the derived delta**, at behaviour level — each `.hmml` path, then every
-  `# -` and `# +` line in its behaviour, invariant and access sections, grouped
-  by section. It is the cheapest place to catch a change that does something the
+- **the derived delta**, at behaviour level — its path, then the file as it
+  stands, with its count of `+` / `-` / `~` lines per section. It is the cheapest place to catch a change that does something the
   brief did not ask; show it, do not describe it. With no delta (skipped, or
   `--no-hmml`), say so in one line;
 - **evidence** in one line — what was run and that it passed — plus any CI step
@@ -598,8 +602,8 @@ overview is what I read every time, so keep it short enough to read in one go.
 
 - `design` — the program's shape: per module touched, its header and every
   public signature added, changed or removed, with its comment; how the modules
-  now depend on each other where that changed; and the `kind: module` `## api`
-  delta from the `.hmml` set when `delta` extracted one. Then the standards delta,
+  now depend on each other where that changed; and the delta's `## api` and
+  `## data` sections when `delta` extracted one. Then the standards delta,
   each budget before and after;
 - `diff` — the files, one line each on what changed, then whatever part of the
   diff I name;

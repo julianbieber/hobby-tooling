@@ -123,9 +123,8 @@ if [ -d "$NOTES_DIR" ]; then
     ISSUE_TITLE=$(sed -n '2,/^---$/s/^title: *"\{0,1\}\(.*[^"]\)"\{0,1\} *$/\1/p' "$NOTES_DIR/issue.md" | head -n1)
     CTX="${CTX}Issue: \`issue.md\` in the notes dir${ISSUE_TITLE:+ — ${ISSUE_TITLE}}"$'\n'
   fi
-  # Flag HMML specs so the hmml-* skills don't have to hunt for them.
-  MML_COUNT=$(find "$NOTES_DIR" -maxdepth 1 -type f -name '*.hmml' 2>/dev/null | wc -l)
-  [ "$MML_COUNT" -gt 0 ] && CTX="${CTX}HMML specs in notes: ${MML_COUNT}"$'\n'
+  MML_COUNT=$(find "$NOTES_DIR" -maxdepth 1 -type f -name 'delta-*.hmml' 2>/dev/null | wc -l)
+  [ "$MML_COUNT" -gt 0 ] && CTX="${CTX}HMML review deltas in notes: ${MML_COUNT}"$'\n'
 else
   CTX="${CTX}Notes dir does not exist yet (would be \`${NOTES_DIR/#$HOME/\~}\`)."$'\n'
 fi
