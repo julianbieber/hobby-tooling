@@ -11,7 +11,7 @@ use ratatui::layout::Rect;
 use super::*;
 use crate::app::Action;
 use crate::model::project::Project;
-use crate::model::task::{AspectRef, GitInfo, Pr, PrStatus, Repo, Todo, TodoStatus};
+use crate::model::task::{AspectRef, GitInfo, OpenItem, Pr, PrStatus, Repo, Todo, TodoStatus};
 use crate::session::Session;
 use crate::testkit::{find, row, screen};
 use crate::widgets::{ACCENT, SIDEBAR_COLS};
@@ -284,6 +284,7 @@ fn aspect_lines_show_state_and_open_their_tab() {
         kind: "research".into(),
         state: "reported".into(),
         goal: Some("which limits apply".into()),
+        ..AspectRef::default()
     }];
     let mut view = view(vec![a.clone()]);
     view.sessions.aspects.insert(
@@ -316,4 +317,70 @@ fn aspect_lines_show_state_and_open_their_tab() {
         click(&mut view, line),
         Some(Action::Tab(a, "wgpu-limits".into()))
     );
+}
+
+#[test]
+fn an_aspect_shows_its_phase_pr_and_expands_to_plan_outcome_and_open_items() {
+    let mut a = task("task-a");
+    let url = "https://github.com/o/r/pull/11";
+    a.aspects = vec![AspectRef {
+        name: "export".into(),
+        kind: "code".into(),
+        state: "pr".into(),
+        created: Some("2026-11-08".into()),
+        pr: Some(Pr {
+            status: PrStatus::Merged,
+            ..Pr::from_url(url.into())
+        }),
+        outcome: Some("merged the export".into()),
+        open_items: vec![
+            OpenItem {
+                text: "web loading".into(),
+                issue: None,
+            },
+            OpenItem {
+                text: "tiff".into(),
+                issue: Some("tiff-export".into()),
+            },
+        ],
+        phase: Some("await-fix".into()),
+        todo: vec![
+            Todo {
+                text: "plan it".into(),
+                status: TodoStatus::Done,
+            },
+            Todo {
+                text: "build it".into(),
+                status: TodoStatus::Active,
+            },
+        ],
+        waiting_on: Some("red check".into()),
+        ..AspectRef::default()
+    }];
+    let mut view = view(vec![a]);
+
+    let buf = frame(&mut view);
+    let (_, y) = find(&buf, "⌕ export", None, 0);
+    let line = row(&buf, y);
+    for part in ["· await-fix", "#11 merged", "waiting: red check"] {
+        assert!(line.contains(part), "{part} missing: {line}");
+    }
+    assert!(!screen(&buf).contains("outcome:"), "collapsed by default");
+
+    let chip = find(&buf, "#11 merged", None, 0);
+    assert_eq!(click(&mut view, chip), Some(Action::OpenUrl(url.into())));
+
+    let buf = frame(&mut view);
+    let toggle = find(&buf, "[▸ todo 1/2 · 1 open item]", None, 0);
+    assert_eq!(click(&mut view, toggle), None);
+    let shown = screen(&frame(&mut view));
+    for part in [
+        "created 2026-11-08 · base default branch",
+        "▶ build it",
+        "outcome: merged the export",
+        "○ web loading",
+        "→ tiff-export: tiff",
+    ] {
+        assert!(shown.contains(part), "{part} missing:\n{shown}");
+    }
 }

@@ -26,7 +26,7 @@ const NOTES_FILES: [&str; 5] = [
 /// Modification times of everything whose change can alter the model: the worktree and notes
 /// roots and their project, topic and task dirs (a task appearing or vanishing), and per notes
 /// task the files a card reads: `task.json`, `prs.json`, `build-task.json`,
-/// `issue.md` and `tasks.json`.
+/// `issue.md` and `tasks.json`, and each aspect's `aspect.json` and `build-task.json`.
 #[derive(Clone, Default, PartialEq, Debug)]
 pub struct Fingerprint(HashMap<PathBuf, SystemTime>);
 
@@ -47,6 +47,7 @@ pub fn fingerprint(worktrees: &Path, notes: &Path) -> Fingerprint {
             record(&mut fp, &aspects);
             for aspect in visible_dirs(&aspects) {
                 record(&mut fp, &aspect.join("aspect.json"));
+                record(&mut fp, &aspect.join("build-task.json"));
             }
         }
     }
@@ -193,9 +194,6 @@ impl RefreshPoller {
 mod tests {
     use super::*;
 
-    // Pins what the fingerprint watches: task dirs three levels down and the notes files a card
-    // reads, including each aspect's aspect.json, but not a worktree's contents or the notes
-    // repo's .git.
     #[test]
     fn fingerprint_sees_task_dirs_and_notes_files_but_not_repo_contents() {
         let root = std::env::temp_dir().join(format!("hdash_fp_{}", std::process::id()));
@@ -229,10 +227,18 @@ mod tests {
             r#"{"state":"reported"}"#,
         )
         .unwrap();
+        let reported = fingerprint(&wt, &notes);
+        assert_ne!(with_aspect, reported, "an aspect state write is seen");
+        std::thread::sleep(Duration::from_millis(20));
+        std::fs::write(
+            notes.join("p/topic/task/aspects/spike/build-task.json"),
+            r#"{"phase":"implement"}"#,
+        )
+        .unwrap();
         assert_ne!(
-            with_aspect,
+            reported,
             fingerprint(&wt, &notes),
-            "an aspect state write is seen"
+            "an aspect phase write is seen"
         );
         let _ = std::fs::remove_dir_all(&root);
     }

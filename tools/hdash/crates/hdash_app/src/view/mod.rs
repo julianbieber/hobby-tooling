@@ -63,6 +63,7 @@ pub enum Control {
     TodoToggle(TaskId),
     PrLine(TaskId, String),
     Aspect(TaskId, String),
+    AspectToggle(TaskId, String),
 }
 
 impl Control {
@@ -73,7 +74,8 @@ impl Control {
             | Control::PrsToggle(id)
             | Control::TodoToggle(id)
             | Control::PrLine(id, _)
-            | Control::Aspect(id, _) => Some(id),
+            | Control::Aspect(id, _)
+            | Control::AspectToggle(id, _) => Some(id),
             _ => None,
         }
     }
@@ -410,7 +412,7 @@ impl DashView {
             .map(|item| {
                 (
                     item.task.id.clone(),
-                    item.task.prs.iter().map(|p| p.url.clone()).collect(),
+                    item.task.all_prs().map(|p| p.url.clone()).collect(),
                 )
             })
             .collect();
@@ -467,7 +469,7 @@ impl DashView {
             let Some(pr) = self
                 .model
                 .task_mut(&msg.id)
-                .and_then(|t| t.prs.iter_mut().find(|p| p.url == msg.url))
+                .and_then(|t| t.all_prs_mut().find(|p| p.url == msg.url))
             else {
                 continue;
             };
@@ -500,7 +502,7 @@ impl DashView {
             let Some(urls) = self.dispatched.get_mut(&task.id) else {
                 continue;
             };
-            for pr in &task.prs {
+            for pr in task.all_prs() {
                 if matches!(
                     pr.status,
                     PrStatus::Open | PrStatus::Draft | PrStatus::Unknown
@@ -517,7 +519,7 @@ impl DashView {
             let Some(task) = model.tasks.iter().find(|t| &t.id == id) else {
                 return false;
             };
-            urls.retain(|url| task.prs.iter().any(|p| &p.url == url));
+            urls.retain(|url| task.all_prs().any(|p| &p.url == url));
             true
         });
     }

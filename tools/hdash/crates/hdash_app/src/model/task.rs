@@ -67,7 +67,7 @@ impl PrStatus {
 
 /// A pull request associated with a task. `url` and the optional metadata come from the task's
 /// `prs.json`; `status`/`number`/`live_title` are populated asynchronously by `gh`.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 pub struct Pr {
     /// PR URL (the only guaranteed field; used as the `gh pr view` argument and the display fallback).
     pub url: String,
@@ -94,6 +94,14 @@ pub struct Pr {
 }
 
 impl Pr {
+    /// A PR known only by its URL, its live state not yet queried.
+    pub fn from_url(url: String) -> Self {
+        Pr {
+            url,
+            ..Pr::default()
+        }
+    }
+
     /// Best available title: the live `gh` title, then the file title, else empty.
     pub fn display_title(&self) -> &str {
         self.live_title
@@ -105,7 +113,7 @@ impl Pr {
 
 /// An aspect of a task: a piece of the task's own work, worked in a tab of the task's session,
 /// recorded in `notes/PROJECT/TOPIC/TASK/aspects/NAME/aspect.json`. Never a task of its own.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct AspectRef {
     /// The aspect's directory name, which is also its tab name.
     pub name: String,
@@ -116,6 +124,46 @@ pub struct AspectRef {
     pub state: String,
     /// The question, if recorded.
     pub goal: Option<String>,
+    /// The branch the aspect was cut from and its PR goes to; `None` for the default branch.
+    pub base: Option<String>,
+    /// `YYYY-MM-DD` the aspect was added.
+    pub created: Option<String>,
+    /// The aspect's PR, its live state loaded like a task's.
+    pub pr: Option<Pr>,
+    /// What the aspect concluded, written when it finished.
+    pub outcome: Option<String>,
+    /// What the aspect left unresolved, in the order it recorded them.
+    pub open_items: Vec<OpenItem>,
+    /// The `phase` in the aspect's own `build-task.json`, for an aspect worked through
+    /// `/task:build`.
+    pub phase: Option<String>,
+    /// The live plan in the same file.
+    pub todo: Vec<Todo>,
+    /// What the aspect's session is waiting on me for.
+    pub waiting_on: Option<String>,
+}
+
+impl AspectRef {
+    /// The open items no task of their own covers yet.
+    pub fn uncovered_items(&self) -> usize {
+        self.open_items.iter().filter(|i| i.issue.is_none()).count()
+    }
+
+    /// Whether the aspect has anything beyond its one-line summary to expand.
+    pub fn has_details(&self) -> bool {
+        !self.todo.is_empty()
+            || self.outcome.is_some()
+            || !self.open_items.is_empty()
+            || self.base.is_some()
+            || self.created.is_some()
+    }
+}
+
+/// Something an aspect left unresolved. `issue` names the task that now covers it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenItem {
+    pub text: String,
+    pub issue: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -126,6 +174,24 @@ struct AspectFile {
     state: Option<String>,
     #[serde(default)]
     goal: Option<String>,
+    #[serde(default)]
+    base: Option<String>,
+    #[serde(default)]
+    created: Option<String>,
+    #[serde(default)]
+    pr: Option<String>,
+    #[serde(default)]
+    outcome: Option<String>,
+    #[serde(default)]
+    open_items: Vec<OpenItemFile>,
+}
+
+#[derive(Deserialize)]
+struct OpenItemFile {
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
+    issue: Option<serde_json::Value>,
 }
 
 /// The live state of a PR a task's block waits on, delivered from the async query.
@@ -356,6 +422,20 @@ pub struct Task {
 }
 
 impl Task {
+    /// The task's own PRs and its aspects' PRs, which all load their live state the same way.
+    pub fn all_prs(&self) -> impl Iterator<Item = &Pr> {
+        self.prs
+            .iter()
+            .chain(self.aspects.iter().filter_map(|a| a.pr.as_ref()))
+    }
+
+    /// [`Task::all_prs`], mutably.
+    pub fn all_prs_mut(&mut self) -> impl Iterator<Item = &mut Pr> {
+        self.prs
+            .iter_mut()
+            .chain(self.aspects.iter_mut().filter_map(|a| a.pr.as_mut()))
+    }
+
     /// The task's window title as `hdash` launches it: the unclamped `hcdev-PROJECT-TOPIC-TASK`.
     pub fn window_title(&self) -> String {
         unclamped_session_name(&self.id)
@@ -843,7 +923,11 @@ struct BuildState {
 }
 
 fn read_build_state(id: &TaskId) -> BuildState {
-    std::fs::read_to_string(build_state_path(id))
+    read_build_state_at(&build_state_path(id))
+}
+
+fn read_build_state_at(path: &Path) -> BuildState {
+    std::fs::read_to_string(path)
         .ok()
         .map(|text| parse_build_state(&text))
         .unwrap_or_default()
@@ -985,29 +1069,59 @@ fn read_aspects(dir: &Path) -> Vec<AspectRef> {
     let mut aspects: Vec<AspectRef> = entries
         .flatten()
         .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-        .map(|e| {
-            let name = e.file_name().to_string_lossy().into_owned();
-            let parsed = std::fs::read_to_string(e.path().join("aspect.json"))
-                .ok()
-                .and_then(|text| serde_json::from_str::<AspectFile>(&text).ok());
-            match parsed {
-                Some(file) => AspectRef {
-                    name: clean(&name),
-                    kind: clean(file.kind.as_deref().unwrap_or("research")),
-                    state: clean(file.state.as_deref().unwrap_or("open")),
-                    goal: file.goal.map(|g| clean(&g)).filter(|g| !g.is_empty()),
-                },
-                None => AspectRef {
-                    name: clean(&name),
-                    kind: "research".into(),
-                    state: "unreadable".into(),
-                    goal: None,
-                },
-            }
-        })
+        .map(|e| read_aspect(&e.path(), &e.file_name().to_string_lossy()))
         .collect();
     aspects.sort_by(|a, b| a.name.cmp(&b.name));
     aspects
+}
+
+fn read_aspect(dir: &Path, name: &str) -> AspectRef {
+    let BuildState {
+        phase,
+        todo,
+        waiting_on,
+    } = read_build_state_at(&dir.join("build-task.json"));
+    let parsed = std::fs::read_to_string(dir.join("aspect.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<AspectFile>(&text).ok());
+    let line = |s: Option<String>| s.map(|s| clean(s.trim())).filter(|s| !s.is_empty());
+    let base = AspectRef {
+        name: clean(name),
+        phase,
+        todo,
+        waiting_on,
+        ..AspectRef::default()
+    };
+    let Some(file) = parsed else {
+        return AspectRef {
+            kind: "research".into(),
+            state: "unreadable".into(),
+            ..base
+        };
+    };
+    AspectRef {
+        kind: clean(file.kind.as_deref().unwrap_or("research")),
+        state: clean(file.state.as_deref().unwrap_or("open")),
+        goal: line(file.goal),
+        base: line(file.base),
+        created: line(file.created),
+        pr: line(file.pr).map(Pr::from_url),
+        outcome: line(file.outcome),
+        open_items: file
+            .open_items
+            .into_iter()
+            .map(|i| OpenItem {
+                text: clean(i.text.trim()),
+                issue: match i.issue {
+                    Some(serde_json::Value::String(s)) => line(Some(s)),
+                    Some(serde_json::Value::Number(n)) => Some(n.to_string()),
+                    _ => None,
+                },
+            })
+            .filter(|i| !i.text.is_empty())
+            .collect(),
+        ..base
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1226,9 +1340,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // Pins how a task's aspects are read: sorted by name, kind, state and goal from aspect.json,
-    // an empty goal dropped, a missing kind read as research and a missing state as open, and a
-    // malformed file still listed.
     #[test]
     fn aspects_are_read_from_the_aspects_dir() {
         let dir = std::env::temp_dir().join(format!("hdash_aspects_{}", std::process::id()));
@@ -1247,39 +1358,79 @@ mod tests {
         }
         let aspects = read_aspects(&dir);
         let _ = std::fs::remove_dir_all(&dir);
+        let summary: Vec<_> = aspects
+            .iter()
+            .map(|a| {
+                (
+                    a.name.as_str(),
+                    a.kind.as_str(),
+                    a.state.as_str(),
+                    a.goal.as_deref(),
+                )
+            })
+            .collect();
         assert_eq!(
-            aspects,
+            summary,
             vec![
-                AspectRef {
-                    name: "a-fresh".into(),
-                    kind: "research".into(),
-                    state: "open".into(),
-                    goal: None
-                },
-                AspectRef {
-                    name: "b-spike".into(),
-                    kind: "research".into(),
-                    state: "reported".into(),
-                    goal: Some("why".into())
-                },
-                AspectRef {
-                    name: "c-broken".into(),
-                    kind: "research".into(),
-                    state: "unreadable".into(),
-                    goal: None
-                },
-                AspectRef {
-                    name: "d-code".into(),
-                    kind: "code".into(),
-                    state: "pr".into(),
-                    goal: None
-                },
+                ("a-fresh", "research", "open", None),
+                ("b-spike", "research", "reported", Some("why")),
+                ("c-broken", "research", "unreadable", None),
+                ("d-code", "code", "pr", None),
             ]
         );
         assert!(
             read_aspects(&dir).is_empty(),
             "a task without aspects has none"
         );
+    }
+
+    #[test]
+    fn an_aspect_carries_its_pr_outcome_open_items_and_own_build_state() {
+        let dir = std::env::temp_dir().join(format!("hdash_aspect_full_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let aspect = dir.join("export");
+        std::fs::create_dir_all(&aspect).unwrap();
+        std::fs::write(
+            aspect.join("aspect.json"),
+            r#"{"kind":"code","state":"pr","goal":"g","base":null,"created":"2026-11-08",
+                "pr":"https://github.com/o/r/pull/11","outcome":"merged it",
+                "open_items":[{"text":"web loading","issue":null},
+                              {"text":"tiff","issue":"tiff-export"},
+                              {"text":"  ","issue":null}]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            aspect.join("build-task.json"),
+            r#"{"phase":"await-fix","waiting_on":"red check",
+                "todo":[{"text":"plan","status":"done"},{"text":"build","status":"active"}]}"#,
+        )
+        .unwrap();
+        let read = read_aspects(&dir).remove(0);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(read.base, None);
+        assert_eq!(read.created.as_deref(), Some("2026-11-08"));
+        assert_eq!(
+            read.pr.as_ref().map(|p| (p.url.as_str(), p.status)),
+            Some(("https://github.com/o/r/pull/11", PrStatus::Loading))
+        );
+        assert_eq!(read.outcome.as_deref(), Some("merged it"));
+        assert_eq!(
+            read.open_items,
+            vec![
+                OpenItem {
+                    text: "web loading".into(),
+                    issue: None
+                },
+                OpenItem {
+                    text: "tiff".into(),
+                    issue: Some("tiff-export".into())
+                },
+            ]
+        );
+        assert_eq!(read.uncovered_items(), 1);
+        assert_eq!(read.phase.as_deref(), Some("await-fix"));
+        assert_eq!(read.waiting_on.as_deref(), Some("red check"));
+        assert_eq!(TodoCount::of(&read.todo), TodoCount { open: 1, done: 1 });
     }
 
     // Pins how build-task.json's todo list and waiting_on are read: statuses map, blank text and

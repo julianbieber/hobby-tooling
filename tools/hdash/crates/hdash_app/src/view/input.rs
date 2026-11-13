@@ -195,6 +195,12 @@ impl DashView {
                 let task = self.task(&id)?.clone();
                 return Some(Action::Tab(task, name));
             }
+            Control::AspectToggle(id, name) => {
+                let key = (id, name);
+                if !self.ui.aspect_expanded.remove(&key) {
+                    self.ui.aspect_expanded.insert(key);
+                }
+            }
         }
         None
     }
@@ -310,11 +316,15 @@ impl DashView {
                 );
             }
         }
-        out.extend(
-            task.aspects
-                .iter()
-                .map(|a| Control::Aspect(id.clone(), a.name.clone())),
-        );
+        for aspect in &task.aspects {
+            out.push(Control::Aspect(id.clone(), aspect.name.clone()));
+            if let Some(pr) = &aspect.pr {
+                out.push(Control::PrLine(id.clone(), pr.url.clone()));
+            }
+            if aspect.has_details() {
+                out.push(Control::AspectToggle(id.clone(), aspect.name.clone()));
+            }
+        }
         out
     }
 }
