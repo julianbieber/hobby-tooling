@@ -644,12 +644,7 @@ impl DashView {
             meta.push(text(item.task_name(), Style::default()));
         }
         if let Some(phase) = &task.phase {
-            let color = if phase.starts_with("await-") {
-                AMBER
-            } else {
-                DIM
-            };
-            meta.push(text(&format!("· {phase}"), Style::default().fg(color)));
+            meta.push(text(&format!("· {phase}"), phase_style(phase)));
         }
         if task.is_coordinator() {
             let (line, style) = match &task.coordinator {
@@ -700,6 +695,23 @@ impl DashView {
             let now = now_secs();
             for aspect in &task.aspects {
                 let mut items = vec![aspect_line(&task.id, aspect)];
+                if let Some(phase) = &aspect.phase {
+                    items.push(text(&format!("· {phase}"), phase_style(phase)));
+                }
+                if let Some(pr) = &aspect.pr {
+                    items.push(pr_chip(&task.id, pr));
+                }
+                let expanded = self
+                    .ui
+                    .aspect_expanded
+                    .contains(&(task.id.clone(), aspect.name.clone()));
+                if aspect.has_details() {
+                    items.push(button(
+                        &aspect_toggle_label(aspect, expanded),
+                        Control::AspectToggle(task.id.clone(), aspect.name.clone()),
+                        false,
+                    ));
+                }
                 if let Some(session) = self.sessions.aspect(&task.id, &aspect.name) {
                     let bg = match session.state {
                         SessionState::Idle => AMBER,
@@ -707,7 +719,16 @@ impl DashView {
                     };
                     items.push(badge(&session_label(&session, now), bg));
                 }
+                if let Some(waiting) = &aspect.waiting_on {
+                    items.push(text(
+                        &format!("waiting: {waiting}"),
+                        Style::default().fg(AMBER),
+                    ));
+                }
                 lines.extend(flow(items, width, 2));
+                if expanded {
+                    lines.extend(aspect_details(aspect, width));
+                }
             }
         }
         lines
@@ -827,18 +848,123 @@ fn repo_chip(repo: &Repo) -> Item_ {
     }
 }
 
-fn pr_line(owner: &TaskId, pr: &Pr) -> Item_ {
-    let (state, color) = match pr.status {
+fn phase_style(phase: &str) -> Style {
+    let color = if phase.starts_with("await-") {
+        AMBER
+    } else {
+        DIM
+    };
+    Style::default().fg(color)
+}
+
+fn pr_state(status: PrStatus) -> (&'static str, Color) {
+    match status {
         PrStatus::Loading => ("…", DIM),
         PrStatus::Draft => ("draft", DIM),
         PrStatus::Open => ("review", AMBER),
         PrStatus::Merged => ("merged", MERGED),
         PrStatus::Closed => ("closed", CLOSED),
         PrStatus::Unknown => ("?", DIM),
-    };
-    let num = pr
-        .number
-        .map_or_else(|| "#?".to_owned(), |n| format!("#{n}"));
+    }
+}
+
+fn pr_number(pr: &Pr) -> String {
+    pr.number.map_or_else(
+        || {
+            pr.url
+                .rsplit('/')
+                .next()
+                .and_then(|n| n.parse::<u64>().ok())
+                .map_or_else(|| "#?".to_owned(), |n| format!("#{n}"))
+        },
+        |n| format!("#{n}"),
+    )
+}
+
+fn pr_chip(owner: &TaskId, pr: &Pr) -> Item_ {
+    let (state, color) = pr_state(pr.status);
+    widgets::Item {
+        spans: vec![Span::styled(
+            format!(" {} {state} ", pr_number(pr)),
+            Style::default().fg(Color::Black).bg(color),
+        )],
+        control: Some(Control::PrLine(owner.clone(), pr.url.clone())),
+        gap: 1,
+    }
+}
+
+fn aspect_toggle_label(aspect: &AspectRef, expanded: bool) -> String {
+    let arrow = if expanded { "▾" } else { "▸" };
+    let mut parts = Vec::new();
+    if !aspect.todo.is_empty() {
+        let count = TodoCount::of(&aspect.todo);
+        parts.push(format!("todo {}/{}", count.done, count.total()));
+    }
+    match aspect.uncovered_items() {
+        0 => {}
+        1 => parts.push("1 open item".to_owned()),
+        n => parts.push(format!("{n} open items")),
+    }
+    if parts.is_empty() {
+        parts.push("details".to_owned());
+    }
+    format!("{arrow} {}", parts.join(" · "))
+}
+
+fn prose(s: &str, style: Style) -> Vec<Item_> {
+    s.split_whitespace().map(|w| text(w, style)).collect()
+}
+
+fn aspect_details(aspect: &AspectRef, width: u16) -> CardLines {
+    let mut lines = Vec::new();
+    let dim = Style::default().fg(DIM);
+    let mut meta = Vec::new();
+    if let Some(created) = &aspect.created {
+        meta.push(format!("created {created}"));
+    }
+    meta.push(format!(
+        "base {}",
+        aspect.base.as_deref().unwrap_or("default branch")
+    ));
+    lines.extend(flow(vec![text(&meta.join(" · "), dim)], width, 4));
+    for todo in &aspect.todo {
+        let (marker, style) = todo_marker(todo.status);
+        lines.extend(flow(
+            std::iter::once(text(marker, style))
+                .chain(prose(&todo.text, style))
+                .collect(),
+            width,
+            4,
+        ));
+    }
+    if let Some(outcome) = &aspect.outcome {
+        lines.extend(flow(
+            std::iter::once(text("outcome:", dim))
+                .chain(prose(outcome, Style::default()))
+                .collect(),
+            width,
+            4,
+        ));
+    }
+    for item in &aspect.open_items {
+        let (marker, style) = match &item.issue {
+            Some(issue) => (format!("→ {issue}:"), dim),
+            None => ("○".to_owned(), Style::default().fg(AMBER)),
+        };
+        lines.extend(flow(
+            std::iter::once(text(&marker, style))
+                .chain(prose(&item.text, style))
+                .collect(),
+            width,
+            4,
+        ));
+    }
+    lines
+}
+
+fn pr_line(owner: &TaskId, pr: &Pr) -> Item_ {
+    let (state, color) = pr_state(pr.status);
+    let num = pr_number(pr);
     let mut label = format!("{num} ");
     let title = pr.display_title();
     if !title.is_empty() {

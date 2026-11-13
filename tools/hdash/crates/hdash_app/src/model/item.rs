@@ -132,6 +132,8 @@ pub struct UiState {
     pub pr_expanded: HashSet<TaskId>,
     /// Tasks whose todo list is expanded (in-memory; collapsed by default).
     pub todo_expanded: HashSet<TaskId>,
+    /// Aspects whose details are expanded, by task and name (in-memory; collapsed by default).
+    pub aspect_expanded: HashSet<(TaskId, String)>,
     /// The sidebar's project filter text (in-memory).
     pub query: String,
     /// The filter chips that are on (in-memory).
@@ -205,7 +207,7 @@ pub fn merge(model: &mut Model, mut fresh: Model) -> bool {
         for repo in &task.repos {
             git.insert(repo.path.clone(), repo.git.clone());
         }
-        for pr in &task.prs {
+        for pr in task.all_prs() {
             prs.insert(
                 pr.url.clone(),
                 (pr.status, pr.number, pr.live_title.clone()),
@@ -218,7 +220,7 @@ pub fn merge(model: &mut Model, mut fresh: Model) -> bool {
                 repo.git = info.clone();
             }
         }
-        for pr in &mut task.prs {
+        for pr in task.all_prs_mut() {
             if let Some((status, number, title)) = prs.get(&pr.url) {
                 pr.status = *status;
                 pr.number = *number;
