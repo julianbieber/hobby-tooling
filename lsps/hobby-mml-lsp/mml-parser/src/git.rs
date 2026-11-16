@@ -215,7 +215,7 @@ pub enum Resolution {
 pub fn suffix_matches(path: &str, file: &str) -> bool {
     let want: Vec<&str> = file.split('/').filter(|c| !c.is_empty()).collect();
     let have: Vec<&str> = path.split('/').collect();
-    !want.is_empty() && have.len() >= want.len() && have[have.len() - want.len()..] == want[..]
+    !want.is_empty() && have.ends_with(&want)
 }
 
 /// Resolves `file` at the commit `sha`: among the files the diff touches
@@ -347,7 +347,7 @@ pub fn check_links(
                 format!(
                     "`{}` is at {} in {}, past head {head}; the delta may be out of date",
                     branch.value,
-                    &tip[..10.min(tip.len())],
+                    tip.get(..10).unwrap_or(&tip),
                     t.checkout.display()
                 ),
             ));
@@ -365,7 +365,11 @@ pub fn check_links(
             Resolution::Found(path) => match &link.line {
                 None => None,
                 Some(n) => match cache.line_count(&t.checkout, sha, &path) {
-                    Some(count) if n.value >= 1 && (n.value as usize) <= count => None,
+                    Some(count)
+                        if n.value >= 1 && usize::try_from(n.value).is_ok_and(|v| v <= count) =>
+                    {
+                        None
+                    }
                     Some(count) => Some(format!(
                         "line {} is outside {path}, which has {count} lines at {side_name} {sha}",
                         n.value

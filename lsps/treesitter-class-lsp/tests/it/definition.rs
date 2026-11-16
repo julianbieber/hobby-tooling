@@ -92,7 +92,10 @@ impl Server {
     }
 
     fn notify(&mut self, method: &str, params: Value) {
-        send(&mut self.stdin, &json!({"jsonrpc": "2.0", "method": method, "params": params}));
+        send(
+            &mut self.stdin,
+            &json!({"jsonrpc": "2.0", "method": method, "params": params}),
+        );
     }
 
     fn request(&mut self, method: &str, params: Value) -> Value {
@@ -114,7 +117,9 @@ impl Server {
         loop {
             let msg = self.messages.recv_timeout(Duration::from_secs(60)).unwrap();
             let text = msg["params"]["message"].as_str().unwrap_or("");
-            if msg["method"] == "window/logMessage" && text.contains("treesitter-class-lsp: indexed") {
+            if msg["method"] == "window/logMessage"
+                && text.contains("treesitter-class-lsp: indexed")
+            {
                 return;
             }
         }
@@ -178,7 +183,11 @@ fn only_location(answer: &Value) -> (String, u64, u64) {
     let start = &locations[0]["range"]["start"];
     let uri = locations[0]["uri"].as_str().unwrap();
     let file = uri.rsplit('/').next().unwrap().to_string();
-    (file, start["line"].as_u64().unwrap(), start["character"].as_u64().unwrap())
+    (
+        file,
+        start["line"].as_u64().unwrap(),
+        start["character"].as_u64().unwrap(),
+    )
 }
 
 fn every_location(answer: &Value) -> Vec<(String, u64, u64)> {
@@ -188,8 +197,17 @@ fn every_location(answer: &Value) -> Vec<(String, u64, u64)> {
         .iter()
         .map(|location| {
             let start = &location["range"]["start"];
-            let file = location["uri"].as_str().unwrap().rsplit('/').next().unwrap();
-            (file.to_string(), start["line"].as_u64().unwrap(), start["character"].as_u64().unwrap())
+            let file = location["uri"]
+                .as_str()
+                .unwrap()
+                .rsplit('/')
+                .next()
+                .unwrap();
+            (
+                file.to_string(),
+                start["line"].as_u64().unwrap(),
+                start["character"].as_u64().unwrap(),
+            )
         })
         .collect()
 }
@@ -197,7 +215,9 @@ fn every_location(answer: &Value) -> Vec<(String, u64, u64)> {
 // Pins that a class use resolves to the class's name in `class Widget:`, not to the head of the block.
 #[test]
 fn class_use_resolves_to_the_name_of_its_definition() {
-    let Some(fx) = Fixture::new("class") else { return };
+    let Some(fx) = Fixture::new("class") else {
+        return;
+    };
     let mut server = Server::start(&fx.root);
     let app = fx.root.join("app.py");
     server.open(&app, APP_PY);
@@ -210,7 +230,9 @@ fn class_use_resolves_to_the_name_of_its_definition() {
 // Pins that a call to a free function resolves to the name in its `def`.
 #[test]
 fn free_function_use_resolves_to_the_name_in_its_def() {
-    let Some(fx) = Fixture::new("function") else { return };
+    let Some(fx) = Fixture::new("function") else {
+        return;
+    };
     let mut server = Server::start(&fx.root);
     let app = fx.root.join("app.py");
     server.open(&app, APP_PY);
@@ -223,7 +245,9 @@ fn free_function_use_resolves_to_the_name_in_its_def() {
 // Pins that a name nothing in the workspace defines answers no location, which is what makes Helix print "No definition found.".
 #[test]
 fn name_nothing_defines_answers_no_location() {
-    let Some(fx) = Fixture::new("undefined") else { return };
+    let Some(fx) = Fixture::new("undefined") else {
+        return;
+    };
     let mut server = Server::start(&fx.root);
     let app = fx.root.join("app.py");
     server.open(&app, APP_PY);
@@ -236,17 +260,25 @@ fn name_nothing_defines_answers_no_location() {
 // Pins that navigation follows the file on disk: an appended call and definition resolve only after the file is saved.
 #[test]
 fn unsaved_edits_are_invisible_until_the_file_is_saved() {
-    let Some(fx) = Fixture::new("unsaved") else { return };
+    let Some(fx) = Fixture::new("unsaved") else {
+        return;
+    };
     let mut server = Server::start(&fx.root);
     let app = fx.root.join("app.py");
     let edited = format!("{APP_PY}brand_new()\ndef brand_new(): pass\n");
     server.open(&app, &edited);
 
     let unsaved = server.definition(&app, 5, 2);
-    assert!(unsaved.is_null(), "expected no location before saving, got {unsaved}");
+    assert!(
+        unsaved.is_null(),
+        "expected no location before saving, got {unsaved}"
+    );
 
     std::fs::write(&app, &edited).unwrap();
-    server.notify("textDocument/didSave", json!({"textDocument": {"uri": file_uri(&app)}}));
+    server.notify(
+        "textDocument/didSave",
+        json!({"textDocument": {"uri": file_uri(&app)}}),
+    );
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut saved = server.definition(&app, 5, 2);
     while saved.is_null() && Instant::now() < deadline {
@@ -260,8 +292,14 @@ fn unsaved_edits_are_invisible_until_the_file_is_saved() {
 // Pins S4: a name defined in Python and in protobuf lists the Python definition first for a Python buffer, though `defs.proto` sorts before `lib.py`.
 #[test]
 fn definitions_in_the_buffers_language_are_listed_first() {
-    let Some(fx) = Fixture::new("ambiguous") else { return };
-    if LanguageRegistry::load().unwrap().resolve(Path::new("probe.proto")).is_none() {
+    let Some(fx) = Fixture::new("ambiguous") else {
+        return;
+    };
+    if LanguageRegistry::load()
+        .unwrap()
+        .resolve(Path::new("probe.proto"))
+        .is_none()
+    {
         eprintln!("skipping: no protobuf language configured");
         return;
     }
@@ -273,6 +311,9 @@ fn definitions_in_the_buffers_language_are_listed_first() {
 
     assert_eq!(
         every_location(&answer),
-        [("lib.py".to_string(), 9, 6), ("defs.proto".to_string(), 1, 8)]
+        [
+            ("lib.py".to_string(), 9, 6),
+            ("defs.proto".to_string(), 1, 8)
+        ]
     );
 }

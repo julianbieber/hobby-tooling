@@ -1,5 +1,25 @@
+//! Runtime configuration of the server: where to look for justfiles, what to
+//! skip, and how recipes are run.
+
 use serde::Deserialize;
 use std::path::PathBuf;
+
+/// The configuration file exists but could not be used.
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    #[error("cannot read config {path}")]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("invalid config {path}")]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: toml::de::Error,
+    },
+}
 
 /// Directory names never descended into during discovery, regardless of
 /// `.gitignore`. Keeps the tree walk fast and avoids build artefacts.
@@ -70,15 +90,18 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Load config from `~/.config/just_mcp.toml`, falling back to defaults if
-    /// the file is missing or unreadable.
-    pub fn load() -> Self {
+    /// Load config from `~/.config/just_mcp.toml`, falling back to defaults
+    /// when there is no such file. A file that exists but cannot be read or
+    /// parsed is an error, so a typo does not silently run with defaults.
+    pub fn load() -> Result<Self, ConfigError> {
         let Some(path) = dirs::config_dir().map(|d| d.join("just_mcp.toml")) else {
-            return Config::default();
+            return Ok(Config::default());
         };
-        match std::fs::read_to_string(&path) {
-            Ok(contents) => toml::from_str(&contents).unwrap_or_default(),
-            Err(_) => Config::default(),
-        }
+        let contents = match std::fs::read_to_string(&path) {
+            Ok(contents) => contents,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Config::default()),
+            Err(source) => return Err(ConfigError::Read { path, source }),
+        };
+        toml::from_str(&contents).map_err(|source| ConfigError::Parse { path, source })
     }
 }

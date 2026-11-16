@@ -1,13 +1,69 @@
+//! A JSON-RPC client for one language server process: spawning and
+//! initializing it, sending requests and notifications, and keeping the
+//! diagnostics it publishes.
+
 use crate::config::LanguageServerConfig;
-use crate::error::{LspMcpError, Result};
 use lsp_types::*;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::Mutex;
-use std::sync::Arc;
+
+/// Longest a single request may take before the server is considered hung.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Talking to the language server failed.
+#[derive(Debug, thiserror::Error)]
+pub enum LspError {
+    #[error("failed to spawn {command}")]
+    Spawn {
+        command: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("workspace root is not an absolute path: {}", .0.display())]
+    InvalidRoot(PathBuf),
+    #[error("cannot write to the language server")]
+    Write(#[source] std::io::Error),
+    #[error("cannot read from the language server")]
+    Read(#[source] std::io::Error),
+    #[error("message from the language server has no Content-Length header")]
+    MissingContentLength,
+    #[error("invalid Content-Length header: {0}")]
+    InvalidContentLength(String),
+    #[error("message from the language server is not UTF-8")]
+    NotUtf8(#[source] std::string::FromUtf8Error),
+    #[error("message from the language server is not JSON")]
+    MalformedMessage(#[source] serde_json::Error),
+    #[error("cannot encode {method} for the language server")]
+    Encode {
+        method: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    /// The server answered the request with a JSON-RPC error.
+    #[error("{method} failed: {error}")]
+    Rejected {
+        method: String,
+        error: serde_json::Value,
+    },
+    #[error("{method} response has no result")]
+    MissingResult { method: String },
+    #[error("unexpected {method} result")]
+    UnexpectedResult {
+        method: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    /// The server did not answer in time. The process is killed, so the next
+    /// lookup through the manager starts a fresh one.
+    #[error("{method} got no response within {}s; the server was stopped", REQUEST_TIMEOUT.as_secs())]
+    TimedOut { method: String },
+}
 
 /// Maximum time to wait for an LSP server to finish its initial indexing.
 const MAX_INDEXING_WAIT: Duration = Duration::from_secs(60);
@@ -57,19 +113,19 @@ fn is_indexing_end(value: &serde_json::Value) -> bool {
 
 /// A client for communicating with an LSP server process
 pub struct LspClient {
-    _process: Arc<Mutex<tokio::process::Child>>,
-    stdin: Arc<Mutex<tokio::process::ChildStdin>>,
-    stdout_reader: Arc<Mutex<BufReader<tokio::process::ChildStdout>>>,
-    next_id: Arc<Mutex<i32>>,
+    process: parking_lot::Mutex<tokio::process::Child>,
+    stdin: Mutex<tokio::process::ChildStdin>,
+    stdout_reader: Mutex<BufReader<tokio::process::ChildStdout>>,
+    next_id: AtomicI32,
     server_name: String,
-    diagnostics: Arc<Mutex<HashMap<Url, Vec<Diagnostic>>>>,
+    diagnostics: parking_lot::Mutex<HashMap<Url, Vec<Diagnostic>>>,
     /// Serializes whole request/response cycles. The read loop consumes
     /// messages until it sees its own response id, so two requests in flight at
     /// once would steal and discard each other's responses and then block
     /// forever. Holding this for the duration of a request makes a single
     /// client safe to share across concurrent callers (overlapping async MCP
     /// tool calls hit the same cached client).
-    request_lock: Arc<Mutex<()>>,
+    request_lock: Mutex<()>,
 }
 
 impl LspClient {
@@ -78,8 +134,7 @@ impl LspClient {
         server_name: String,
         config: &LanguageServerConfig,
         workspace_root: &std::path::Path,
-    ) -> Result<Self> {
-        // Spawn the LSP server process
+    ) -> Result<Self, LspError> {
         let mut child = Command::new(&config.command)
             .args(&config.args)
             .envs(&config.environment)
@@ -88,45 +143,40 @@ impl LspClient {
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()
-            .map_err(|e| LspMcpError::LspRequestFailed(format!("Failed to spawn {}: {}", config.command, e)))?;
+            .map_err(|source| LspError::Spawn {
+                command: config.command.clone(),
+                source,
+            })?;
 
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| LspMcpError::LspRequestFailed("Failed to get stdin".to_string()))?;
-
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| LspMcpError::LspRequestFailed("Failed to get stdout".to_string()))?;
-
-        let stdout_reader = BufReader::new(stdout);
+        let (stdin, stdout) = take_pipes(&mut child);
 
         let mut client = Self {
-            _process: Arc::new(Mutex::new(child)),
-            stdin: Arc::new(Mutex::new(stdin)),
-            stdout_reader: Arc::new(Mutex::new(stdout_reader)),
-            next_id: Arc::new(Mutex::new(1)),
+            process: parking_lot::Mutex::new(child),
+            stdin: Mutex::new(stdin),
+            stdout_reader: Mutex::new(BufReader::new(stdout)),
+            next_id: AtomicI32::new(1),
             server_name,
-            diagnostics: Arc::new(Mutex::new(HashMap::new())),
-            request_lock: Arc::new(Mutex::new(())),
+            diagnostics: parking_lot::Mutex::new(HashMap::new()),
+            request_lock: Mutex::new(()),
         };
 
-        // Initialize the server
         client.initialize(workspace_root).await?;
 
         Ok(client)
     }
 
     /// Initialize the LSP server
-    async fn initialize(&mut self, workspace_root: &std::path::Path) -> Result<()> {
+    async fn initialize(&mut self, workspace_root: &std::path::Path) -> Result<(), LspError> {
         let root_uri = Url::from_file_path(workspace_root)
-            .map_err(|_| LspMcpError::InvalidUri(workspace_root.display().to_string()))?;
+            .map_err(|()| LspError::InvalidRoot(workspace_root.to_path_buf()))?;
 
+        #[expect(
+            deprecated,
+            reason = "servers that predate workspace folders still root themselves at root_uri"
+        )]
         let init_params = InitializeParams {
             process_id: Some(std::process::id()),
             root_uri: Some(root_uri.clone()),
-            root_path: None, // Deprecated
             initialization_options: None,
             capabilities: ClientCapabilities {
                 workspace: Some(WorkspaceClientCapabilities {
@@ -180,7 +230,8 @@ impl LspClient {
         let _init_result: InitializeResult = self.send_request("initialize", init_params).await?;
 
         // Send initialized notification
-        self.send_notification("initialized", InitializedParams {}).await?;
+        self.send_notification("initialized", InitializedParams {})
+            .await?;
 
         // Wait for the server to finish its initial indexing/cache priming.
         // Symbol search and diagnostics return empty until this completes, so
@@ -204,10 +255,10 @@ impl LspClient {
 
         loop {
             if start.elapsed() >= MAX_INDEXING_WAIT {
-                eprintln!(
-                    "[lsp-mcp] '{}' indexing wait hit the {}s cap; proceeding",
-                    self.server_name,
-                    MAX_INDEXING_WAIT.as_secs()
+                tracing::warn!(
+                    server = %self.server_name,
+                    cap_secs = MAX_INDEXING_WAIT.as_secs(),
+                    "indexing wait hit the cap; proceeding"
                 );
                 break;
             }
@@ -224,10 +275,7 @@ impl LspClient {
 
                         // Stop as soon as a rust-analyzer-style indexing token ends.
                         if is_indexing_end(&value) {
-                            eprintln!(
-                                "[lsp-mcp] '{}' reported indexing complete",
-                                self.server_name
-                            );
+                            tracing::info!(server = %self.server_name, "indexing complete");
                             break;
                         }
                     }
@@ -257,19 +305,18 @@ impl LspClient {
     /// notification (no `id`) or a server→client request (has `id`).
     /// Stores `publishDiagnostics` and replies to requests so the server does
     /// not stall waiting on us. Returns without error for unrecognized methods.
-    async fn handle_server_message(&self, value: &serde_json::Value) -> Result<()> {
+    async fn handle_server_message(&self, value: &serde_json::Value) -> Result<(), LspError> {
         let method = value.get("method").and_then(|m| m.as_str()).unwrap_or("");
 
         // Capture pushed diagnostics regardless of request/notification.
-        if method == "textDocument/publishDiagnostics" {
-            if let Some(params) = value.get("params") {
-                if let Ok(diag_params) =
-                    serde_json::from_value::<PublishDiagnosticsParams>(params.clone())
-                {
-                    let mut diagnostics = self.diagnostics.lock().await;
-                    diagnostics.insert(diag_params.uri, diag_params.diagnostics);
-                }
-            }
+        if method == "textDocument/publishDiagnostics"
+            && let Some(params) = value.get("params")
+            && let Ok(diag_params) =
+                serde_json::from_value::<PublishDiagnosticsParams>(params.clone())
+        {
+            self.diagnostics
+                .lock()
+                .insert(diag_params.uri, diag_params.diagnostics);
         }
 
         // A server→client request carries an `id` and must be answered.
@@ -295,32 +342,31 @@ impl LspClient {
     }
 
     /// Send a JSON-RPC response to a server-initiated request.
-    async fn send_response(&self, id: &serde_json::Value, result: serde_json::Value) -> Result<()> {
+    async fn send_response(
+        &self,
+        id: &serde_json::Value,
+        result: serde_json::Value,
+    ) -> Result<(), LspError> {
         let response = serde_json::json!({
             "jsonrpc": "2.0",
             "id": id,
             "result": result,
         });
+        self.write_message(&response.to_string()).await
+    }
 
-        let response_str = serde_json::to_string(&response).map_err(LspMcpError::JsonError)?;
-        let message = format!(
-            "Content-Length: {}\r\n\r\n{}",
-            response_str.len(),
-            response_str
-        );
-
+    async fn write_message(&self, body: &str) -> Result<(), LspError> {
+        let message = format!("Content-Length: {}\r\n\r\n{}", body.len(), body);
         let mut stdin = self.stdin.lock().await;
         stdin
             .write_all(message.as_bytes())
             .await
-            .map_err(LspMcpError::IoError)?;
-        stdin.flush().await.map_err(LspMcpError::IoError)?;
-
-        Ok(())
+            .map_err(LspError::Write)?;
+        stdin.flush().await.map_err(LspError::Write)
     }
 
     /// Send textDocument/didOpen notification
-    pub async fn did_open(&self, uri: &Url, language_id: &str, text: &str) -> Result<()> {
+    pub async fn did_open(&self, uri: &Url, language_id: &str, text: &str) -> Result<(), LspError> {
         let params = DidOpenTextDocumentParams {
             text_document: TextDocumentItem {
                 uri: uri.clone(),
@@ -334,7 +380,7 @@ impl LspClient {
     }
 
     /// Send workspace/symbol request
-    pub async fn workspace_symbol(&self, query: &str) -> Result<Vec<SymbolInformation>> {
+    pub async fn workspace_symbol(&self, query: &str) -> Result<Vec<SymbolInformation>, LspError> {
         let params = WorkspaceSymbolParams {
             query: query.to_string(),
             partial_result_params: PartialResultParams::default(),
@@ -342,34 +388,15 @@ impl LspClient {
         };
 
         // WorkspaceSymbolResponse can be either Flat(Vec<SymbolInformation>) or Nested(Vec<WorkspaceSymbol>)
-        let response: Option<WorkspaceSymbolResponse> = self.send_request("workspace/symbol", params).await?;
+        let response: Option<WorkspaceSymbolResponse> =
+            self.send_request("workspace/symbol", params).await?;
 
         let symbols = match response {
             Some(WorkspaceSymbolResponse::Flat(symbols)) => symbols,
-            Some(WorkspaceSymbolResponse::Nested(workspace_symbols)) => {
-                // Convert WorkspaceSymbol to SymbolInformation
-                workspace_symbols
-                    .into_iter()
-                    .filter_map(|ws| {
-                        // WorkspaceSymbol.location can be either Location or just { uri }
-                        let location = match ws.location {
-                            OneOf::Left(loc) => loc,
-                            OneOf::Right(ws_loc) => Location {
-                                uri: ws_loc.uri,
-                                range: lsp_types::Range::default(), // No range available
-                            },
-                        };
-                        Some(SymbolInformation {
-                            name: ws.name,
-                            kind: ws.kind,
-                            tags: ws.tags,
-                            deprecated: None,
-                            location,
-                            container_name: ws.container_name,
-                        })
-                    })
-                    .collect()
-            }
+            Some(WorkspaceSymbolResponse::Nested(workspace_symbols)) => workspace_symbols
+                .into_iter()
+                .map(flatten_workspace_symbol)
+                .collect(),
             None => vec![],
         };
 
@@ -377,20 +404,29 @@ impl LspClient {
     }
 
     /// Send textDocument/documentSymbol request
-    pub async fn document_symbol(&self, uri: &Url) -> Result<Option<DocumentSymbolResponse>> {
+    pub async fn document_symbol(
+        &self,
+        uri: &Url,
+    ) -> Result<Option<DocumentSymbolResponse>, LspError> {
         let params = DocumentSymbolParams {
             text_document: TextDocumentIdentifier { uri: uri.clone() },
             work_done_progress_params: WorkDoneProgressParams::default(),
             partial_result_params: PartialResultParams::default(),
         };
 
-        let response: Option<DocumentSymbolResponse> = self.send_request("textDocument/documentSymbol", params).await?;
+        let response: Option<DocumentSymbolResponse> = self
+            .send_request("textDocument/documentSymbol", params)
+            .await?;
 
         Ok(response)
     }
 
     /// Send textDocument/definition request
-    pub async fn goto_definition(&self, uri: &Url, position: Position) -> Result<Option<GotoDefinitionResponse>> {
+    pub async fn goto_definition(
+        &self,
+        uri: &Url,
+        position: Position,
+    ) -> Result<Option<GotoDefinitionResponse>, LspError> {
         let params = GotoDefinitionParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri: uri.clone() },
@@ -400,13 +436,19 @@ impl LspClient {
             partial_result_params: PartialResultParams::default(),
         };
 
-        let response: Option<GotoDefinitionResponse> = self.send_request("textDocument/definition", params).await?;
+        let response: Option<GotoDefinitionResponse> =
+            self.send_request("textDocument/definition", params).await?;
 
         Ok(response)
     }
 
     /// Send textDocument/references request
-    pub async fn find_references(&self, uri: &Url, position: Position, include_declaration: bool) -> Result<Option<Vec<Location>>> {
+    pub async fn find_references(
+        &self,
+        uri: &Url,
+        position: Position,
+        include_declaration: bool,
+    ) -> Result<Option<Vec<Location>>, LspError> {
         let params = ReferenceParams {
             text_document_position: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri: uri.clone() },
@@ -419,17 +461,14 @@ impl LspClient {
             },
         };
 
-        let response: Option<Vec<Location>> = self.send_request("textDocument/references", params).await?;
+        let response: Option<Vec<Location>> =
+            self.send_request("textDocument/references", params).await?;
 
         Ok(response)
     }
 
     /// Send textDocument/hover request
-    pub async fn hover(
-        &self,
-        uri: &Url,
-        position: Position,
-    ) -> Result<Option<Hover>> {
+    pub async fn hover(&self, uri: &Url, position: Position) -> Result<Option<Hover>, LspError> {
         let params = HoverParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri: uri.clone() },
@@ -446,7 +485,7 @@ impl LspClient {
         &self,
         uri: &Url,
         position: Position,
-    ) -> Result<Option<CompletionResponse>> {
+    ) -> Result<Option<CompletionResponse>, LspError> {
         let params = CompletionParams {
             text_document_position: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri: uri.clone() },
@@ -464,7 +503,7 @@ impl LspClient {
     }
 
     /// Pull diagnostics for a document using textDocument/diagnostic (LSP 3.17+)
-    pub async fn pull_diagnostics(&self, uri: &Url) -> Result<Vec<Diagnostic>> {
+    pub async fn pull_diagnostics(&self, uri: &Url) -> Result<Vec<Diagnostic>, LspError> {
         let params = DocumentDiagnosticParams {
             text_document: TextDocumentIdentifier { uri: uri.clone() },
             identifier: None,
@@ -478,9 +517,7 @@ impl LspClient {
 
         let diagnostics = match response {
             DocumentDiagnosticReportResult::Report(report) => match report {
-                DocumentDiagnosticReport::Full(full) => {
-                    full.full_document_diagnostic_report.items
-                }
+                DocumentDiagnosticReport::Full(full) => full.full_document_diagnostic_report.items,
                 DocumentDiagnosticReport::Unchanged(_) => vec![],
             },
             DocumentDiagnosticReportResult::Partial(_) => vec![],
@@ -490,9 +527,12 @@ impl LspClient {
     }
 
     /// Get stored diagnostics for a URI (from publishDiagnostics notifications)
-    pub async fn get_stored_diagnostics(&self, uri: &Url) -> Vec<Diagnostic> {
-        let diagnostics = self.diagnostics.lock().await;
-        diagnostics.get(uri).cloned().unwrap_or_default()
+    pub fn get_stored_diagnostics(&self, uri: &Url) -> Vec<Diagnostic> {
+        self.diagnostics
+            .lock()
+            .get(uri)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Send textDocument/codeAction request
@@ -501,7 +541,7 @@ impl LspClient {
         uri: &Url,
         range: Range,
         diagnostics: Vec<Diagnostic>,
-    ) -> Result<Option<CodeActionResponse>> {
+    ) -> Result<Option<CodeActionResponse>, LspError> {
         let params = CodeActionParams {
             text_document: TextDocumentIdentifier { uri: uri.clone() },
             range,
@@ -522,18 +562,9 @@ impl LspClient {
         &self,
         method: &str,
         params: P,
-    ) -> Result<R> {
-        // Serialize the whole request/response cycle: the read loop below
-        // consumes messages until it finds this request's id, so two concurrent
-        // requests on the same client would discard each other's responses.
+    ) -> Result<R, LspError> {
         let _req_guard = self.request_lock.lock().await;
-
-        let id = {
-            let mut next_id = self.next_id.lock().await;
-            let id = *next_id;
-            *next_id += 1;
-            id
-        };
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
 
         let request = serde_json::json!({
             "jsonrpc": "2.0",
@@ -542,62 +573,76 @@ impl LspClient {
             "params": params,
         });
 
-        let request_str = serde_json::to_string(&request)
-            .map_err(|e| LspMcpError::JsonError(e))?;
+        let exchange = async {
+            self.write_message(&request.to_string()).await?;
+            self.read_response(id, method).await
+        };
+        let result = self.within_timeout(method, exchange).await?;
+        serde_json::from_value(result).map_err(|source| LspError::UnexpectedResult {
+            method: method.to_string(),
+            source,
+        })
+    }
 
-        let message = format!("Content-Length: {}\r\n\r\n{}", request_str.len(), request_str);
-
-        // Send request
-        {
-            let mut stdin = self.stdin.lock().await;
-            stdin
-                .write_all(message.as_bytes())
-                .await
-                .map_err(|e| LspMcpError::IoError(e))?;
-            stdin.flush().await.map_err(|e| LspMcpError::IoError(e))?;
-        }
-
-        // Read messages until we get the response with matching ID. The server
-        // can interleave notifications (progress, diagnostics) and its own
-        // requests (workspace/configuration, etc.) at any time.
+    /// Read messages until the response to request `id` arrives, handling the
+    /// notifications and server→client requests the server interleaves.
+    async fn read_response(&self, id: i32, method: &str) -> Result<serde_json::Value, LspError> {
         loop {
-            let response_str = self.read_message().await?;
-            let response: serde_json::Value = serde_json::from_str(&response_str)
-                .map_err(|e| LspMcpError::JsonError(e))?;
+            let raw = self.read_message().await?;
+            let mut response: serde_json::Value =
+                serde_json::from_str(&raw).map_err(LspError::MalformedMessage)?;
 
-            // Any message carrying a `method` is server-initiated: either a
-            // notification (no `id`) or a server→client request (with an `id`
-            // in the *server's* id namespace, which can collide with ours).
-            // Handle it (store diagnostics / reply to requests) and keep reading.
             if response.get("method").is_some() {
                 self.handle_server_message(&response).await?;
                 continue;
             }
 
-            // Otherwise this is a response. It must match our request id.
             if response.get("id") != Some(&serde_json::json!(id)) {
-                eprintln!(
-                    "[lsp-mcp] Skipping response with mismatched id: expected {}, got {:?}",
-                    id,
-                    response.get("id")
+                tracing::warn!(
+                    server = %self.server_name,
+                    expected = id,
+                    got = ?response.get("id"),
+                    "skipping response with mismatched id"
                 );
                 continue;
             }
 
-            // Check for error
-            if let Some(error) = response.get("error") {
-                return Err(LspMcpError::LspRequestFailed(format!(
-                    "LSP error: {}",
-                    error
-                )));
+            if let Some(error) = response.get_mut("error") {
+                return Err(LspError::Rejected {
+                    method: method.to_string(),
+                    error: error.take(),
+                });
             }
 
-            // Extract result
-            let result = response
-                .get("result")
-                .ok_or_else(|| LspMcpError::LspRequestFailed("No result in response".to_string()))?;
+            return response
+                .get_mut("result")
+                .map(serde_json::Value::take)
+                .ok_or_else(|| LspError::MissingResult {
+                    method: method.to_string(),
+                });
+        }
+    }
 
-            return serde_json::from_value(result.clone()).map_err(|e| LspMcpError::JsonError(e));
+    /// Run one exchange with the server under [`REQUEST_TIMEOUT`]. A timed-out
+    /// exchange may have stopped mid-message, so the stream can no longer be
+    /// trusted and the process is killed.
+    async fn within_timeout<T>(
+        &self,
+        method: &str,
+        exchange: impl Future<Output = Result<T, LspError>>,
+    ) -> Result<T, LspError> {
+        match tokio::time::timeout(REQUEST_TIMEOUT, exchange).await {
+            Ok(result) => result,
+            Err(_) => {
+                tracing::warn!(server = %self.server_name, method, "request timed out; stopping the server");
+                if let Err(e) = self.process.lock().start_kill() {
+                    let error: &dyn std::error::Error = &e;
+                    tracing::warn!(server = %self.server_name, error, "could not kill the server");
+                }
+                Err(LspError::TimedOut {
+                    method: method.to_string(),
+                })
+            }
         }
     }
 
@@ -606,89 +651,95 @@ impl LspClient {
         &self,
         method: &str,
         params: P,
-    ) -> Result<()> {
+    ) -> Result<(), LspError> {
         let notification = serde_json::json!({
             "jsonrpc": "2.0",
             "method": method,
             "params": params,
         });
-
-        let notification_str = serde_json::to_string(&notification)
-            .map_err(|e| LspMcpError::JsonError(e))?;
-
-        let message = format!(
-            "Content-Length: {}\r\n\r\n{}",
-            notification_str.len(),
-            notification_str
-        );
-
-        let mut stdin = self.stdin.lock().await;
-        stdin
-            .write_all(message.as_bytes())
+        self.within_timeout(method, self.write_message(&notification.to_string()))
             .await
-            .map_err(|e| LspMcpError::IoError(e))?;
-        stdin.flush().await.map_err(|e| LspMcpError::IoError(e))?;
-
-        Ok(())
     }
 
-    /// Read a single LSP message from stdout
-    async fn read_message(&self) -> Result<String> {
+    async fn read_message(&self) -> Result<String, LspError> {
         let mut reader = self.stdout_reader.lock().await;
 
-        // Read headers
         let mut content_length: Option<usize> = None;
         let mut line = String::new();
 
         loop {
             line.clear();
-            reader
-                .read_line(&mut line)
-                .await
-                .map_err(|e| LspMcpError::IoError(e))?;
+            let read = reader.read_line(&mut line).await.map_err(LspError::Read)?;
+            if read == 0 {
+                return Err(LspError::Read(std::io::ErrorKind::UnexpectedEof.into()));
+            }
 
             if line == "\r\n" {
-                // End of headers
                 break;
             }
 
-            if line.starts_with("Content-Length: ") {
-                let len_str = line.trim_start_matches("Content-Length: ").trim();
+            if let Some(len_str) = line.strip_prefix("Content-Length: ") {
+                let len_str = len_str.trim();
                 content_length = Some(
                     len_str
                         .parse()
-                        .map_err(|_| LspMcpError::LspRequestFailed("Invalid Content-Length".to_string()))?,
+                        .map_err(|_| LspError::InvalidContentLength(len_str.to_string()))?,
                 );
             }
         }
 
-        let content_length = content_length
-            .ok_or_else(|| LspMcpError::LspRequestFailed("Missing Content-Length header".to_string()))?;
+        let content_length = content_length.ok_or(LspError::MissingContentLength)?;
 
-        // Read content
         let mut buffer = vec![0u8; content_length];
-        use tokio::io::AsyncReadExt;
         reader
             .read_exact(&mut buffer)
             .await
-            .map_err(|e| LspMcpError::IoError(e))?;
+            .map_err(LspError::Read)?;
 
-        String::from_utf8(buffer)
-            .map_err(|e| LspMcpError::LspRequestFailed(format!("Invalid UTF-8: {}", e)))
+        String::from_utf8(buffer).map_err(LspError::NotUtf8)
     }
 
     pub fn server_name(&self) -> &str {
         &self.server_name
     }
 
-    /// Check if the LSP server process is still alive
-    pub async fn is_alive(&self) -> bool {
-        let mut process = self._process.lock().await;
-        // try_wait returns Ok(Some(status)) if exited, Ok(None) if still running, Err on error
-        match process.try_wait() {
-            Ok(None) => true,  // Process is still running
-            Ok(Some(_)) => false,  // Process has exited
-            Err(_) => false,  // Error checking status, assume dead
-        }
+    /// Whether the server process is still running. A process whose status
+    /// cannot be read counts as dead.
+    pub fn is_alive(&self) -> bool {
+        matches!(self.process.lock().try_wait(), Ok(None))
     }
+}
+
+#[expect(
+    deprecated,
+    reason = "SymbolInformation has no constructor that leaves its deprecated field out"
+)]
+fn flatten_workspace_symbol(ws: WorkspaceSymbol) -> SymbolInformation {
+    let location = match ws.location {
+        OneOf::Left(loc) => loc,
+        OneOf::Right(ws_loc) => Location {
+            uri: ws_loc.uri,
+            range: lsp_types::Range::default(),
+        },
+    };
+    SymbolInformation {
+        name: ws.name,
+        kind: ws.kind,
+        tags: ws.tags,
+        deprecated: None,
+        location,
+        container_name: ws.container_name,
+    }
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "stdin and stdout are set to piped on the command before spawning"
+)]
+fn take_pipes(
+    child: &mut tokio::process::Child,
+) -> (tokio::process::ChildStdin, tokio::process::ChildStdout) {
+    let stdin = child.stdin.take().expect("stdin is piped");
+    let stdout = child.stdout.take().expect("stdout is piped");
+    (stdin, stdout)
 }

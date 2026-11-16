@@ -1,13 +1,14 @@
 //! Seeding a task's pipeline state from its coordinator's list and goal file.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use serde::Serialize;
 
 use crate::clock;
-use crate::goal::{self, Decision, Goal};
-use crate::model::{Coordinator, STATE_FILE, TaskEntry};
+use crate::goal::{self, Decision, Goal, MissingScenarios};
+use crate::model::{Coordinator, LoadError, STATE_FILE, TaskEntry};
+use crate::output::Output;
 
 const CONTEXT_FILE: &str = "business-context.md";
 
@@ -20,6 +21,66 @@ pub struct Seeded {
     pub context: Option<String>,
     /// How many of the goal's decisions concern the task.
     pub decisions: usize,
+}
+
+/// A goal and task list that cannot seed this task.
+#[derive(Debug, thiserror::Error)]
+pub enum SeedError {
+    #[error("the goal does not lint, so it cannot seed a run:\n{}", .0.join("\n"))]
+    Lint(Vec<String>),
+    #[error(transparent)]
+    Missing(#[from] MissingScenarios),
+    #[error("task {0} owns no scenario")]
+    OwnsNoScenario(String),
+    #[error("task {task} is enabling for {consumer}, which the list does not have")]
+    EnablesUnknown { task: String, consumer: String },
+    #[error("cannot render the state file: {0}")]
+    Render(#[from] serde_json::Error),
+}
+
+/// Why `hcoord seed` wrote nothing.
+#[derive(Debug, thiserror::Error)]
+pub enum RunError {
+    #[error("cannot read {}: {source}", path.display())]
+    Dir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(transparent)]
+    List(#[from] LoadError),
+    #[error("no task {task} in {}", list.display())]
+    NoTask { task: String, list: PathBuf },
+    #[error("tasks.json names no goal; seed this task by hand")]
+    NoGoal,
+    #[error("cannot read goal {}: {source}", path.display())]
+    GoalPath {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("cannot read {}: {source}", path.display())]
+    GoalText {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(transparent)]
+    Seed(#[from] SeedError),
+    #[error("{} exists; the task is already seeded (--force overwrites)", .0.display())]
+    AlreadySeeded(PathBuf),
+    #[error("cannot create {}: {source}", path.display())]
+    CreateDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("cannot write {}: {source}", path.display())]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 #[derive(Serialize)]
@@ -59,7 +120,7 @@ pub fn seed(
     goal_path: &Path,
     goal_text: &str,
     now: i64,
-) -> Result<Seeded, String> {
+) -> Result<Seeded, SeedError> {
     let parsed = goal::parse(goal_text);
     let mut findings = goal::lint(&parsed);
     findings.extend(goal::lint_tasks(&parsed, coord));
@@ -74,15 +135,9 @@ pub fn seed(
                 }
             })
             .collect();
-        return Err(format!(
-            "the goal does not lint, so it cannot seed a run:\n{}",
-            lines.join("\n")
-        ));
+        return Err(SeedError::Lint(lines));
     }
-    let show = |ids: &[String]| {
-        goal::show_text(&parsed, ids)
-            .map_err(|missing| format!("no such scenario: {}", missing.join(", ")))
-    };
+    let show = |ids: &[String]| goal::show_text(&parsed, ids);
     let unlocks = enabled(coord, entry)?;
     let acceptance = match unlocks {
         None => show(&entry.scenarios)?,
@@ -127,11 +182,11 @@ pub fn seed(
         phase_since: written.clone(),
         written,
     };
-    let mut state = serde_json::to_string_pretty(&state).map_err(|e| e.to_string())?;
+    let mut state = serde_json::to_string_pretty(&state)?;
     state.push('\n');
 
     let context = (!selected.is_empty())
-        .then(|| business_context(&entry.task, goal_path, &selected, &clock::rfc3339_utc(now)));
+        .then(|| business_context(&entry.task, goal_path, &selected, &clock::date_utc(now)));
     Ok(Seeded {
         state,
         context,
@@ -149,40 +204,36 @@ pub fn seed(
 /// task is not in `tasks.json`; `tasks.json` names no `goal`; the goal cannot be read,
 /// or `seed` refuses it; or `build-task.json` — or `business-context.md`, when one
 /// would be written — already exists and `force` is not set. `force` overwrites them.
-pub fn run(dir: &Path, task: &str, force: bool) -> ExitCode {
-    match try_run(dir, task, force) {
-        Ok(line) => {
-            println!("{line}");
-            ExitCode::SUCCESS
-        }
-        Err(e) => {
-            eprintln!("hcoord seed: {e}");
-            ExitCode::from(1)
-        }
-    }
+pub fn run(dir: &Path, task: &str, force: bool) -> Result<Output, RunError> {
+    try_run(dir, task, force).map(|line| Output::line(&line, ExitCode::SUCCESS))
 }
 
-fn try_run(dir: &Path, task: &str, force: bool) -> Result<String, String> {
-    let dir = dir
-        .canonicalize()
-        .map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
-    let coord = Coordinator::load(&dir)?;
-    let entry = coord.tasks.iter().find(|t| t.task == task).ok_or_else(|| {
-        format!(
-            "no task {task} in {}",
-            Coordinator::tasks_path(&dir).display()
-        )
+fn try_run(dir: &Path, task: &str, force: bool) -> Result<String, RunError> {
+    let dir = dir.canonicalize().map_err(|source| RunError::Dir {
+        path: dir.to_path_buf(),
+        source,
     })?;
-    let goal_rel = coord
-        .goal
-        .as_deref()
-        .ok_or("tasks.json names no goal; seed this task by hand")?;
+    let coord = Coordinator::load(&dir)?;
+    let entry = coord
+        .tasks
+        .iter()
+        .find(|t| t.task == task)
+        .ok_or_else(|| RunError::NoTask {
+            task: task.to_owned(),
+            list: Coordinator::tasks_path(&dir),
+        })?;
+    let goal_rel = coord.goal.as_deref().ok_or(RunError::NoGoal)?;
     let goal_path = dir
         .join(goal_rel)
         .canonicalize()
-        .map_err(|e| format!("cannot read goal {}: {e}", dir.join(goal_rel).display()))?;
-    let goal_text = std::fs::read_to_string(&goal_path)
-        .map_err(|e| format!("cannot read {}: {e}", goal_path.display()))?;
+        .map_err(|source| RunError::GoalPath {
+            path: dir.join(goal_rel),
+            source,
+        })?;
+    let goal_text = std::fs::read_to_string(&goal_path).map_err(|source| RunError::GoalText {
+        path: goal_path.clone(),
+        source,
+    })?;
 
     let seeded = seed(
         &dir,
@@ -202,25 +253,28 @@ fn try_run(dir: &Path, task: &str, force: bool) -> Result<String, String> {
             .chain(seeded.context.is_some().then_some(&context_path))
         {
             if path.exists() {
-                return Err(format!(
-                    "{} exists; the task is already seeded (--force overwrites)",
-                    path.display()
-                ));
+                return Err(RunError::AlreadySeeded(path.clone()));
             }
         }
     }
-    std::fs::create_dir_all(&notes)
-        .map_err(|e| format!("cannot create {}: {e}", notes.display()))?;
-    std::fs::write(&state_path, &seeded.state)
-        .map_err(|e| format!("cannot write {}: {e}", state_path.display()))?;
+    std::fs::create_dir_all(&notes).map_err(|source| RunError::CreateDir {
+        path: notes.clone(),
+        source,
+    })?;
+    std::fs::write(&state_path, &seeded.state).map_err(|source| RunError::Write {
+        path: state_path.clone(),
+        source,
+    })?;
     let owned = match entry.enables().filter(|_| entry.scenarios.is_empty()) {
         Some(consumer) => format!("enabling -> {consumer}"),
         None => entry.scenarios.join(", "),
     };
     let mut line = format!("seeded {}: {STATE_FILE} ({owned})", notes.display());
     if let Some(context) = &seeded.context {
-        std::fs::write(&context_path, context)
-            .map_err(|e| format!("cannot write {}: {e}", context_path.display()))?;
+        std::fs::write(&context_path, context).map_err(|source| RunError::Write {
+            path: context_path.clone(),
+            source,
+        })?;
         line.push_str(&format!(
             ", {CONTEXT_FILE} ({} decisions)",
             seeded.decisions
@@ -339,23 +393,24 @@ fn screens_named(goal: &Goal, ids: &[String], goal_path: &Path) -> String {
     }
 }
 
-fn enabled<'a>(coord: &'a Coordinator, entry: &TaskEntry) -> Result<Option<&'a TaskEntry>, String> {
+fn enabled<'a>(
+    coord: &'a Coordinator,
+    entry: &TaskEntry,
+) -> Result<Option<&'a TaskEntry>, SeedError> {
     if !entry.scenarios.is_empty() {
         return Ok(None);
     }
     let consumer = entry
         .enables()
-        .ok_or_else(|| format!("task {} owns no scenario", entry.task))?;
+        .ok_or_else(|| SeedError::OwnsNoScenario(entry.task.clone()))?;
     coord
         .tasks
         .iter()
         .find(|t| t.task == consumer)
         .map(Some)
-        .ok_or_else(|| {
-            format!(
-                "task {} is enabling for {consumer}, which the list does not have",
-                entry.task
-            )
+        .ok_or_else(|| SeedError::EnablesUnknown {
+            task: entry.task.clone(),
+            consumer: consumer.to_owned(),
         })
 }
 
@@ -401,7 +456,7 @@ fn business_context(task: &str, goal_path: &Path, selected: &[&Decision], today:
     let mut out = format!(
         "---\ntitle: \"{task} — business context\"\ncreated: {}\ntags:\n  - business-context\n---\n\n\
          Copied verbatim by `hcoord seed` from the goal `{}`: the decisions that name this task or its scenarios.\n",
-        &today[..10],
+        today,
         goal_path.display()
     );
     for d in selected {
@@ -458,7 +513,7 @@ mod tests {
         )
     }
 
-    fn seeded(coord: &Coordinator, index: usize) -> Result<Seeded, String> {
+    fn seeded(coord: &Coordinator, index: usize) -> Result<Seeded, SeedError> {
         seed(
             Path::new("/n/p/coordinator/b"),
             coord,
@@ -533,7 +588,7 @@ mod tests {
     #[test]
     fn a_task_with_no_scenarios_is_refused() {
         let coord = list(r#"[{"task":"b-one","title":"One"}]"#);
-        let e = seeded(&coord, 0).unwrap_err();
+        let e = seeded(&coord, 0).unwrap_err().to_string();
         assert!(e.contains("owns no scenario"), "{e}");
     }
 
@@ -569,7 +624,8 @@ mod tests {
             &GOAL.replace("-> it opens", "-> it opens?"),
             0,
         )
-        .unwrap_err();
+        .unwrap_err()
+        .to_string();
         assert!(e.contains("open question"), "{e}");
     }
 
@@ -637,13 +693,16 @@ mod tests {
 
         assert!(try_run(&coordinator, "b-one", false).is_ok());
         let first = std::fs::read(&state_path).unwrap();
-        let e = try_run(&coordinator, "b-one", false).unwrap_err();
+        let e = try_run(&coordinator, "b-one", false)
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("already seeded"), "{e}");
         assert_eq!(std::fs::read(&state_path).unwrap(), first);
         assert!(try_run(&coordinator, "b-one", true).is_ok());
         assert!(
             try_run(&coordinator, "b-nope", false)
                 .unwrap_err()
+                .to_string()
                 .contains("no task b-nope")
         );
         std::fs::remove_dir_all(&root).unwrap();
@@ -660,7 +719,9 @@ mod tests {
             r#"{"project":"p","blurb":"b","tasks":[{"task":"b-one","title":"One","scenarios":["S1"]}]}"#,
         )
         .unwrap();
-        let e = try_run(&coordinator, "b-one", false).unwrap_err();
+        let e = try_run(&coordinator, "b-one", false)
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("names no goal"), "{e}");
         assert!(!root.join("p/b").exists());
         std::fs::remove_dir_all(&root).unwrap();

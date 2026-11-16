@@ -1,3 +1,5 @@
+//! Rendering LSP symbols as text.
+
 use lsp_types::*;
 
 /// Convert SymbolInformation to a human-readable string
@@ -55,7 +57,15 @@ pub fn symbol_kind_to_string(kind: SymbolKind) -> &'static str {
 mod tests {
     use super::*;
 
-    fn make_test_symbol(name: &str, container: Option<&str>, kind: SymbolKind) -> SymbolInformation {
+    #[expect(
+        deprecated,
+        reason = "SymbolInformation has no constructor that leaves its deprecated field out"
+    )]
+    fn make_test_symbol(
+        name: &str,
+        container: Option<&str>,
+        kind: SymbolKind,
+    ) -> SymbolInformation {
         SymbolInformation {
             name: name.to_string(),
             kind,

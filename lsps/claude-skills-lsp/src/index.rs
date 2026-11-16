@@ -150,22 +150,23 @@ impl Index {
 
     /// The precedence-winning entry for `name`.
     pub fn get(&self, name: &str) -> Option<&Entry> {
-        self.by_name.get(name).map(|&i| &self.entries[i])
+        self.by_name.get(name).and_then(|&i| self.entries.get(i))
     }
 
     /// Every entry defining `name`, winner first (used for multi-location goto).
     pub fn locations(&self, name: &str) -> Vec<&Entry> {
         let winner = self.by_name.get(name).copied();
-        let mut out: Vec<&Entry> = Vec::new();
-        if let Some(w) = winner {
-            out.push(&self.entries[w]);
-        }
-        for (i, e) in self.entries.iter().enumerate() {
-            if e.name == name && Some(i) != winner {
-                out.push(e);
-            }
-        }
-        out
+        let others = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|&(i, e)| e.name == name && Some(i) != winner)
+            .map(|(_, e)| e);
+        winner
+            .and_then(|w| self.entries.get(w))
+            .into_iter()
+            .chain(others)
+            .collect()
     }
 }
 

@@ -1,13 +1,9 @@
+//! The data the server exchanges: the raw `just --dump --dump-format json`
+//! model, read tolerantly so it survives `just` version drift, and the
+//! responses the tools return.
+
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-
-// ---------------------------------------------------------------------------
-// Raw `just --dump --dump-format json` model
-//
-// Only the fields we consume are typed; everything else is ignored. Every field
-// is `#[serde(default)]` so the parser tolerates schema drift across just
-// versions.
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
 pub struct DumpFile {
@@ -53,27 +49,34 @@ pub struct DumpParam {
     /// `null` for a required parameter; otherwise the default expression.
     #[serde(default)]
     pub default: Option<serde_json::Value>,
-    /// `singular`, `star` (zero-or-more) or `plus` (one-or-more).
     #[serde(default)]
-    pub kind: String,
+    pub kind: ParamKind,
     #[serde(default)]
     pub help: Option<String>,
 }
 
+/// How many arguments a parameter takes.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ParamKind {
+    #[default]
+    Singular,
+    /// Zero or more (`*args`).
+    Star,
+    /// One or more (`+args`).
+    Plus,
+}
+
 impl DumpParam {
     pub fn is_variadic(&self) -> bool {
-        self.kind == "star" || self.kind == "plus"
+        matches!(self.kind, ParamKind::Star | ParamKind::Plus)
     }
 
     /// Required parameters have no default and are not the zero-or-more `star`.
     pub fn is_required(&self) -> bool {
-        self.default.is_none() && self.kind != "star"
+        self.default.is_none() && self.kind != ParamKind::Star
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tool response DTOs
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize)]
 pub struct ProjectEntry {

@@ -25,7 +25,11 @@ pub struct EventKey {
 pub enum Party {
     Item(ItemRef),
     /// An observer closure, shown on the page of the module it is written in.
-    Anonymous { crate_index: usize, module: Vec<String>, anchor: String },
+    Anonymous {
+        crate_index: usize,
+        module: Vec<String>,
+        anchor: String,
+    },
     Text(String),
 }
 
@@ -67,17 +71,24 @@ pub struct Flows {
 impl Flows {
     /// The flow of this event type, if the workspace touches it.
     pub fn get(&self, key: &EventKey) -> Option<&EventFlow> {
-        self.flows.binary_search_by(|f| f.key.cmp(key)).ok().map(|i| &self.flows[i])
+        self.flows
+            .binary_search_by(|f| f.key.cmp(key))
+            .ok()
+            .and_then(|i| self.flows.get(i))
     }
 
     /// The events this item is a listener of.
     pub fn listened_by(&self, r: ItemRef) -> impl Iterator<Item = &EventFlow> {
-        self.flows.iter().filter(move |f| f.listeners.iter().any(|e| e.party == Party::Item(r)))
+        self.flows
+            .iter()
+            .filter(move |f| f.listeners.iter().any(|e| e.party == Party::Item(r)))
     }
 
     /// The events this item is a producer of.
     pub fn produced_by(&self, r: ItemRef) -> impl Iterator<Item = &EventFlow> {
-        self.flows.iter().filter(move |f| f.producers.iter().any(|e| e.party == Party::Item(r)))
+        self.flows
+            .iter()
+            .filter(move |f| f.producers.iter().any(|e| e.party == Party::Item(r)))
     }
 }
 
@@ -102,23 +113,41 @@ pub fn build(
         let mut stack = vec![&krate.root];
         while let Some(module) = stack.pop() {
             for item in module.items.iter().filter(|i| i.role == Role::Event) {
-                let key = EventKey { crate_name: krate.package.replace('-', "_"), name: item.name.clone() };
-                flows.insert(key.clone(), EventFlow { key, item: Some((ci, item.id)), producers: vec![], listeners: vec![] });
+                let key = EventKey {
+                    crate_name: krate.package.replace('-', "_"),
+                    name: item.name.clone(),
+                };
+                flows.insert(
+                    key.clone(),
+                    EventFlow {
+                        key,
+                        item: Some((ci, item.id)),
+                        producers: vec![],
+                        listeners: vec![],
+                    },
+                );
             }
             stack.extend(&module.children);
         }
     }
 
     for r in functions(atlas) {
-        let krate = &docs[r.0];
-        let Some(item) = atlas.item(r) else { continue };
+        let (Some(krate), Some(item)) = (docs.get(r.0), atlas.item(r)) else {
+            continue;
+        };
         let json = krate.item(r.1)?;
         let inputs = krate.fn_inputs(json)?;
-        let site = item.location.as_ref().map(|(f, l)| (f.clone(), *l as usize));
+        let site = item
+            .location
+            .as_ref()
+            .and_then(|(f, l)| Some((f.clone(), usize::try_from(*l).ok()?)));
         let party = Party::Item(r);
         let note = |unresolved: &mut Vec<String>, shown: &str| {
             let (file, line) = site.clone().unwrap_or_default();
-            unresolved.push(format!("{file}:{line} — {}: defining crate of {shown} unknown", item.name));
+            unresolved.push(format!(
+                "{file}:{line} — {}: defining crate of {shown} unknown",
+                item.name
+            ));
         };
 
         if let Some((_, ty)) = inputs.first()
@@ -128,14 +157,25 @@ pub fn build(
             let shown = show(krate, ty)?;
             match key_of(atlas, docs, r.0, arg) {
                 Some(key) => {
-                    flows.entry(key.clone()).or_insert_with(|| fresh(key)).listeners.push(Endpoint {
-                        party: party.clone(),
-                        via: format!("observer {shown}"),
-                        site: site.clone(),
-                    });
+                    flows
+                        .entry(key.clone())
+                        .or_insert_with(|| fresh(key))
+                        .listeners
+                        .push(Endpoint {
+                            party: party.clone(),
+                            via: format!("observer {shown}"),
+                            site: site.clone(),
+                        });
                     if item.role == Role::Other {
                         let (params, observes) = params_of(atlas, docs, r)?;
-                        new_observers.push((r, SystemView { params, observes, registrations: Vec::new() }));
+                        new_observers.push((
+                            r,
+                            SystemView {
+                                params,
+                                observes,
+                                registrations: Vec::new(),
+                            },
+                        ));
                     }
                 }
                 None if types::last_segment(arg).is_none() && arg.get("generic").is_some() => {}
@@ -149,7 +189,9 @@ pub fn build(
         }
         for (producer, ty) in found {
             let shown = show(krate, ty)?;
-            let Some(arg) = types::type_args(ty).first().copied() else { continue };
+            let Some(arg) = types::type_args(ty).first().copied() else {
+                continue;
+            };
             match key_of(atlas, docs, r.0, arg) {
                 Some(key) => {
                     let end = Endpoint {
@@ -158,7 +200,11 @@ pub fn build(
                         site: site.clone(),
                     };
                     let flow = flows.entry(key.clone()).or_insert_with(|| fresh(key));
-                    if producer { flow.producers.push(end) } else { flow.listeners.push(end) }
+                    if producer {
+                        flow.producers.push(end)
+                    } else {
+                        flow.listeners.push(end)
+                    }
                 }
                 None if arg.get("generic").is_some() => {}
                 None => note(&mut unresolved, &shown),
@@ -176,16 +222,32 @@ pub fn build(
     let packages: HashSet<String> = atlas.crates.iter().map(|c| c.package.clone()).collect();
     let resolver = Resolver::new(atlas, scip, &packages);
     for call in calls {
-        let CallKind::Produce { method, segments, text } = &call.kind else { continue };
+        let CallKind::Produce {
+            method,
+            segments,
+            text,
+        } = &call.kind
+        else {
+            continue;
+        };
         let site = Some((call.file.clone(), call.line));
         let symbols: Vec<Option<&str>> = segments.iter().map(|s| resolver.symbol(s)).collect();
-        let key = type_segment(&symbols).and_then(|i| symbols[i]).and_then(parse_symbol).and_then(|s| {
-            Some(EventKey { crate_name: s.package.replace('-', "_"), name: s.path.last()?.clone() })
-        });
+        let key = type_segment(&symbols)
+            .and_then(|i| symbols.get(i).copied().flatten())
+            .and_then(parse_symbol)
+            .and_then(|s| {
+                Some(EventKey {
+                    crate_name: s.package.replace('-', "_"),
+                    name: s.path.last()?.clone(),
+                })
+            });
         let unambiguous = BevyNames::UNAMBIGUOUS_PRODUCING.contains(&method.as_str());
         let Some(key) = key else {
             if unambiguous {
-                unresolved.push(format!("{}:{} — {method}({text}): event type not resolved", call.file, call.line));
+                unresolved.push(format!(
+                    "{}:{} — {method}({text}): event type not resolved",
+                    call.file, call.line
+                ));
             }
             continue;
         };
@@ -201,26 +263,40 @@ pub fn build(
             .entry(key.clone())
             .or_insert_with(|| fresh(key))
             .producers
-            .push(Endpoint { party, via: method.clone(), site });
+            .push(Endpoint {
+                party,
+                via: method.clone(),
+                site,
+            });
     }
 
     for anon in &registry.anonymous {
         let Some(id) = &anon.observes else { continue };
         let key = resolver.symbol(id).and_then(parse_symbol).and_then(|s| {
-            Some(EventKey { crate_name: s.package.replace('-', "_"), name: s.path.last()?.clone() })
+            Some(EventKey {
+                crate_name: s.package.replace('-', "_"),
+                name: s.path.last()?.clone(),
+            })
         });
         let (file, line) = &anon.registration.site;
         match key {
-            Some(key) => flows.entry(key.clone()).or_insert_with(|| fresh(key)).listeners.push(Endpoint {
-                party: Party::Anonymous {
-                    crate_index: anon.crate_index,
-                    module: anon.module.clone(),
-                    anchor: anon.anchor.clone(),
-                },
-                via: "observer closure".into(),
-                site: Some((file.clone(), *line)),
-            }),
-            None => unresolved.push(format!("{file}:{line} — observer closure On<{}>: event type not resolved", id.name)),
+            Some(key) => flows
+                .entry(key.clone())
+                .or_insert_with(|| fresh(key))
+                .listeners
+                .push(Endpoint {
+                    party: Party::Anonymous {
+                        crate_index: anon.crate_index,
+                        module: anon.module.clone(),
+                        anchor: anon.anchor.clone(),
+                    },
+                    via: "observer closure".into(),
+                    site: Some((file.clone(), *line)),
+                }),
+            None => unresolved.push(format!(
+                "{file}:{line} — observer closure On<{}>: event type not resolved",
+                id.name
+            )),
         }
     }
 
@@ -237,7 +313,12 @@ pub fn build(
 }
 
 fn fresh(key: EventKey) -> EventFlow {
-    EventFlow { key, item: None, producers: Vec::new(), listeners: Vec::new() }
+    EventFlow {
+        key,
+        item: None,
+        producers: Vec::new(),
+        listeners: Vec::new(),
+    }
 }
 
 fn show(krate: &Crate, ty: &Value) -> Result<String, Error> {
@@ -246,7 +327,13 @@ fn show(krate: &Crate, ty: &Value) -> Result<String, Error> {
 
 fn functions(atlas: &Atlas) -> Vec<ItemRef> {
     fn walk(ci: usize, module: &Module, out: &mut Vec<ItemRef>) {
-        out.extend(module.items.iter().filter(|i| i.kind == "function").map(|i| (ci, i.id)));
+        out.extend(
+            module
+                .items
+                .iter()
+                .filter(|i| i.kind == "function")
+                .map(|i| (ci, i.id)),
+        );
         for child in &module.children {
             walk(ci, child, out);
         }
@@ -260,10 +347,18 @@ fn functions(atlas: &Atlas) -> Vec<ItemRef> {
 
 fn key_of(atlas: &Atlas, docs: &[Crate], ci: usize, arg: &Value) -> Option<EventKey> {
     let name = types::last_segment(arg)?.to_string();
-    let id = arg["resolved_path"]["id"].as_u64()?;
-    let defined = docs[ci].defining_crate(id)?;
-    let crate_name = if defined == docs[ci].name() { atlas.crates[ci].package.clone() } else { defined };
-    Some(EventKey { crate_name: crate_name.replace('-', "_"), name })
+    let id = arg.pointer("/resolved_path/id")?.as_u64()?;
+    let krate = docs.get(ci)?;
+    let defined = krate.defining_crate(id)?;
+    let crate_name = if defined == krate.name() {
+        atlas.crates.get(ci)?.package.clone()
+    } else {
+        defined
+    };
+    Some(EventKey {
+        crate_name: crate_name.replace('-', "_"),
+        name,
+    })
 }
 
 fn io_types<'a>(
@@ -280,7 +375,9 @@ fn io_types<'a>(
     {
         inner = arg;
     }
-    let Some(last) = types::last_segment(inner) else { return Ok(()) };
+    let Some(last) = types::last_segment(inner) else {
+        return Ok(());
+    };
     if BevyNames::READERS.contains(&last) {
         out.push((false, inner));
     } else if BevyNames::WRITERS.contains(&last) {
@@ -292,7 +389,7 @@ fn io_types<'a>(
             }
         }
     } else if depth < 4
-        && let Some(id) = inner["resolved_path"]["id"].as_u64()
+        && let Some(id) = inner.pointer("/resolved_path/id").and_then(Value::as_u64)
         && krate.item(id).is_ok()
         && atlas.item((ci, id)).is_some_and(|i| i.system_param)
     {
@@ -304,7 +401,9 @@ fn io_types<'a>(
 }
 
 fn type_segment(symbols: &[Option<&str>]) -> Option<usize> {
-    symbols.iter().position(|s| s.is_some_and(|s| s.ends_with('#')))
+    symbols
+        .iter()
+        .position(|s| s.is_some_and(|s| s.ends_with('#')))
 }
 
 #[cfg(test)]

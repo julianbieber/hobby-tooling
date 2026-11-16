@@ -20,7 +20,7 @@ trap cleanup EXIT
 pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1 $2"; FAILED=1; }
 
-cargo build --quiet --manifest-path "$REPO/tools/hcoord/Cargo.toml" || {
+cargo build --quiet --locked --manifest-path "$REPO/tools/hcoord/Cargo.toml" || {
     echo "FAIL build cargo build failed"
     exit 1
 }

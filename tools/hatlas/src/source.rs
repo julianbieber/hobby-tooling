@@ -25,7 +25,12 @@ pub struct Ident {
 pub enum Target {
     Named(Ident),
     /// `observes` is the event type of an observer closure's `On<E>` first parameter, as written.
-    Closure { file: String, line: usize, col: usize, observes: Option<Ident> },
+    Closure {
+        file: String,
+        line: usize,
+        col: usize,
+        observes: Option<Ident>,
+    },
     Unparsed(String),
 }
 
@@ -50,13 +55,23 @@ pub enum Owner {
 /// What a call registers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CallKind {
-    Systems { schedule: String, entries: Vec<Entry> },
-    Sets { schedule: String, entries: Vec<Entry> },
+    Systems {
+        schedule: String,
+        entries: Vec<Entry>,
+    },
+    Sets {
+        schedule: String,
+        entries: Vec<Entry>,
+    },
     Observer(Vec<Entry>),
     Plugins(Vec<Entry>),
     Resource(Entry),
     /// A call that raises an event; `segments` is every path segment of the event expression, empty when it is not a path, struct literal or call.
-    Produce { method: String, segments: Vec<Ident>, text: String },
+    Produce {
+        method: String,
+        segments: Vec<Ident>,
+        text: String,
+    },
 }
 
 /// One registration call and where it was made.
@@ -115,9 +130,15 @@ impl Reader {
     fn slice(&self, start: LineColumn, end: LineColumn) -> String {
         let mut out = String::new();
         for line in start.line..=end.line {
-            let Some(chars) = self.lines.get(line - 1) else { break };
+            let Some(chars) = self.lines.get(line - 1) else {
+                break;
+            };
             let from = if line == start.line { start.column } else { 0 };
-            let to = if line == end.line { end.column } else { chars.len() };
+            let to = if line == end.line {
+                end.column
+            } else {
+                chars.len()
+            };
             out.extend(chars.iter().skip(from).take(to.saturating_sub(from)));
             out.push(' ');
         }
@@ -131,7 +152,13 @@ impl Reader {
 
     fn ident_of_ident(&self, ident: &syn::Ident, text: String) -> Ident {
         let start = ident.span().start();
-        Ident { file: self.file.clone(), line: start.line, col: start.column, name: ident.to_string(), text }
+        Ident {
+            file: self.file.clone(),
+            line: start.line,
+            col: start.column,
+            name: ident.to_string(),
+            text,
+        }
     }
 
     fn ident_of_path(&self, path: &syn::Path) -> Option<Ident> {
@@ -141,7 +168,9 @@ impl Reader {
 
     fn ident_of_expr(&self, expr: &Expr) -> Ident {
         match strip(expr) {
-            Expr::Path(p) => self.ident_of_path(&p.path).unwrap_or_else(|| self.opaque(expr)),
+            Expr::Path(p) => self
+                .ident_of_path(&p.path)
+                .unwrap_or_else(|| self.opaque(expr)),
             _ => self.opaque(expr),
         }
     }
@@ -149,14 +178,22 @@ impl Reader {
     fn opaque(&self, expr: &Expr) -> Ident {
         let start = expr.span().start();
         let text = self.text(expr);
-        Ident { file: self.file.clone(), line: start.line, col: start.column, name: text.clone(), text }
+        Ident {
+            file: self.file.clone(),
+            line: start.line,
+            col: start.column,
+            name: text.clone(),
+            text,
+        }
     }
 
     fn schedule_of(&self, expr: &Expr) -> String {
         match strip(expr) {
-            Expr::Path(p) if p.qself.is_none() => {
-                p.path.segments.last().map_or_else(|| self.text(expr), |s| s.ident.to_string())
-            }
+            Expr::Path(p) if p.qself.is_none() => p
+                .path
+                .segments
+                .last()
+                .map_or_else(|| self.text(expr), |s| s.ident.to_string()),
             _ => self.text(expr),
         }
     }
@@ -181,14 +218,24 @@ impl Reader {
                     Some(syn::Pat::Type(pt)) => self.observed_event(&pt.ty),
                     _ => None,
                 };
-                vec![entry(Target::Closure { file: self.file.clone(), line: start.line, col: start.column, observes })]
+                vec![entry(Target::Closure {
+                    file: self.file.clone(),
+                    line: start.line,
+                    col: start.column,
+                    observes,
+                })]
             }
             Expr::Call(c) => match strip(&c.func) {
                 Expr::Path(p) => {
                     let segments: Vec<_> = p.path.segments.iter().collect();
-                    let pick = segments.iter().rev().find(|s| s.ident != "default" && s.ident != "new");
+                    let pick = segments
+                        .iter()
+                        .rev()
+                        .find(|s| s.ident != "default" && s.ident != "new");
                     match pick {
-                        Some(seg) => vec![entry(Target::Named(self.ident_of_ident(&seg.ident, self.text(expr))))],
+                        Some(seg) => vec![entry(Target::Named(
+                            self.ident_of_ident(&seg.ident, self.text(expr)),
+                        ))],
                         None => vec![entry(Target::Unparsed(self.text(expr)))],
                     }
                 }
@@ -205,7 +252,9 @@ impl Reader {
         if !BevyNames::OBSERVER_PARAMS.contains(&last.ident.to_string().as_str()) {
             return None;
         }
-        let syn::PathArguments::AngleBracketed(args) = &last.arguments else { return None };
+        let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
+            return None;
+        };
         match args.args.first()? {
             syn::GenericArgument::Type(Type::Path(inner)) => self.ident_of_path(&inner.path),
             _ => None,
@@ -222,7 +271,10 @@ impl Reader {
             },
             _ => return Vec::new(),
         };
-        path.segments.iter().map(|s| self.ident_of_ident(&s.ident, s.ident.to_string())).collect()
+        path.segments
+            .iter()
+            .map(|s| self.ident_of_ident(&s.ident, s.ident.to_string()))
+            .collect()
     }
 
     fn method_entries(&self, m: &syn::ExprMethodCall) -> Vec<Entry> {
@@ -232,7 +284,9 @@ impl Reader {
             let mut found = self.entries(&m.receiver);
             if let Some(arg) = arg {
                 let text = self.text(arg);
-                found.iter_mut().for_each(|e| e.conditions.push(text.clone()));
+                found
+                    .iter_mut()
+                    .for_each(|e| e.conditions.push(text.clone()));
             }
             return found;
         }
@@ -266,14 +320,17 @@ impl Reader {
     }
 
     fn chained(&self, tuple: &syn::ExprTuple) -> Vec<Entry> {
-        let members: Vec<(String, Vec<Entry>)> =
-            tuple.elems.iter().map(|e| (self.text(e), self.entries(e))).collect();
+        let members: Vec<(String, Vec<Entry>)> = tuple
+            .elems
+            .iter()
+            .map(|e| (self.text(e), self.entries(e)))
+            .collect();
         let mut out = Vec::new();
         for (i, (_, found)) in members.iter().enumerate() {
             for e in found {
                 let mut e = e.clone();
-                if i > 0 {
-                    e.ordering.push(format!("after {}", members[i - 1].0));
+                if let Some((previous, _)) = i.checked_sub(1).and_then(|p| members.get(p)) {
+                    e.ordering.push(format!("after {previous}"));
                 }
                 if let Some((next, _)) = members.get(i + 1) {
                     e.ordering.push(format!("before {next}"));
@@ -295,7 +352,12 @@ impl Reader {
 }
 
 fn entry(target: Target) -> Entry {
-    Entry { target, conditions: Vec::new(), sets: Vec::new(), ordering: Vec::new() }
+    Entry {
+        target,
+        conditions: Vec::new(),
+        sets: Vec::new(),
+        ordering: Vec::new(),
+    }
 }
 
 fn strip(expr: &Expr) -> &Expr {
@@ -379,7 +441,11 @@ impl<'ast> Visit<'ast> for Reader {
                     _ => None,
                 })
                 .map(Target::Named)
-                .or_else(|| args.first().and_then(|a| self.entries(a).into_iter().next()).map(|e| e.target));
+                .or_else(|| {
+                    args.first()
+                        .and_then(|a| self.entries(a).into_iter().next())
+                        .map(|e| e.target)
+                });
             if let Some(target) = target {
                 self.push(&m.method, CallKind::Resource(entry(target)));
             }
@@ -388,7 +454,14 @@ impl<'ast> Visit<'ast> for Reader {
         {
             let segments = self.event_segments(arg);
             let text = self.text(*arg);
-            self.push(&m.method, CallKind::Produce { method: name.clone(), segments, text });
+            self.push(
+                &m.method,
+                CallKind::Produce {
+                    method: name.clone(),
+                    segments,
+                    text,
+                },
+            );
         }
         syn::visit::visit_expr_method_call(self, m);
     }
@@ -431,10 +504,17 @@ mod tests {
     // Pins the wusel shape: a chained tuple of sets with one run condition gives every member the condition and its neighbours as ordering.
     #[test]
     fn chained_sets_spread_condition_and_ordering() {
-        let c = calls("fn build(app: &mut App) { app.configure_sets(Update, (A::One, A::Two, A::Three).chain().run_if(in_state(S::G))); }");
-        let CallKind::Sets { schedule, entries } = &c[0].kind else { panic!() };
+        let c = calls(
+            "fn build(app: &mut App) { app.configure_sets(Update, (A::One, A::Two, A::Three).chain().run_if(in_state(S::G))); }",
+        );
+        let CallKind::Sets { schedule, entries } = &c[0].kind else {
+            panic!()
+        };
         assert_eq!(schedule, "Update");
-        assert_eq!(entries.iter().map(name).collect::<Vec<_>>(), ["One", "Two", "Three"]);
+        assert_eq!(
+            entries.iter().map(name).collect::<Vec<_>>(),
+            ["One", "Two", "Three"]
+        );
         assert!(entries.iter().all(|e| e.conditions == ["in_state(S::G)"]));
         assert_eq!(entries[1].ordering, ["after A::One", "before A::Three"]);
         assert_eq!(entries[0].ordering, ["before A::Two"]);
@@ -446,7 +526,10 @@ mod tests {
         let c = calls("fn f() { app.add_systems(Update, (a, b).chain().in_set(Sys::Run)); }");
         let e = systems(&c[0]);
         assert_eq!(e.len(), 2);
-        assert!(e.iter().all(|e| e.sets.len() == 1 && e.sets[0].name == "Run"));
+        assert!(
+            e.iter()
+                .all(|e| e.sets.len() == 1 && e.sets[0].name == "Run")
+        );
         assert_eq!(e[1].ordering, ["after a"]);
     }
 
@@ -454,18 +537,26 @@ mod tests {
     #[test]
     fn closure_is_an_anonymous_target() {
         let c = calls("fn f() { app.add_systems(Update, |x: Res<R>| {}); }");
-        assert!(matches!(systems(&c[0])[0].target, Target::Closure { line: 1, .. }));
+        assert!(matches!(
+            systems(&c[0])[0].target,
+            Target::Closure { line: 1, .. }
+        ));
     }
 
     // Pins that a trigger call keeps every segment of its event expression, so the resolver can find the type before a variant.
     #[test]
     fn produce_calls_keep_event_segments() {
         let names = |src: &str| match &calls(src)[0].kind {
-            CallKind::Produce { segments, .. } => segments.iter().map(|s| s.name.clone()).collect::<Vec<_>>(),
+            CallKind::Produce { segments, .. } => {
+                segments.iter().map(|s| s.name.clone()).collect::<Vec<_>>()
+            }
             other => panic!("{other:?}"),
         };
         assert_eq!(names("fn f() { commands.trigger(Foo { a: 1 }); }"), ["Foo"]);
-        assert_eq!(names("fn f() { world.write_message(AppExit::Success); }"), ["AppExit", "Success"]);
+        assert_eq!(
+            names("fn f() { world.write_message(AppExit::Success); }"),
+            ["AppExit", "Success"]
+        );
         assert!(names("fn f() { w.send(x_y()); }").len() == 1);
         assert!(names("fn f() { w.send(1 + 2); }").is_empty());
     }
@@ -474,8 +565,12 @@ mod tests {
     #[test]
     fn observe_call_names_its_event() {
         let c = calls("fn f() { row.spawn(observe(|_: On<Click>, q: Res<R>| {})); }");
-        let CallKind::Observer(e) = &c[0].kind else { panic!("{:?}", c[0].kind) };
-        let Target::Closure { observes, .. } = &e[0].target else { panic!() };
+        let CallKind::Observer(e) = &c[0].kind else {
+            panic!("{:?}", c[0].kind)
+        };
+        let Target::Closure { observes, .. } = &e[0].target else {
+            panic!()
+        };
         assert_eq!(observes.as_ref().map(|i| i.name.as_str()), Some("Click"));
     }
 
@@ -483,8 +578,13 @@ mod tests {
     #[test]
     fn plain_closure_observes_nothing() {
         let c = calls("fn f() { app.add_observer(|x: Res<R>| {}); }");
-        let CallKind::Observer(e) = &c[0].kind else { panic!() };
-        assert!(matches!(&e[0].target, Target::Closure { observes: None, .. }));
+        let CallKind::Observer(e) = &c[0].kind else {
+            panic!()
+        };
+        assert!(matches!(
+            &e[0].target,
+            Target::Closure { observes: None, .. }
+        ));
     }
 
     // Pins that run_if on one tuple member does not leak onto its siblings.
@@ -506,9 +606,13 @@ mod tests {
     // Pins that calls inside `impl Plugin` are owned by the implementing type, and that a factory call resolves to the factory's name.
     #[test]
     fn plugin_impl_owns_its_calls() {
-        let c = calls("impl Plugin for P { fn build(&self, app: &mut App) { app.add_plugins(Other::default()); app.init_resource::<R>(); } }");
+        let c = calls(
+            "impl Plugin for P { fn build(&self, app: &mut App) { app.add_plugins(Other::default()); app.init_resource::<R>(); } }",
+        );
         assert!(matches!(&c[0].owner, Some(Owner::Plugin(i)) if i.name == "P"));
-        let CallKind::Plugins(e) = &c[0].kind else { panic!() };
+        let CallKind::Plugins(e) = &c[0].kind else {
+            panic!()
+        };
         assert_eq!(name(&e[0]), "Other");
         assert!(matches!(&c[1].kind, CallKind::Resource(r) if name(r) == "R"));
     }

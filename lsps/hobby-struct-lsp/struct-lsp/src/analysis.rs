@@ -1,7 +1,6 @@
 //! Cursor-position logic for the language server, as pure functions.
 
-use struct_parser::ast::Spec;
-use struct_parser::span::Span;
+use struct_parser::ast::{Spec, Standard};
 
 /// What may be completed at a point, decided from the line alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,19 +25,16 @@ pub const METRICS: &[&str] = &[
 /// The keys a standard's body may carry.
 pub const VERIFICATION_KEYS: &[&str] = &["check: ", "budget: ", "review: ", "audited: "];
 
-/// The standard whose section `offset` falls in, with the span of its heading.
-pub fn standard_at(text: &str, offset: usize, spec: &Spec) -> Option<(String, Span)> {
-    let _ = text;
-    spec.standards
-        .iter()
-        .rfind(|s| s.span.start <= offset)
-        .map(|s| (s.name.value.clone(), s.name.span))
+/// The standard whose section `offset` falls in.
+pub fn standard_at(offset: usize, spec: &Spec) -> Option<&Standard> {
+    spec.standards.iter().rfind(|s| s.span.start <= offset)
 }
 
 /// What can be completed at `offset`, from the shape of the line up to it.
 pub fn completion_context(text: &str, offset: usize) -> CompletionContext {
-    let line = line_containing(text, offset);
-    let before = &text[line.start..offset];
+    let Some(before) = text.get(..offset).and_then(|t| t.rsplit('\n').next()) else {
+        return CompletionContext::None;
+    };
     let trimmed = before.trim_start();
 
     if trimmed.starts_with("check:") {
@@ -48,16 +44,6 @@ pub fn completion_context(text: &str, offset: usize) -> CompletionContext {
         return CompletionContext::VerificationKey;
     }
     CompletionContext::None
-}
-
-fn line_containing(text: &str, offset: usize) -> Span {
-    let offset = offset.min(text.len());
-    let start = text[..offset].rfind('\n').map(|i| i + 1).unwrap_or(0);
-    let end = text[offset..]
-        .find('\n')
-        .map(|i| offset + i)
-        .unwrap_or(text.len());
-    Span::new(start, end)
 }
 
 #[cfg(test)]
@@ -88,12 +74,12 @@ budget: 10
     fn a_line_belongs_to_the_standard_above_it() {
         let spec = parse(SPEC).spec;
         let at = SPEC.find("check: import cycles").expect("line");
-        let (name, _) = standard_at(SPEC, at, &spec).expect("inside the first standard");
-        assert_eq!(name, "Modules form a DAG");
+        let standard = standard_at(at, &spec).expect("inside the first standard");
+        assert_eq!(standard.name.value, "Modules form a DAG");
 
         let at = SPEC.find("budget: 10").expect("line");
-        let (name, _) = standard_at(SPEC, at, &spec).expect("inside the second");
-        assert_eq!(name, "A file fits in one head");
+        let standard = standard_at(at, &spec).expect("inside the second");
+        assert_eq!(standard.name.value, "A file fits in one head");
     }
 
     // The metric vocabulary is closed and the checker refuses anything outside

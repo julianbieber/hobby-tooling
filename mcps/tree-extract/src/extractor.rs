@@ -1,14 +1,19 @@
+//! Walking a repository with tree-sitter and pulling out its definitions,
+//! references and imports.
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use anyhow::Context;
 use ignore::WalkBuilder;
+use parking_lot::Mutex;
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Parser, Query, QueryCursor};
 
-use treesitter_class_lsp::grammars::GrammarCache;
-use treesitter_class_lsp::languages::{LanguageInfo, LanguageRegistry, load_tags_query};
+use treesitter_class_lsp::grammars::{GrammarCache, GrammarError};
+use treesitter_class_lsp::languages::{
+    LanguageInfo, LanguageRegistry, RegistryError, load_tags_query,
+};
 
 use crate::builtin_queries::builtin_graph_query;
 use crate::docstring::extract_docstring;
@@ -108,6 +113,32 @@ pub struct ExtractResult {
     pub imports: Vec<Import>,
 }
 
+/// Helix's language registry, which says how to parse each file, is unavailable.
+#[derive(Debug, thiserror::Error)]
+#[error("cannot load the helix language registry (set HELIX_RUNTIME if it is missing)")]
+pub struct RegistryUnavailable(#[from] RegistryError);
+
+#[derive(Debug, thiserror::Error)]
+enum FileError {
+    #[error("cannot load the {lang} grammar")]
+    Grammar {
+        lang: String,
+        #[source]
+        source: GrammarError,
+    },
+    #[error("the {lang} grammar is incompatible with this tree-sitter")]
+    Language {
+        lang: String,
+        #[source]
+        source: tree_sitter::LanguageError,
+    },
+}
+
+/// The 1-based line of a 0-based tree-sitter row.
+fn line_of(row: usize) -> u32 {
+    u32::try_from(row).unwrap_or(u32::MAX).saturating_add(1)
+}
+
 fn kind_from_capture(name: &str) -> Option<SymbolKind> {
     let name = name.strip_prefix('@').unwrap_or(name);
     match name {
@@ -152,7 +183,8 @@ impl CompiledQuery {
         let query = match Query::new(language, source) {
             Ok(q) => q,
             Err(e) => {
-                tracing::warn!("compile query for {}: {}", lang_name, e);
+                let error: &dyn std::error::Error = &e;
+                tracing::warn!(error, lang = lang_name, "built-in query does not compile");
                 return None;
             }
         };
@@ -167,7 +199,7 @@ impl CompiledQuery {
             capture_names
                 .iter()
                 .position(|n| n.trim_start_matches('@') == want)
-                .map(|i| i as u32)
+                .and_then(|i| u32::try_from(i).ok())
         };
         let name_idx = idx_of("name");
         let import_module_idx = idx_of("import.module");
@@ -208,9 +240,8 @@ pub struct Extractor {
 }
 
 impl Extractor {
-    pub fn new() -> anyhow::Result<Self> {
-        let registry = LanguageRegistry::load()
-            .context("loading helix language registry (set HELIX_RUNTIME if missing)")?;
+    pub fn new() -> Result<Self, RegistryUnavailable> {
+        let registry = LanguageRegistry::load()?;
         Ok(Self {
             registry,
             grammars: GrammarCache::new(),
@@ -259,7 +290,10 @@ impl Extractor {
                     result.references.append(&mut r.references);
                     result.imports.append(&mut r.imports);
                 }
-                Err(e) => tracing::debug!("extract {} failed: {}", path.display(), e),
+                Err(e) => {
+                    let error: &dyn std::error::Error = &e;
+                    tracing::debug!(error, path = %path.display(), "extraction failed");
+                }
             }
         }
         result.symbols.sort_by(|a, b| {
@@ -283,7 +317,7 @@ impl Extractor {
         result
     }
 
-    fn extract_file(&self, path: &Path, lang: &LanguageInfo) -> anyhow::Result<ExtractResult> {
+    fn extract_file(&self, path: &Path, lang: &LanguageInfo) -> Result<ExtractResult, FileError> {
         let source = match std::fs::read(path) {
             Ok(b) => b,
             Err(_) => return Ok(ExtractResult::default()),
@@ -295,7 +329,10 @@ impl Extractor {
         let grammar = self
             .grammars
             .get_or_load(&self.registry, lang)
-            .with_context(|| format!("loading grammar for {}", lang.name))?;
+            .map_err(|source| FileError::Grammar {
+                lang: lang.name.clone(),
+                source,
+            })?;
         let queries = self.lang_queries(lang, &grammar.language);
         if queries.tags.is_none() && queries.graph.is_none() {
             return Ok(ExtractResult::default());
@@ -304,7 +341,10 @@ impl Extractor {
         let mut parser = Parser::new();
         parser
             .set_language(&grammar.language)
-            .with_context(|| format!("setting language {}", lang.name))?;
+            .map_err(|source| FileError::Language {
+                lang: lang.name.clone(),
+                source,
+            })?;
         let Some(tree) = parser.parse(&source, None) else {
             return Ok(ExtractResult::default());
         };
@@ -326,7 +366,10 @@ impl Extractor {
 
     /// Run one compiled query over the parsed tree, appending any symbols /
     /// references / imports it matches into `out`.
-    #[allow(clippy::too_many_arguments)] // shared parse context; bundling adds no clarity
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the shared parse context of one file; bundling it adds no clarity"
+    )]
     fn run_query(
         &self,
         compiled: &CompiledQuery,
@@ -349,11 +392,13 @@ impl Extractor {
             let mut import_symbol: Option<String> = None;
 
             for cap in m.captures {
-                let i = cap.index as usize;
-                if let Some(kind) = compiled.def_kinds.get(i).copied().flatten() {
+                let i = usize::try_from(cap.index).ok();
+                if let Some(kind) = i.and_then(|i| compiled.def_kinds.get(i).copied().flatten()) {
                     def_kind = Some(kind);
                     def_node = Some(cap.node);
-                } else if let Some(rk) = compiled.ref_kinds.get(i).copied().flatten() {
+                } else if let Some(rk) =
+                    i.and_then(|i| compiled.ref_kinds.get(i).copied().flatten())
+                {
                     ref_kind = Some(rk);
                     ref_node = Some(cap.node);
                 } else if Some(cap.index) == compiled.name_idx
@@ -402,8 +447,8 @@ impl Extractor {
                     file: path.to_path_buf(),
                     // Start at the name's line (stable node ids, points at the
                     // declaration); end at the declaration body's last line.
-                    line_start: dnode.start_position().row as u32 + 1,
-                    line_end: range_node.end_position().row as u32 + 1,
+                    line_start: line_of(dnode.start_position().row),
+                    line_end: line_of(range_node.end_position().row),
                     docstring: extract_docstring(source_str, &lang.name, dnode),
                 });
                 continue;
@@ -416,7 +461,7 @@ impl Extractor {
                     ref_kind: rk,
                     language: lang.name.clone(),
                     file: path.to_path_buf(),
-                    line: rnode.start_position().row as u32 + 1,
+                    line: line_of(rnode.start_position().row),
                 });
                 continue;
             }
@@ -431,7 +476,7 @@ impl Extractor {
                 let line = m
                     .captures
                     .iter()
-                    .map(|c| c.node.start_position().row as u32 + 1)
+                    .map(|c| line_of(c.node.start_position().row))
                     .min()
                     .unwrap_or(1);
                 out.imports.push(Import {
@@ -451,7 +496,7 @@ impl Extractor {
         language: &tree_sitter::Language,
     ) -> Arc<LangQueries> {
         {
-            let guard = self.queries.lock().unwrap();
+            let guard = self.queries.lock();
             if let Some(q) = guard.get(&lang.name) {
                 return Arc::clone(q);
             }
@@ -465,7 +510,7 @@ impl Extractor {
             .map(Arc::new);
 
         let entry = Arc::new(LangQueries { tags, graph });
-        let mut guard = self.queries.lock().unwrap();
+        let mut guard = self.queries.lock();
         Arc::clone(
             guard
                 .entry(lang.name.clone())

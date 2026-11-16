@@ -9,6 +9,7 @@
 
 pub mod ast;
 pub mod check;
+pub mod cli;
 pub mod diagnostic;
 pub mod lexer;
 pub mod parser;

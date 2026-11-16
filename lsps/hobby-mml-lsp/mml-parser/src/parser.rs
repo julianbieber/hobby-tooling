@@ -82,12 +82,12 @@ impl Parser {
                 continue;
             }
             let span = Span::new(start, start + text.len());
-            if text.starts_with("##") {
+            if let Some(rest) = text.strip_prefix("##") {
                 if let Some(o) = open.take() {
                     self.finish(o);
                 }
                 in_header = false;
-                open = Some(self.section_header(start, text));
+                open = Some(self.section_header(start, text, rest));
                 continue;
             }
             if in_header {
@@ -95,10 +95,7 @@ impl Parser {
                 continue;
             }
             let Some(o) = open.as_mut() else { continue };
-            if o.kind.is_none() {
-                continue;
-            }
-            let kind = o.kind.unwrap();
+            let Some(kind) = o.kind else { continue };
             if let Some(idx) = self.body_line(start, text, kind, &o.lines) {
                 o.lines.push(idx);
             }
@@ -222,7 +219,7 @@ impl Parser {
         }
     }
 
-    fn section_header(&mut self, start: usize, text: &str) -> Open {
+    fn section_header(&mut self, start: usize, text: &str, rest: &str) -> Open {
         let span = Span::new(start, start + text.len());
         let mut open = Open {
             kind: None,
@@ -231,7 +228,6 @@ impl Parser {
             lines: Vec::new(),
             unit: None,
         };
-        let rest = &text[2..];
         let word = rest.split_whitespace().next().unwrap_or("");
         let kind = if !rest.starts_with(' ') {
             None
@@ -285,11 +281,11 @@ impl Parser {
     fn unit_header(&mut self, start: usize, text: &str) -> UnitHead {
         let span = Span::new(start, start + text.len());
         let after = "## unit".len();
-        let rest = &text[after..];
+        let rest = text.get(after..).unwrap_or_default();
         let lead = rest.len() - rest.trim_start().len();
         let body = rest.trim();
         let base = start + after + lead;
-        let (body_len, ann) = self.annotations(body, base);
+        let (body, ann) = self.annotations(body, base);
         if ann.anchor.is_some() || !ann.api.is_empty() || ann.guards.is_some() {
             self.err(
                 ann.span.unwrap_or(span),
@@ -297,7 +293,7 @@ impl Parser {
                 "a unit header takes only a diff link",
             );
         }
-        let body = body[..body_len].trim_end();
+        let body = body.trim_end();
         let mut head = UnitHead {
             name: Spanned::new(String::new(), span),
             status: UnitStatus::Present,
@@ -404,34 +400,41 @@ impl Parser {
         head
     }
 
-    fn annotations(&mut self, content: &str, base: usize) -> (usize, Annotations) {
+    fn annotations<'a>(&mut self, content: &'a str, base: usize) -> (&'a str, Annotations) {
         let bytes = content.as_bytes();
         let candidates: Vec<usize> = content
             .char_indices()
             .filter(|&(i, c)| {
-                (i == 0 || bytes[i - 1] == b' ')
+                (i == 0 || bytes.get(i - 1) == Some(&b' '))
                     && ((c == '^' && bytes.get(i + 1).is_some_and(u8::is_ascii_lowercase))
                         || (c == '@' && (i + 1 == bytes.len() || bytes.get(i + 1) == Some(&b' '))))
             })
             .map(|(i, _)| i)
             .collect();
         for &i in &candidates {
-            if let Some(toks) = parse_tail(&content[i..], base + i) {
+            let Some((body, tail)) = content.split_at_checked(i) else {
+                continue;
+            };
+            if let Some(toks) = parse_tail(tail, base + i) {
                 return (
-                    i,
+                    body,
                     self.order_annotations(toks, base + i, base + content.len()),
                 );
             }
         }
-        if let Some(&i) = candidates.iter().find(|&&i| bytes[i] == b'@') {
+        let malformed = candidates
+            .iter()
+            .find(|&&i| bytes.get(i) == Some(&b'@'))
+            .and_then(|&i| Some((i, content.get(..i)?)));
+        if let Some((i, body)) = malformed {
             self.err(
                 Span::new(base + i, base + content.len()),
                 code::BAD_ANNOTATION,
                 "malformed annotation; expected `^anchor`, `@ <file>[:<line>]`, `@ api Module::fn` or `@ guards ^a, ^b`",
             );
-            return (i, Annotations::default());
+            return (body, Annotations::default());
         }
-        (content.len(), Annotations::default())
+        (content, Annotations::default())
     }
 
     fn order_annotations(&mut self, toks: Vec<Tok>, start: usize, end: usize) -> Annotations {
@@ -486,7 +489,8 @@ impl Parser {
         section: SectionKind,
         siblings: &[usize],
     ) -> Option<usize> {
-        let c0 = text.chars().next()?;
+        let mut chars = text.chars();
+        let c0 = chars.next()?;
         let Some(gutter) = Gutter::from_char(c0) else {
             self.err(
                 Span::new(start, start + c0.len_utf8()),
@@ -495,7 +499,7 @@ impl Parser {
             );
             return None;
         };
-        match text[1..].chars().next() {
+        match chars.next() {
             Some(' ') => {}
             None => {
                 self.err(
@@ -514,9 +518,10 @@ impl Parser {
                 return None;
             }
         }
-        let rest = &text[2..];
-        let indent = rest.len() - rest.trim_start_matches(' ').len();
-        let content = rest[indent..].trim_end();
+        let rest = chars.as_str();
+        let unindented = rest.trim_start_matches(' ');
+        let indent = rest.len() - unindented.len();
+        let content = unindented.trim_end();
         if content.is_empty() {
             if gutter != Gutter::Context {
                 self.err(
@@ -544,8 +549,8 @@ impl Parser {
         }
         let depth = indent / 2;
 
-        let (body_len, ann) = self.annotations(content, content_start);
-        let body = content[..body_len].trim_end();
+        let (body, ann) = self.annotations(content, content_start);
+        let body = body.trim_end();
         let (bullet, body, body_start) = if body == "-" {
             (true, "", content_start + 1)
         } else if let Some(r) = body.strip_prefix("- ") {
@@ -558,17 +563,17 @@ impl Parser {
         let mut tilde = None;
         let mut line_text = body.to_owned();
         if gutter == Gutter::Changed {
-            let arrows: Vec<usize> = body.match_indices(ARROW).map(|(i, _)| i).collect();
+            let arrows = body.matches(ARROW).count();
             let span = Span::new(body_start, body_start + body.len());
-            match arrows.as_slice() {
-                [a] if *a > 0 && a + ARROW.len() < body.len() => {
-                    let old = &body[..*a];
-                    let new = &body[a + ARROW.len()..];
+            match (arrows, body.split_once(ARROW)) {
+                (1, Some((old, new))) if !old.is_empty() && !new.is_empty() => {
+                    let a = old.len();
                     let (prefix_len, full_new) = match new.strip_prefix("… ") {
                         Some(added) => (old.len(), format!("{old} {added}")),
                         None => {
                             let cut = shared_prefix(old, new);
-                            (cut, format!("{}{}", &old[..cut], new))
+                            let kept = old.get(..cut).unwrap_or_default();
+                            (cut, format!("{kept}{new}"))
                         }
                     };
                     let t = Tilde {
@@ -582,8 +587,8 @@ impl Parser {
                     line_text = t.new.clone();
                     tilde = Some(t);
                 }
-                [] => self.err(span, code::BAD_TILDE, "a `~` line holds `<old> → <new>`; no ` → ` found"),
-                [_] => self.err(span, code::BAD_TILDE, "a `~` line needs wording on both sides of ` → `"),
+                (0, _) => self.err(span, code::BAD_TILDE, "a `~` line holds `<old> → <new>`; no ` → ` found"),
+                (1, _) => self.err(span, code::BAD_TILDE, "a `~` line needs wording on both sides of ` → `"),
                 _ => self.err(
                     span,
                     code::BAD_TILDE,
@@ -593,12 +598,15 @@ impl Parser {
         }
 
         let line_span = Span::new(start, start + text.trim_end().len());
-        let max_depth = siblings.last().map_or(0, |&s| self.doc.lines[s].depth + 1);
+        let max_depth = siblings
+            .last()
+            .and_then(|&s| self.doc.lines.get(s))
+            .map_or(0, |l| l.depth + 1);
         let parent = siblings
             .iter()
             .rev()
             .copied()
-            .find(|&s| self.doc.lines[s].depth < depth);
+            .find(|&s| self.doc.lines.get(s).is_some_and(|l| l.depth < depth));
         if depth > max_depth {
             self.err(
                 Span::new(start + 2, content_start),
@@ -606,24 +614,24 @@ impl Parser {
                 "content is indented more than one step past the line above",
             );
         }
-        if let Some(p) = parent {
-            let pg = self.doc.lines[p].gutter;
-            if (pg == Gutter::Removed || pg == Gutter::Added) && gutter != pg {
-                let what = if pg == Gutter::Removed {
-                    "removed"
-                } else {
-                    "added"
-                };
-                self.err(
-                    Span::new(start, start + 1),
-                    code::NESTED_CHANGE_MISMATCH,
-                    format!(
-                        "nested under a {what} `{}` line, so this line is `{}` too",
-                        pg.as_char(),
-                        pg.as_char()
-                    ),
-                );
-            }
+        if let Some(pg) = parent.and_then(|p| self.doc.lines.get(p)).map(|l| l.gutter)
+            && (pg == Gutter::Removed || pg == Gutter::Added)
+            && gutter != pg
+        {
+            let what = if pg == Gutter::Removed {
+                "removed"
+            } else {
+                "added"
+            };
+            self.err(
+                Span::new(start, start + 1),
+                code::NESTED_CHANGE_MISMATCH,
+                format!(
+                    "nested under a {what} `{}` line, so this line is `{}` too",
+                    pg.as_char(),
+                    pg.as_char()
+                ),
+            );
         }
 
         self.doc.lines.push(Line {
@@ -653,7 +661,11 @@ impl Parser {
         match kind {
             SectionKind::Intent => self.intent(&o.lines),
             SectionKind::Data => self.data(&o.lines),
-            SectionKind::Unit => self.unit(&o, span),
+            SectionKind::Unit => {
+                if let Some(head) = &o.unit {
+                    self.unit(head, o.header, &o.lines, span);
+                }
+            }
             SectionKind::Api => self.api(&o.lines),
             SectionKind::Tests => self.tests(&o.lines),
         }
@@ -662,8 +674,16 @@ impl Parser {
         }
     }
 
+    fn set_role(&mut self, li: usize, role: Role) {
+        if let Some(l) = self.doc.lines.get_mut(li) {
+            l.role = role;
+        }
+    }
+
     fn annotation_roles(&mut self, li: usize) {
-        let line = &self.doc.lines[li];
+        let Some(line) = self.doc.lines.get(li) else {
+            return;
+        };
         let role = line.role;
         let mut bad = Vec::new();
         if let Some(a) = &line.ann.anchor
@@ -687,7 +707,9 @@ impl Parser {
 
     fn intent(&mut self, lines: &[usize]) {
         for &li in lines {
-            let l = &mut self.doc.lines[li];
+            let Some(l) = self.doc.lines.get_mut(li) else {
+                continue;
+            };
             l.role = Role::Intent;
             let gutter = l.gutter;
             let span = Span::new(l.span.start, l.span.start + 1);
@@ -704,23 +726,24 @@ impl Parser {
         }
     }
 
-    fn unit(&mut self, o: &Open, span: Span) {
-        let head = o.unit.as_ref().expect("unit header parsed");
+    fn unit(&mut self, head: &UnitHead, header: Span, lines: &[usize], span: Span) {
         let mut unit = Unit {
             name: head.name.clone(),
             status: head.status,
             trigger: head.trigger.clone(),
             what: head.what.clone(),
             link: head.link.clone(),
-            header: o.header,
+            header,
             span,
             steps: Vec::new(),
             invariants: Vec::new(),
         };
         let mut label: Option<usize> = None;
-        for &li in &o.lines {
+        for &li in lines {
             let (bullet, depth, is_label, lspan) = {
-                let l = &self.doc.lines[li];
+                let Some(l) = self.doc.lines.get(li) else {
+                    continue;
+                };
                 (
                     l.bullet,
                     l.depth,
@@ -729,7 +752,7 @@ impl Parser {
                 )
             };
             if is_label {
-                self.doc.lines[li].role = Role::InvariantsLabel;
+                self.set_role(li, Role::InvariantsLabel);
                 if depth != 0 {
                     self.err(
                         lspan,
@@ -748,11 +771,11 @@ impl Parser {
                 continue;
             }
             if label.is_some() && depth == 0 && bullet {
-                self.doc.lines[li].role = Role::Invariant;
+                self.set_role(li, Role::Invariant);
                 unit.invariants.push(li);
                 continue;
             }
-            self.doc.lines[li].role = Role::Step;
+            self.set_role(li, Role::Step);
             unit.steps.push(li);
             if label.is_some() {
                 self.err(
@@ -762,11 +785,16 @@ impl Parser {
                 );
             }
         }
-        if let Some(lab) = label {
-            let lg = self.doc.lines[lab].gutter;
-            let first = unit.invariants.first().map(|&i| self.doc.lines[i].gutter);
+        if let Some((lg, s)) = label
+            .and_then(|lab| self.doc.lines.get(lab))
+            .map(|l| (l.gutter, l.span))
+        {
+            let first = unit
+                .invariants
+                .first()
+                .and_then(|&i| self.doc.lines.get(i))
+                .map(|l| l.gutter);
             if lg != Gutter::Context && first != Some(lg) {
-                let s = self.doc.lines[lab].span;
                 self.err(
                     Span::new(s.start, s.start + 1),
                     code::BAD_GUTTER,
@@ -780,21 +808,23 @@ impl Parser {
             UnitStatus::Present => None,
         };
         if let Some(g) = want {
-            for &li in &o.lines {
-                let l = &self.doc.lines[li];
-                if l.gutter != g {
-                    let s = Span::new(l.span.start, l.span.start + 1);
-                    let what = if g == Gutter::Added {
-                        "(new)"
-                    } else {
-                        "(removed)"
-                    };
-                    self.err(
-                        s,
-                        code::NESTED_CHANGE_MISMATCH,
-                        format!("every line of a {what} unit is `{}`", g.as_char()),
-                    );
-                }
+            let off: Vec<Span> = lines
+                .iter()
+                .filter_map(|&li| self.doc.lines.get(li))
+                .filter(|l| l.gutter != g)
+                .map(|l| Span::new(l.span.start, l.span.start + 1))
+                .collect();
+            let what = if g == Gutter::Added {
+                "(new)"
+            } else {
+                "(removed)"
+            };
+            for s in off {
+                self.err(
+                    s,
+                    code::NESTED_CHANGE_MISMATCH,
+                    format!("every line of a {what} unit is `{}`", g.as_char()),
+                );
             }
         }
         self.doc.units.push(unit);
@@ -809,13 +839,17 @@ impl Parser {
         }
         let mut open: Option<Block> = None;
         for &li in lines {
-            let (depth, gutter, text, span) = {
-                let l = &self.doc.lines[li];
-                (l.depth, l.gutter, l.text.clone(), l.span)
+            let Some((depth, gutter, text, span)) = self
+                .doc
+                .lines
+                .get(li)
+                .map(|l| (l.depth, l.gutter, l.text.clone(), l.span))
+            else {
+                continue;
             };
             if let Some(b) = &open {
                 if depth == b.depth && text == "}" {
-                    self.doc.lines[li].role = Role::TypeClose;
+                    self.set_role(li, Role::TypeClose);
                     if gutter != b.gutter {
                         self.err(
                             Span::new(span.start, span.start + 1),
@@ -823,18 +857,20 @@ impl Parser {
                             "the closing `}` takes the gutter of its `struct`/`enum` line",
                         );
                     }
-                    self.doc.data[b.def].span.end = span.end;
+                    if let Some(d) = self.doc.data.get_mut(b.def) {
+                        d.span.end = span.end;
+                    }
                     open = None;
                     continue;
                 }
                 if depth == b.depth + 1 {
-                    self.doc.lines[li].role = Role::Field;
+                    self.set_role(li, Role::Field);
                     let (def, kind) = (b.def, b.kind);
                     self.member(li, def, kind);
                     continue;
                 }
                 if depth > b.depth + 1 {
-                    self.doc.lines[li].role = Role::Field;
+                    self.set_role(li, Role::Field);
                     self.err(
                         span,
                         code::BAD_STRUCT,
@@ -842,16 +878,16 @@ impl Parser {
                     );
                     continue;
                 }
-                let def_span = self.doc.lines[self.doc.data[b.def].line].span;
-                let name = self.doc.data[b.def].name.value.clone();
-                self.err(
-                    def_span,
-                    code::BAD_STRUCT,
-                    format!("`{name}` is not closed by `}}` at its own depth"),
-                );
+                if let Some((def_span, name)) = self.def_header(b.def) {
+                    self.err(
+                        def_span,
+                        code::BAD_STRUCT,
+                        format!("`{name}` is not closed by `}}` at its own depth"),
+                    );
+                }
                 open = None;
             }
-            self.doc.lines[li].role = Role::TypeHeader;
+            self.set_role(li, Role::TypeHeader);
             if depth != 0 {
                 self.err(
                     span,
@@ -859,8 +895,9 @@ impl Parser {
                     "a `struct`/`enum` line sits at content depth 0",
                 );
             }
-            if let Some((def, true)) = self.type_header(li) {
-                let kind = self.doc.data[def].kind;
+            if let Some((def, true)) = self.type_header(li)
+                && let Some(kind) = self.doc.data.get(def).map(|d| d.kind)
+            {
                 open = Some(Block {
                     def,
                     depth,
@@ -869,9 +906,7 @@ impl Parser {
                 });
             }
         }
-        if let Some(b) = open {
-            let def_span = self.doc.lines[self.doc.data[b.def].line].span;
-            let name = self.doc.data[b.def].name.value.clone();
+        if let Some((def_span, name)) = open.and_then(|b| self.def_header(b.def)) {
             self.err(
                 def_span,
                 code::BAD_STRUCT,
@@ -880,22 +915,27 @@ impl Parser {
         }
     }
 
+    fn def_header(&self, def: usize) -> Option<(Span, String)> {
+        let d = self.doc.data.get(def)?;
+        let line = self.doc.lines.get(d.line)?;
+        Some((line.span, d.name.value.clone()))
+    }
+
     fn type_header(&mut self, li: usize) -> Option<(usize, bool)> {
-        let line = &self.doc.lines[li];
-        let text = line.text.clone();
+        let line = self.doc.lines.get(li)?.clone();
+        let text = line.text.as_str();
         let span = line.span;
-        let (role, role_len) = match text.split_once(' ') {
-            Some((word, _)) => match EcsRole::from_keyword(word) {
-                Some(r) => (Some(r), word.len() + 1),
-                None => (None, 0),
+        let (role, typed) = match text.split_once(' ') {
+            Some((word, rest)) => match EcsRole::from_keyword(word) {
+                Some(r) => (Some(r), rest),
+                None => (None, text),
             },
-            None => (None, 0),
+            None => (None, text),
         };
-        let typed = &text[role_len..];
-        let (kind, kw_word) = if typed.starts_with("struct ") {
-            (TypeKind::Struct, "struct ")
-        } else if typed.starts_with("enum ") {
-            (TypeKind::Enum, "enum ")
+        let (kind, rest) = if let Some(rest) = typed.strip_prefix("struct ") {
+            (TypeKind::Struct, rest)
+        } else if let Some(rest) = typed.strip_prefix("enum ") {
+            (TypeKind::Enum, rest)
         } else {
             self.err(
                 span,
@@ -904,11 +944,9 @@ impl Parser {
             );
             return None;
         };
-        let kw = &text[..role_len + kw_word.len()];
-        let rest = &text[kw.len()..];
-        let name_len = rest.find([' ', '{']).unwrap_or(rest.len());
-        let name = &rest[..name_len];
-        let name_span = self.doc.lines[li].sub_span(kw.len(), name.len());
+        let kw_len = text.len() - rest.len();
+        let (name, after) = split_before(rest, |c| matches!(c, ' ' | '{'));
+        let name_span = line.sub_span(kw_len, name.len());
         if !is_pascal(name) {
             self.err(
                 name_span,
@@ -917,7 +955,7 @@ impl Parser {
             );
             return None;
         }
-        let after = rest[name_len..].trim_start();
+        let after = after.trim_start();
         let after_rel = text.len() - after.len();
         let Some(inner) = after.strip_prefix('{') else {
             self.err(span, code::BAD_STRUCT, format!("`{name}` needs a `{{`"));
@@ -958,13 +996,17 @@ impl Parser {
     }
 
     fn member(&mut self, li: usize, def: usize, kind: TypeKind) {
-        let text = self.doc.lines[li].text.clone();
+        let Some(text) = self.doc.lines.get(li).map(|l| l.text.clone()) else {
+            return;
+        };
         let item = text.strip_suffix(',').unwrap_or(&text).trim_end();
         self.field(li, def, kind, item, 0);
     }
 
     fn field(&mut self, li: usize, def: usize, kind: TypeKind, item: &str, rel: usize) {
-        let line = &self.doc.lines[li];
+        let Some(line) = self.doc.lines.get(li) else {
+            return;
+        };
         match kind {
             TypeKind::Enum => {
                 if !is_ident(item) {
@@ -977,11 +1019,13 @@ impl Parser {
                     return;
                 }
                 let s = line.sub_span(rel, item.len());
-                self.doc.data[def].fields.push(Field {
-                    name: Spanned::new(item.to_owned(), s),
-                    ty: None,
-                    line: li,
-                });
+                if let Some(d) = self.doc.data.get_mut(def) {
+                    d.fields.push(Field {
+                        name: Spanned::new(item.to_owned(), s),
+                        ty: None,
+                        line: li,
+                    });
+                }
             }
             TypeKind::Struct => {
                 let Some((name, ty)) = item.split_once(':') else {
@@ -1010,11 +1054,13 @@ impl Parser {
                     self.err(ty_span, code::BAD_STRUCT, format!("`{ty_t}` is not a type"));
                     return;
                 }
-                self.doc.data[def].fields.push(Field {
-                    name: Spanned::new(name_t.to_owned(), name_span),
-                    ty: Some(Spanned::new(ty_t.to_owned(), ty_span)),
-                    line: li,
-                });
+                if let Some(d) = self.doc.data.get_mut(def) {
+                    d.fields.push(Field {
+                        name: Spanned::new(name_t.to_owned(), name_span),
+                        ty: Some(Spanned::new(ty_t.to_owned(), ty_span)),
+                        line: li,
+                    });
+                }
             }
         }
     }
@@ -1022,16 +1068,20 @@ impl Parser {
     fn api(&mut self, lines: &[usize]) {
         let mut module: Option<usize> = None;
         for &li in lines {
-            let (depth, text, span) = {
-                let l = &self.doc.lines[li];
-                (l.depth, l.text.clone(), l.span)
+            let Some((depth, text, span)) = self
+                .doc
+                .lines
+                .get(li)
+                .map(|l| (l.depth, l.text.clone(), l.span))
+            else {
+                continue;
             };
             if depth == 0 && !text.starts_with("fn ") {
-                self.doc.lines[li].role = Role::Module;
+                self.set_role(li, Role::Module);
                 module = self.module_line(li, &text);
                 continue;
             }
-            self.doc.lines[li].role = Role::Fn;
+            self.set_role(li, Role::Fn);
             if depth == 0 {
                 self.err(
                     span,
@@ -1063,13 +1113,15 @@ impl Parser {
             };
             match parse_signature(&text) {
                 Some(name) => {
-                    let s = self.doc.lines[li].sub_span(3, name.len());
-                    self.doc.api[m].fns.push(ApiFn {
-                        name: Spanned::new(name, s),
-                        signature: text.clone(),
-                        line: li,
-                    });
-                    self.doc.api[m].span.end = span.end;
+                    let s = self.doc.lines.get(li).map(|l| l.sub_span(3, name.len()));
+                    if let (Some(s), Some(module)) = (s, self.doc.api.get_mut(m)) {
+                        module.fns.push(ApiFn {
+                            name: Spanned::new(name, s),
+                            signature: text.clone(),
+                            line: li,
+                        });
+                        module.span.end = span.end;
+                    }
                 }
                 None => self.err(
                     span,
@@ -1081,7 +1133,8 @@ impl Parser {
     }
 
     fn module_line(&mut self, li: usize, text: &str) -> Option<usize> {
-        let span = self.doc.lines[li].span;
+        let line = self.doc.lines.get(li)?;
+        let span = line.span;
         let (name, resp) = match text.split_once(" — ") {
             Some((n, r)) if is_pascal(n.trim()) && !r.trim().is_empty() => (n.trim(), r.trim()),
             _ => {
@@ -1093,7 +1146,7 @@ impl Parser {
                 return None;
             }
         };
-        let s = self.doc.lines[li].sub_span(0, name.len());
+        let s = line.sub_span(0, name.len());
         self.doc.api.push(Module {
             name: Spanned::new(name.to_owned(), s),
             responsibility: resp.to_owned(),
@@ -1106,8 +1159,10 @@ impl Parser {
 
     fn tests(&mut self, lines: &[usize]) {
         for &li in lines {
-            self.doc.lines[li].role = Role::Test;
-            let l = &self.doc.lines[li];
+            self.set_role(li, Role::Test);
+            let Some(l) = self.doc.lines.get(li) else {
+                continue;
+            };
             let span = l.span;
             if l.depth != 0 || l.parent.is_some() {
                 self.err(
@@ -1137,7 +1192,7 @@ impl Parser {
             };
             match parsed {
                 Some((kind, label, rel, desc)) => {
-                    let s = self.doc.lines[li].sub_span(rel, label.len());
+                    let s = l.sub_span(rel, label.len());
                     self.doc.tests.push(TestEntry {
                         kind,
                         label: Spanned::new(label, s),
@@ -1162,22 +1217,37 @@ enum Tok {
     Guards(Vec<Spanned<String>>, Span),
 }
 
+fn split_before(s: &str, stop: impl Fn(char) -> bool) -> (&str, &str) {
+    s.find(stop)
+        .and_then(|i| s.split_at_checked(i))
+        .unwrap_or((s, ""))
+}
+
 fn word_end(s: &str, from: usize) -> usize {
-    s[from..].find(' ').map_or(s.len(), |i| from + i)
+    s.get(from..)
+        .and_then(|t| t.find(' '))
+        .map_or(s.len(), |i| from + i)
 }
 
 fn skip_spaces(s: &str, from: usize) -> usize {
-    from + (s[from..].len() - s[from..].trim_start_matches(' ').len())
+    s.get(from..)
+        .map_or(from, |t| from + (t.len() - t.trim_start_matches(' ').len()))
+}
+
+fn byte_at(s: &str, i: usize) -> Option<u8> {
+    s.as_bytes().get(i).copied()
+}
+
+fn starts_at(s: &str, i: usize, prefix: &str) -> bool {
+    s.get(i..).is_some_and(|t| t.starts_with(prefix))
 }
 
 fn anchor_at(s: &str, i: usize, base: usize) -> Option<(Spanned<String>, usize)> {
-    if s.as_bytes().get(i) != Some(&b'^') {
-        return None;
-    }
-    let name_end = s[i + 1..]
-        .find(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'))
-        .map_or(s.len(), |e| i + 1 + e);
-    let name = &s[i + 1..name_end];
+    let tail = s.get(i..)?.strip_prefix('^')?;
+    let (name, _) = split_before(tail, |c: char| {
+        !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+    });
+    let name_end = i + 1 + name.len();
     if !is_anchor_name(name) {
         return None;
     }
@@ -1196,29 +1266,29 @@ fn parse_tail(s: &str, base: usize) -> Option<Vec<Tok>> {
             break;
         }
         let start = i;
-        if s.as_bytes()[i] == b'^' {
+        if byte_at(s, i) == Some(b'^') {
             let (a, end) = anchor_at(s, i, base)?;
-            if end < s.len() && s.as_bytes()[end] != b' ' {
+            if byte_at(s, end).is_some_and(|b| b != b' ') {
                 return None;
             }
             toks.push(Tok::Anchor(a));
             i = end;
             continue;
         }
-        if !(s[i..].starts_with("@ ")) {
+        if !starts_at(s, i, "@ ") {
             return None;
         }
         let ws = skip_spaces(s, i + 1);
         let we = word_end(s, ws);
-        let word = &s[ws..we];
+        let word = s.get(ws..we)?;
         match word {
             "api" => {
                 let mut refs = Vec::new();
                 let mut j = we;
                 loop {
                     let ps = skip_spaces(s, j);
-                    let pe = s[ps..].find([' ', ',']).map_or(s.len(), |e| ps + e);
-                    let path = &s[ps..pe];
+                    let (path, _) = split_before(s.get(ps..)?, |c| matches!(c, ' ' | ','));
+                    let pe = ps + path.len();
                     let segs: Vec<&str> = path.split("::").collect();
                     if segs.len() < 2 || !segs.iter().all(|seg| is_ident(seg)) {
                         return None;
@@ -1228,7 +1298,7 @@ fn parse_tail(s: &str, base: usize) -> Option<Vec<Tok>> {
                         Span::new(base + ps, base + pe),
                     ));
                     j = pe;
-                    if s[j..].starts_with(',') {
+                    if starts_at(s, j, ",") {
                         j += 1;
                         continue;
                     }
@@ -1245,13 +1315,13 @@ fn parse_tail(s: &str, base: usize) -> Option<Vec<Tok>> {
                     let (a, end) = anchor_at(s, j, base)?;
                     list.push(a);
                     j = end;
-                    if s[j..].starts_with(',') {
+                    if starts_at(s, j, ",") {
                         j += 1;
                         continue;
                     }
                     break;
                 }
-                if j < s.len() && s.as_bytes()[j] != b' ' {
+                if byte_at(s, j).is_some_and(|b| b != b' ') {
                     return None;
                 }
                 toks.push(Tok::Guards(list, Span::new(base + start, base + j)));
@@ -1304,15 +1374,17 @@ pub fn shared_prefix(old: &str, new: &str) -> usize {
     }
     let new_words: Vec<&str> = new.split(' ').filter(|w| !w.is_empty()).collect();
     let mut best: Option<(usize, usize)> = None;
-    for k in 0..old_words.len() {
-        let m = old_words[k..]
+    let mut rest = old_words.as_slice();
+    while let Some((&(off, _), tail)) = rest.split_first() {
+        let m = rest
             .iter()
             .zip(&new_words)
             .take_while(|((_, a), b)| a == *b)
             .count();
         if m > 0 && best.is_none_or(|(_, bm)| m > bm) {
-            best = Some((old_words[k].0, m));
+            best = Some((off, m));
         }
+        rest = tail;
     }
     if let Some((off, _)) = best {
         return off;
@@ -1335,13 +1407,13 @@ pub fn split_top(s: &str) -> Vec<(usize, &str)> {
             '<' | '(' => depth += 1,
             '>' | ')' => depth -= 1,
             ',' if depth == 0 => {
-                out.push((start, &s[start..i]));
+                out.push((start, s.get(start..i).unwrap_or_default()));
                 start = i + 1;
             }
             _ => {}
         }
     }
-    out.push((start, &s[start..]));
+    out.push((start, s.get(start..).unwrap_or_default()));
     out
 }
 
@@ -1351,12 +1423,12 @@ pub const PRIMITIVES: [&str; 13] = [
 
 pub fn valid_type(s: &str) -> bool {
     let s = s.trim();
-    let (name, args) = match s.find('<') {
-        Some(i) => {
-            let Some(inner) = s[i + 1..].strip_suffix('>') else {
+    let (name, args) = match s.split_once('<') {
+        Some((name, rest)) => {
+            let Some(inner) = rest.strip_suffix('>') else {
                 return false;
             };
-            (&s[..i], Some(inner))
+            (name, Some(inner))
         }
         None => (s, None),
     };
@@ -1378,28 +1450,26 @@ pub fn valid_type(s: &str) -> bool {
 /// as written.
 pub fn parse_signature(text: &str) -> Option<String> {
     let s = text.strip_prefix("fn ")?;
-    let open = s.find('(')?;
-    let name = &s[..open];
+    let (name, after_open) = s.split_once('(')?;
     if name.is_empty() || !name.split("::").all(is_ident) {
         return None;
     }
-    let mut depth = 0;
+    let mut depth = 1;
     let mut close = None;
-    for (i, c) in s[open..].char_indices() {
+    for (i, c) in after_open.char_indices() {
         match c {
             '(' | '<' => depth += 1,
             ')' | '>' => {
                 depth -= 1;
                 if depth == 0 && c == ')' {
-                    close = Some(open + i);
+                    close = Some(i);
                     break;
                 }
             }
             _ => {}
         }
     }
-    let close = close?;
-    let params = &s[open + 1..close];
+    let (params, after_close) = after_open.split_at_checked(close?)?;
     if !params.trim().is_empty() {
         for (_, p) in split_top(params) {
             let (n, t) = p.split_once(':')?;
@@ -1408,7 +1478,7 @@ pub fn parse_signature(text: &str) -> Option<String> {
             }
         }
     }
-    let rest = s[close + 1..].trim();
+    let rest = after_close.strip_prefix(')')?.trim();
     if !rest.is_empty() {
         let ret = rest.strip_prefix("->")?;
         if !valid_type(ret) {

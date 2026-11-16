@@ -1,6 +1,7 @@
-//! `textDocument/references` end to end over stdio, against a fixture workspace
-//! written to a temporary directory. Skipped silently when the helix runtime
-//! isn't available or resolves no Python language.
+//! `textDocument/definition` on method calls end to end over stdio, against a
+//! fixture workspace where two classes define the same method names. Skipped
+//! silently when the helix runtime isn't available or resolves no Python
+//! language.
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -11,9 +12,8 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use treesitter_class_lsp::languages::LanguageRegistry;
 
-const LIB_PY: &str = "class Widget:\n    \"\"\"A Widget.\"\"\"\n\n\nprint(\"Widget\")\n";
-const APP_PY: &str = "w = Widget()\n";
-const DEFS_PROTO: &str = "syntax = \"proto3\";\nservice Widget {\n}\n";
+const CLIENT_PY: &str = "class Widget:\n    def get_state(self):\n        pass\n\n    def run(self):\n        return self.get_state()\n\n\nclass Gadget:\n    def get_state(self):\n        pass\n\n    def run(self):\n        pass\n";
+const APP_PY: &str = "import client\n\ndef go():\n    w = client.Widget()\n    w.run()\n    g: Gadget = make()\n    g.get_state()\n    unknown.get_state()\n";
 
 struct Fixture {
     root: PathBuf,
@@ -32,11 +32,10 @@ impl Fixture {
             eprintln!("skipping: no python language configured");
             return None;
         }
-        let root = std::env::temp_dir().join(format!("tslsp-refs-{}-{name}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("tslsp-recv-{}-{name}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("lib.py"), LIB_PY).unwrap();
+        std::fs::write(root.join("client.py"), CLIENT_PY).unwrap();
         std::fs::write(root.join("app.py"), APP_PY).unwrap();
-        std::fs::write(root.join("defs.proto"), DEFS_PROTO).unwrap();
         Some(Self {
             root: std::fs::canonicalize(root).unwrap(),
         })
@@ -90,7 +89,10 @@ impl Server {
     }
 
     fn notify(&mut self, method: &str, params: Value) {
-        send(&mut self.stdin, &json!({"jsonrpc": "2.0", "method": method, "params": params}));
+        send(
+            &mut self.stdin,
+            &json!({"jsonrpc": "2.0", "method": method, "params": params}),
+        );
     }
 
     fn request(&mut self, method: &str, params: Value) -> Value {
@@ -112,7 +114,9 @@ impl Server {
         loop {
             let msg = self.messages.recv_timeout(Duration::from_secs(60)).unwrap();
             let text = msg["params"]["message"].as_str().unwrap_or("");
-            if msg["method"] == "window/logMessage" && text.contains("treesitter-class-lsp: indexed") {
+            if msg["method"] == "window/logMessage"
+                && text.contains("treesitter-class-lsp: indexed")
+            {
                 return;
             }
         }
@@ -125,14 +129,10 @@ impl Server {
         );
     }
 
-    fn references(&mut self, path: &Path, line: u32, character: u32, include_declaration: bool) -> Value {
+    fn definition(&mut self, path: &Path, line: u32, character: u32) -> Value {
         self.request(
-            "textDocument/references",
-            json!({
-                "textDocument": {"uri": file_uri(path)},
-                "position": {"line": line, "character": character},
-                "context": {"includeDeclaration": include_declaration},
-            }),
+            "textDocument/definition",
+            json!({"textDocument": {"uri": file_uri(path)}, "position": {"line": line, "character": character}}),
         )
     }
 }
@@ -174,6 +174,19 @@ fn recv<R: BufRead>(r: &mut R) -> Option<Value> {
     serde_json::from_slice(&body).ok()
 }
 
+fn only_location(answer: &Value) -> (String, u64, u64) {
+    let locations = answer.as_array().expect("an array of locations");
+    assert_eq!(locations.len(), 1, "expected one location: {answer}");
+    let start = &locations[0]["range"]["start"];
+    let uri = locations[0]["uri"].as_str().unwrap();
+    let file = uri.rsplit('/').next().unwrap().to_string();
+    (
+        file,
+        start["line"].as_u64().unwrap(),
+        start["character"].as_u64().unwrap(),
+    )
+}
+
 fn every_location(answer: &Value) -> Vec<(String, u64, u64)> {
     answer
         .as_array()
@@ -181,86 +194,83 @@ fn every_location(answer: &Value) -> Vec<(String, u64, u64)> {
         .iter()
         .map(|location| {
             let start = &location["range"]["start"];
-            let file = location["uri"].as_str().unwrap().rsplit('/').next().unwrap();
-            (file.to_string(), start["line"].as_u64().unwrap(), start["character"].as_u64().unwrap())
+            let file = location["uri"]
+                .as_str()
+                .unwrap()
+                .rsplit('/')
+                .next()
+                .unwrap();
+            (
+                file.to_string(),
+                start["line"].as_u64().unwrap(),
+                start["character"].as_u64().unwrap(),
+            )
         })
         .collect()
 }
 
-fn python_locations(answer: &Value) -> Vec<(String, u64, u64)> {
-    every_location(answer)
-        .into_iter()
-        .filter(|(file, _, _)| file.ends_with(".py"))
-        .collect()
-}
-
-// Pins S8: references to `Widget` from its definition hold `lib.py`'s definition and `app.py`'s use.
+// Pins S2: `self.get_state()` in `Widget` answers `Widget`'s method alone, though `Gadget` defines the same name.
 #[test]
-fn references_hold_the_definition_and_every_use() {
-    let Some(fx) = Fixture::new("uses") else { return };
-    let mut server = Server::start(&fx.root);
-    let lib = fx.root.join("lib.py");
-    server.open(&lib, LIB_PY);
-
-    let answer = server.references(&lib, 0, 6, true);
-
-    assert_eq!(
-        python_locations(&answer),
-        [("app.py".to_string(), 0, 4), ("lib.py".to_string(), 0, 6)]
-    );
-}
-
-// Pins that a mention is not a reference: the docstring and the `print("Widget")` string in `lib.py` are absent.
-#[test]
-fn a_mention_in_a_docstring_or_string_is_not_a_reference() {
-    let Some(fx) = Fixture::new("mentions") else { return };
-    let mut server = Server::start(&fx.root);
-    let lib = fx.root.join("lib.py");
-    server.open(&lib, LIB_PY);
-
-    let answer = server.references(&lib, 0, 6, true);
-
-    let lib_lines: Vec<u64> = python_locations(&answer)
-        .into_iter()
-        .filter(|(file, _, _)| file == "lib.py")
-        .map(|(_, line, _)| line)
-        .collect();
-    assert_eq!(lib_lines, [0]);
-}
-
-// Pins that references in the buffer's language come first for a Python buffer, though `defs.proto` sorts before `lib.py`.
-#[test]
-fn references_in_the_buffers_language_are_listed_first() {
-    let Some(fx) = Fixture::new("order") else { return };
-    if LanguageRegistry::load().unwrap().resolve(Path::new("probe.proto")).is_none() {
-        eprintln!("skipping: no protobuf language configured");
+fn self_call_resolves_to_the_enclosing_classes_method() {
+    let Some(fx) = Fixture::new("self_call") else {
         return;
-    }
+    };
+    let mut server = Server::start(&fx.root);
+    let client = fx.root.join("client.py");
+    server.open(&client, CLIENT_PY);
+
+    let answer = server.definition(&client, 5, 22);
+
+    assert_eq!(only_location(&answer), ("client.py".to_string(), 1, 8));
+}
+
+// Pins S10: a variable assigned from `client.Widget()` resolves `w.run()` to `Widget`'s method alone, though `Gadget` defines `run` too.
+#[test]
+fn variable_assigned_from_a_constructor_resolves_to_that_classes_method() {
+    let Some(fx) = Fixture::new("constructor") else {
+        return;
+    };
     let mut server = Server::start(&fx.root);
     let app = fx.root.join("app.py");
     server.open(&app, APP_PY);
 
-    let answer = server.references(&app, 0, 4, true);
+    let answer = server.definition(&app, 4, 6);
+
+    assert_eq!(only_location(&answer), ("client.py".to_string(), 4, 8));
+}
+
+// Pins that an annotated variable resolves its method call to the annotated class's method alone.
+#[test]
+fn annotated_variable_resolves_to_its_types_method() {
+    let Some(fx) = Fixture::new("annotated") else {
+        return;
+    };
+    let mut server = Server::start(&fx.root);
+    let app = fx.root.join("app.py");
+    server.open(&app, APP_PY);
+
+    let answer = server.definition(&app, 6, 6);
+
+    assert_eq!(only_location(&answer), ("client.py".to_string(), 9, 8));
+}
+
+// Pins that a receiver the file never types still answers every definition of the name, which is what keeps by-name navigation working.
+#[test]
+fn an_unresolvable_receiver_still_answers_by_name() {
+    let Some(fx) = Fixture::new("unresolved") else {
+        return;
+    };
+    let mut server = Server::start(&fx.root);
+    let app = fx.root.join("app.py");
+    server.open(&app, APP_PY);
+
+    let answer = server.definition(&app, 7, 12);
 
     assert_eq!(
         every_location(&answer),
         [
-            ("app.py".to_string(), 0, 4),
-            ("lib.py".to_string(), 0, 6),
-            ("defs.proto".to_string(), 1, 8)
+            ("client.py".to_string(), 1, 8),
+            ("client.py".to_string(), 9, 8)
         ]
     );
-}
-
-// Pins that `includeDeclaration: false` drops the definition row and keeps the use.
-#[test]
-fn excluding_the_declaration_drops_the_definition_and_keeps_the_use() {
-    let Some(fx) = Fixture::new("no-declaration") else { return };
-    let mut server = Server::start(&fx.root);
-    let lib = fx.root.join("lib.py");
-    server.open(&lib, LIB_PY);
-
-    let answer = server.references(&lib, 0, 6, false);
-
-    assert_eq!(python_locations(&answer), [("app.py".to_string(), 0, 4)]);
 }

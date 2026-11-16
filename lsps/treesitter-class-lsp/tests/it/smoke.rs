@@ -24,7 +24,13 @@ fn indexes_this_crate_and_finds_known_definitions() {
     let names: Vec<&str> = index.entries().iter().map(|e| e.name.as_str()).collect();
     // `Backend` is defined in src/server.rs; `Index` and `Indexer` in
     // src/indexer.rs; `LoadedGrammar` in src/grammars.rs.
-    for expected in ["Backend", "Index", "Indexer", "LoadedGrammar", "LanguageRegistry"] {
+    for expected in [
+        "Backend",
+        "Index",
+        "Indexer",
+        "LoadedGrammar",
+        "LanguageRegistry",
+    ] {
         assert!(
             names.contains(&expected),
             "expected {expected} in index; got {} entries: {:?}",

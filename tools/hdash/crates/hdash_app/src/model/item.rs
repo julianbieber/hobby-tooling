@@ -4,6 +4,8 @@
 use std::collections::{HashMap, HashSet};
 use std::time::SystemTime;
 
+use hwt_core::Roots;
+
 use crate::facets::{Filters, facts, passes};
 use crate::session::SessionState;
 
@@ -152,7 +154,7 @@ pub struct Model {
 /// Scan the notes tree and the worktrees. Git and PR status arrive async.
 pub fn scan() -> Model {
     Model {
-        tasks: scan_tasks(),
+        tasks: scan_tasks(&Roots::of_user()),
         projects: scan_projects(),
     }
 }

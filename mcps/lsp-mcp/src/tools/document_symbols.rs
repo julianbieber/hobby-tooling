@@ -1,3 +1,5 @@
+//! Parameters and results of the document symbol tool.
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

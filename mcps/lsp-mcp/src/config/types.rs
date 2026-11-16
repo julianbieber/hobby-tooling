@@ -1,3 +1,6 @@
+//! The model of Helix's `languages.toml`: language servers, languages, and
+//! how a language finds its project root.
+
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -243,8 +246,8 @@ fn glob_matches(pattern: &str, name: &str) -> bool {
         } else if i == segments.len() - 1 {
             // Trailing segment must be a suffix of what remains.
             return rest.ends_with(seg);
-        } else if let Some(pos) = rest.find(seg) {
-            rest = &rest[pos + seg.len()..];
+        } else if let Some((_, after)) = rest.split_once(seg) {
+            rest = after;
         } else {
             return false;
         }
@@ -301,7 +304,11 @@ pub struct LanguageConfig {
     pub auto_format: bool,
 
     /// Language ID for LSP (if different from name)
-    #[serde(rename = "language-id", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "language-id",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub language_id: Option<String>,
 
     /// Shebangs for script detection
@@ -309,7 +316,11 @@ pub struct LanguageConfig {
     pub shebangs: Vec<String>,
 
     /// Comment tokens (can be a string or array of strings)
-    #[serde(rename = "comment-token", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "comment-token",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub comment_token: Option<toml::Value>,
 
     /// Indent configuration
@@ -317,7 +328,11 @@ pub struct LanguageConfig {
     pub indent: Option<toml::Value>,
 
     /// Text width
-    #[serde(rename = "text-width", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "text-width",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub text_width: Option<u32>,
 
     /// Formatter configuration
@@ -362,13 +377,11 @@ impl LanguagesConfig {
 
     /// Find language configuration by file extension
     pub fn find_language_by_extension(&self, extension: &str) -> Option<&LanguageConfig> {
-        self.language
-            .iter()
-            .find(|lang| {
-                lang.file_types
-                    .iter()
-                    .any(|ft| ft.matches_extension(extension))
-            })
+        self.language.iter().find(|lang| {
+            lang.file_types
+                .iter()
+                .any(|ft| ft.matches_extension(extension))
+        })
     }
 
     /// Find language configuration by language name (e.g., "rust", "python")

@@ -47,13 +47,10 @@ pub fn lines(src: &str) -> Vec<Line> {
             continue;
         }
 
-        let lead: String = trimmed_end
-            .chars()
-            .take_while(|c| *c == ' ' || *c == '\t')
-            .collect();
+        let body = trimmed_end.trim_start_matches([' ', '\t']);
+        let lead = trimmed_end.strip_suffix(body).unwrap_or_default();
         let tab_indent = lead.contains('\t');
         let indent = lead.chars().filter(|c| *c == ' ').count();
-        let body = &trimmed_end[lead.len()..];
 
         let is_section = indent == 0 && !tab_indent && body.starts_with("##");
         if !is_section && body.starts_with('#') {
@@ -124,7 +121,10 @@ mod tests {
     fn span_covers_the_text_after_the_marker() {
         let src = "! no import cycles\n";
         let ls = lines(src);
-        assert_eq!(&src[ls[0].span.start..ls[0].span.end], "no import cycles");
+        assert_eq!(
+            src.get(ls[0].span.start..ls[0].span.end),
+            Some("no import cycles")
+        );
     }
 
     // Tabs are illegal indentation and the parser reports them, so the lexer has

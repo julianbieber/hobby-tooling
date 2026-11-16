@@ -8,7 +8,10 @@ use std::path::{Path, PathBuf};
 pub const MARKER: &str = ".hatlas-site";
 
 fn io(path: &Path) -> impl FnOnce(std::io::Error) -> Error + '_ {
-    move |source| Error::Io { path: path.to_path_buf(), source }
+    move |source| Error::Io {
+        path: path.to_path_buf(),
+        source,
+    }
 }
 
 /// Fails with `NotASite` when `out` exists and is not a hatlas site.
@@ -21,7 +24,9 @@ pub fn guard(out: &Path) -> Result<(), Error> {
 
 /// The sibling directory a site is written into before it replaces `out`.
 pub fn tmp_dir(out: &Path) -> PathBuf {
-    let name = out.file_name().map_or("hatlas".into(), |n| n.to_string_lossy().into_owned());
+    let name = out
+        .file_name()
+        .map_or("hatlas".into(), |n| n.to_string_lossy().into_owned());
     out.with_file_name(format!("{name}.tmp-{}", std::process::id()))
 }
 

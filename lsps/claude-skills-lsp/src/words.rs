@@ -39,27 +39,26 @@ fn is_ref_char(c: char) -> bool {
 /// run with no sigil and an empty query yields `None`, but a lone `/` (just
 /// typed) yields a `Slash` token with an empty query so completion can open.
 pub fn ref_at(text: &str, pos: Position) -> Option<RefToken> {
-    let line = text.lines().nth(pos.line as usize).unwrap_or("");
+    let line = usize::try_from(pos.line)
+        .ok()
+        .and_then(|n| text.lines().nth(n))
+        .unwrap_or("");
     let chars: Vec<char> = line.chars().collect();
-    let len = chars.len();
-    let cursor = (pos.character as usize).min(len);
+    let cursor = usize::try_from(pos.character).map_or(chars.len(), |c| c.min(chars.len()));
+    let (before, after) = chars.split_at_checked(cursor)?;
 
-    // Run of name-chars ending at the cursor, extended rightwards through the
-    // rest of the same token.
-    let mut start = cursor;
-    while start > 0 && is_ref_char(chars[start - 1]) {
-        start -= 1;
-    }
-    let mut end = cursor;
-    while end < len && is_ref_char(chars[end]) {
-        end += 1;
-    }
+    let left = before.iter().rev().take_while(|c| is_ref_char(**c)).count();
+    let right = after.iter().take_while(|c| is_ref_char(**c)).count();
+    let start = cursor - left;
+    let end = cursor + right;
 
-    let query: String = chars[start..end].iter().collect();
+    let query: String = before
+        .iter()
+        .skip(start)
+        .chain(after.iter().take(right))
+        .collect();
 
-    // Classify by the character immediately left of the run. The replace range
-    // always covers just the run (`start..end`), never the sigil.
-    let sigil = match start.checked_sub(1).map(|i| chars[i]) {
+    let sigil = match before.iter().rev().nth(left) {
         Some('/') => Sigil::Slash,
         Some('`') => Sigil::Backtick,
         _ => Sigil::Bare,
@@ -75,11 +74,11 @@ pub fn ref_at(text: &str, pos: Position) -> Option<RefToken> {
         replace: Range {
             start: Position {
                 line: pos.line,
-                character: start as u32,
+                character: u32::try_from(start).ok()?,
             },
             end: Position {
                 line: pos.line,
-                character: end as u32,
+                character: u32::try_from(end).ok()?,
             },
         },
     })

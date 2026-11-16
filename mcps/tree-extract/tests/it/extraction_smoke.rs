@@ -191,6 +191,9 @@ class Service {
     let r = extractor.extract_repo(dir.path());
     let names: Vec<&str> = r.symbols.iter().map(|s| s.name.as_str()).collect();
     for expect in ["Service", "handle", "compute"] {
-        assert!(names.contains(&expect), "missing scala symbol {expect}: {names:?}");
+        assert!(
+            names.contains(&expect),
+            "missing scala symbol {expect}: {names:?}"
+        );
     }
 }

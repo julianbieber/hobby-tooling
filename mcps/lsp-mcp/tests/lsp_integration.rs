@@ -129,7 +129,7 @@ fn test_lsp_client_caching_same_workspace() {
         let client1 = client1.unwrap();
 
         // Verify the client is alive
-        assert!(client1.is_alive().await, "Client should be alive after spawn");
+        assert!(client1.is_alive(), "Client should be alive after spawn");
 
         // Create second manager for same workspace
         let manager2 = Arc::new(LspManager::new(config.clone(), workspace.clone()));
@@ -185,8 +185,8 @@ fn test_lsp_client_isolation_different_workspaces() {
         );
 
         // Both should be alive
-        assert!(client1.is_alive().await, "Client1 should be alive");
-        assert!(client2.is_alive().await, "Client2 should be alive");
+        assert!(client1.is_alive(), "Client1 should be alive");
+        assert!(client2.is_alive(), "Client2 should be alive");
     });
 }
 
@@ -206,7 +206,11 @@ fn test_workspace_symbol_search() {
         let symbols = manager
             .workspace_symbol("rust-analyzer", "LspManager")
             .await;
-        assert!(symbols.is_ok(), "workspace_symbol failed: {:?}", symbols.err());
+        assert!(
+            symbols.is_ok(),
+            "workspace_symbol failed: {:?}",
+            symbols.err()
+        );
 
         let symbols = symbols.unwrap();
         assert!(
@@ -236,7 +240,11 @@ fn test_workspace_symbol_search_function() {
         let symbols = manager
             .workspace_symbol("rust-analyzer", "get_or_start_server")
             .await;
-        assert!(symbols.is_ok(), "workspace_symbol failed: {:?}", symbols.err());
+        assert!(
+            symbols.is_ok(),
+            "workspace_symbol failed: {:?}",
+            symbols.err()
+        );
 
         let symbols = symbols.unwrap();
         assert!(
@@ -271,7 +279,11 @@ fn test_document_symbol() {
         let uri = lsp_types::Url::from_file_path(&file_path).unwrap();
         let symbols = client.document_symbol(&uri).await;
 
-        assert!(symbols.is_ok(), "document_symbol failed: {:?}", symbols.err());
+        assert!(
+            symbols.is_ok(),
+            "document_symbol failed: {:?}",
+            symbols.err()
+        );
 
         let symbols = symbols.unwrap();
         assert!(symbols.is_some(), "Should return symbols for manager.rs");
@@ -315,13 +327,6 @@ fn test_workspace_symbol_all() {
         // Search across all language servers
         let symbols = manager.workspace_symbol_all("LspClient").await;
         assert!(
-            symbols.is_ok(),
-            "workspace_symbol_all failed: {:?}",
-            symbols.err()
-        );
-
-        let symbols = symbols.unwrap();
-        assert!(
             !symbols.is_empty(),
             "Should find LspClient symbol across all servers"
         );
@@ -346,10 +351,7 @@ fn test_lsp_client_is_alive() {
         let client = client.unwrap();
 
         // Client should be alive
-        assert!(
-            client.is_alive().await,
-            "Freshly spawned client should be alive"
-        );
+        assert!(client.is_alive(), "Freshly spawned client should be alive");
 
         // Make a request to verify it's working
         let symbols = client.workspace_symbol("test").await;
@@ -479,7 +481,11 @@ fn test_wrong_launch_root_resolves_per_file() {
         client.did_open(&uri, "rust", &contents).await.unwrap();
 
         let symbols = client.document_symbol(&uri).await;
-        assert!(symbols.is_ok(), "document_symbol failed: {:?}", symbols.err());
+        assert!(
+            symbols.is_ok(),
+            "document_symbol failed: {:?}",
+            symbols.err()
+        );
         assert!(
             symbols.unwrap().is_some(),
             "expected document symbols for manager.rs"

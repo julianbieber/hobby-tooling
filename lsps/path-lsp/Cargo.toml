@@ -2,10 +2,41 @@
 name = "path_lsp"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.100"
+publish = false
+
+[lib]
+doctest = false
 
 [dependencies]
-tower-lsp = "0.20"
-tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros"] }
+parking_lot = { version = "0.13", default-features = false }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "io-std", "macros"] }
+tower-lsp = { version = "0.20", default-features = false, features = ["runtime-tokio"] }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = { version = "3", default-features = false }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+indexing_slicing = "deny"
+string_slice = "deny"
+exit = "deny"
+as_conversions = "deny"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+dbg_macro = "deny"
+disallowed_methods = "deny"
+disallowed_types = "deny"
+await_holding_lock = "deny"
+
+[profile.release]
+panic = "abort"
+debug = "line-tables-only"

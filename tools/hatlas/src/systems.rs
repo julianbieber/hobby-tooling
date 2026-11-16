@@ -107,7 +107,12 @@ impl Registry {
     ///
     /// `docs[i]` must be the rustdoc of `atlas.crates[i]`. Fails with `MissingField` when a
     /// system's signature contains a type the printer cannot render.
-    pub fn build(atlas: &mut Atlas, docs: &[Crate], scip: &ScipIndex, calls: &[Call]) -> Result<Registry, Error> {
+    pub fn build(
+        atlas: &mut Atlas,
+        docs: &[Crate],
+        scip: &ScipIndex,
+        calls: &[Call],
+    ) -> Result<Registry, Error> {
         let mut registry = Registry::default();
         let mut roles: Vec<(ItemRef, Role)> = Vec::new();
         let mut sets: Vec<SetConfig> = Vec::new();
@@ -124,12 +129,16 @@ impl Registry {
             };
             let site = (call.file.clone(), call.line);
             let note = |registry: &mut Registry, text: &str| {
-                registry.unresolved.push(format!("{}:{} — {}", call.file, call.line, text));
+                registry
+                    .unresolved
+                    .push(format!("{}:{} — {}", call.file, call.line, text));
             };
             match &call.kind {
                 CallKind::Sets { schedule, entries } => {
                     for e in entries {
-                        let Target::Named(id) = &e.target else { continue };
+                        let Target::Named(id) = &e.target else {
+                            continue;
+                        };
                         sets.push(SetConfig {
                             key: resolver.set_key(id),
                             text: id.text.clone(),
@@ -137,7 +146,15 @@ impl Registry {
                             conditions: e.conditions.clone(),
                             parents: e.sets.iter().map(|s| resolver.set_key(s)).collect(),
                         });
-                        record(&mut registry, owner_item, "set", &id.text, None, schedule, &site);
+                        record(
+                            &mut registry,
+                            owner_item,
+                            "set",
+                            &id.text,
+                            None,
+                            schedule,
+                            &site,
+                        );
                     }
                 }
                 CallKind::Systems { schedule, entries } => {
@@ -152,27 +169,48 @@ impl Registry {
                             site: site.clone(),
                         };
                         match &e.target {
-                            Target::Closure { line, col, .. } => match owner_item.and_then(|o| resolver.atlas.item(o).map(|i| (o, i))) {
+                            Target::Closure { line, col, .. } => match owner_item
+                                .and_then(|o| resolver.atlas.item(o).map(|i| (o, i)))
+                            {
                                 Some((o, item)) => {
-                                    anon_keys.push(e.sets.iter().map(|s| resolver.set_key(s)).collect());
+                                    anon_keys
+                                        .push(e.sets.iter().map(|s| resolver.set_key(s)).collect());
                                     registry.anonymous.push(AnonymousSystem {
                                         crate_index: o.0,
-                                        module: item.path[..item.path.len() - 1].to_vec(),
+                                        module: parent_module(&item.path),
                                         anchor: format!("closure.L{line}C{col}"),
                                         observes: None,
                                         registration,
                                     })
                                 }
-                                None => note(&mut registry, "closure with an owner outside the atlas"),
+                                None => {
+                                    note(&mut registry, "closure with an owner outside the atlas")
+                                }
                             },
                             Target::Unparsed(text) => note(&mut registry, text),
                             Target::Named(id) => match resolver.resolve(id) {
                                 Res::Item(r) => {
-                                    record(&mut registry, owner_item, "system", &id.text, Some(r), schedule, &site);
+                                    record(
+                                        &mut registry,
+                                        owner_item,
+                                        "system",
+                                        &id.text,
+                                        Some(r),
+                                        schedule,
+                                        &site,
+                                    );
                                     roles.push((r, Role::System));
                                     pending.push((r, Role::System, registration, e));
                                 }
-                                Res::External => record(&mut registry, owner_item, "system", &id.text, None, schedule, &site),
+                                Res::External => record(
+                                    &mut registry,
+                                    owner_item,
+                                    "system",
+                                    &id.text,
+                                    None,
+                                    schedule,
+                                    &site,
+                                ),
                                 Res::Workspace | Res::Unknown => note(&mut registry, &id.text),
                             },
                         }
@@ -192,25 +230,51 @@ impl Registry {
                         match &e.target {
                             Target::Named(id) => match resolver.resolve(id) {
                                 Res::Item(r) => {
-                                    record(&mut registry, owner_item, "observer", &id.text, Some(r), "", &site);
+                                    record(
+                                        &mut registry,
+                                        owner_item,
+                                        "observer",
+                                        &id.text,
+                                        Some(r),
+                                        "",
+                                        &site,
+                                    );
                                     roles.push((r, Role::Observer));
                                     pending.push((r, Role::Observer, registration, e));
                                 }
-                                Res::External => record(&mut registry, owner_item, "observer", &id.text, None, "", &site),
+                                Res::External => record(
+                                    &mut registry,
+                                    owner_item,
+                                    "observer",
+                                    &id.text,
+                                    None,
+                                    "",
+                                    &site,
+                                ),
                                 Res::Workspace | Res::Unknown => note(&mut registry, &id.text),
                             },
-                            Target::Closure { line, col, observes, .. } => match owner_item.and_then(|o| resolver.atlas.item(o).map(|i| (o, i))) {
+                            Target::Closure {
+                                line,
+                                col,
+                                observes,
+                                ..
+                            } => match owner_item
+                                .and_then(|o| resolver.atlas.item(o).map(|i| (o, i)))
+                            {
                                 Some((o, item)) => {
-                                    anon_keys.push(e.sets.iter().map(|s| resolver.set_key(s)).collect());
+                                    anon_keys
+                                        .push(e.sets.iter().map(|s| resolver.set_key(s)).collect());
                                     registry.anonymous.push(AnonymousSystem {
                                         crate_index: o.0,
-                                        module: item.path[..item.path.len() - 1].to_vec(),
+                                        module: parent_module(&item.path),
                                         anchor: format!("closure.L{line}C{col}"),
                                         observes: observes.clone(),
                                         registration,
                                     })
                                 }
-                                None => note(&mut registry, "closure with an owner outside the atlas"),
+                                None => {
+                                    note(&mut registry, "closure with an owner outside the atlas")
+                                }
                             },
                             Target::Unparsed(text) => note(&mut registry, text),
                         }
@@ -221,12 +285,29 @@ impl Registry {
                         match &e.target {
                             Target::Named(id) => match resolver.resolve(id) {
                                 Res::Item(r) => {
-                                    if resolver.atlas.item(r).is_some_and(|i| i.kind == "function") {
+                                    if resolver.atlas.item(r).is_some_and(|i| i.kind == "function")
+                                    {
                                         roles.push((r, Role::Plugin));
                                     }
-                                    record(&mut registry, owner_item, "plugin", &id.text, Some(r), "", &site);
+                                    record(
+                                        &mut registry,
+                                        owner_item,
+                                        "plugin",
+                                        &id.text,
+                                        Some(r),
+                                        "",
+                                        &site,
+                                    );
                                 }
-                                Res::External => record(&mut registry, owner_item, "plugin", &id.text, None, "", &site),
+                                Res::External => record(
+                                    &mut registry,
+                                    owner_item,
+                                    "plugin",
+                                    &id.text,
+                                    None,
+                                    "",
+                                    &site,
+                                ),
                                 Res::Workspace | Res::Unknown => note(&mut registry, &id.text),
                             },
                             Target::Unparsed(text) => note(&mut registry, text),
@@ -241,7 +322,15 @@ impl Registry {
                             Res::Item(r) => Some(r),
                             _ => None,
                         };
-                        record(&mut registry, owner_item, "resource", &id.text, found, "", &site);
+                        record(
+                            &mut registry,
+                            owner_item,
+                            "resource",
+                            &id.text,
+                            found,
+                            "",
+                            &site,
+                        );
                         if let (Some(r), Some(by)) = (found, owner.clone()) {
                             registry.resource_by.entry(r).or_default().push(by);
                         }
@@ -250,7 +339,12 @@ impl Registry {
             }
         }
 
-        let keys_of = |e: &Entry| e.sets.iter().map(|s| resolver.set_key(s)).collect::<Vec<_>>();
+        let keys_of = |e: &Entry| {
+            e.sets
+                .iter()
+                .map(|s| resolver.set_key(s))
+                .collect::<Vec<_>>()
+        };
         let inherited: Vec<Vec<(String, String)>> = pending
             .iter()
             .map(|(_, _, reg, e)| inherit(&sets, &keys_of(e), &reg.schedule))
@@ -260,11 +354,18 @@ impl Registry {
         }
         for ((r, _, mut registration, _), inh) in pending.into_iter().zip(inherited) {
             registration.inherited = inh;
-            registry.systems.entry(r).or_default().registrations.push(registration);
+            registry
+                .systems
+                .entry(r)
+                .or_default()
+                .registrations
+                .push(registration);
         }
 
         for (r, role) in roles {
-            let Some(item) = atlas.item_mut(r) else { continue };
+            let Some(item) = atlas.item_mut(r) else {
+                continue;
+            };
             if item.kind != "function" {
                 continue;
             }
@@ -273,17 +374,19 @@ impl Registry {
             }
         }
 
-        let keys: Vec<ItemRef> = registry.systems.keys().copied().collect();
-        for r in keys {
-            let role = atlas.item(r).map_or(Role::Other, |i| i.role);
-            if !matches!(role, Role::System | Role::Observer) {
-                registry.systems.remove(&r);
-                continue;
-            }
-            let (view_params, observes) = params_of(atlas, docs, r)?;
-            let view = registry.systems.get_mut(&r).expect("key was listed above");
+        let role_of = |r: &ItemRef| atlas.item(*r).map_or(Role::Other, |i| i.role);
+        registry
+            .systems
+            .retain(|r, _| matches!(role_of(r), Role::System | Role::Observer));
+        for (r, view) in &mut registry.systems {
+            let role = role_of(r);
+            let (view_params, observes) = params_of(atlas, docs, *r)?;
             view.params = view_params;
-            view.observes = if role == Role::Observer { observes } else { None };
+            view.observes = if role == Role::Observer {
+                observes
+            } else {
+                None
+            };
         }
         registry.unresolved.sort();
         registry.unresolved.dedup();
@@ -310,13 +413,17 @@ fn record(
     site: &(String, usize),
 ) {
     let Some(owner) = owner else { return };
-    registry.registers.entry(owner).or_default().push(Registered {
-        what,
-        text: text.to_string(),
-        target,
-        schedule: schedule.to_string(),
-        site: site.clone(),
-    });
+    registry
+        .registers
+        .entry(owner)
+        .or_default()
+        .push(Registered {
+            what,
+            text: text.to_string(),
+            target,
+            schedule: schedule.to_string(),
+            site: site.clone(),
+        });
 }
 
 pub(crate) struct Resolver<'a> {
@@ -326,8 +433,16 @@ pub(crate) struct Resolver<'a> {
 }
 
 impl<'a> Resolver<'a> {
-    pub(crate) fn new(atlas: &'a Atlas, scip: &'a ScipIndex, packages: &'a HashSet<String>) -> Resolver<'a> {
-        Resolver { atlas, scip, packages }
+    pub(crate) fn new(
+        atlas: &'a Atlas,
+        scip: &'a ScipIndex,
+        packages: &'a HashSet<String>,
+    ) -> Resolver<'a> {
+        Resolver {
+            atlas,
+            scip,
+            packages,
+        }
     }
 
     pub(crate) fn symbol(&self, id: &Ident) -> Option<&str> {
@@ -401,8 +516,14 @@ fn inherit(sets: &[SetConfig], keys: &[String], schedule: &str) -> Vec<(String, 
     out
 }
 
-pub(crate) fn params_of(atlas: &Atlas, docs: &[Crate], r: ItemRef) -> Result<(Vec<Param>, Option<String>), Error> {
-    let krate = &docs[r.0];
+pub(crate) fn params_of(
+    atlas: &Atlas,
+    docs: &[Crate],
+    r: ItemRef,
+) -> Result<(Vec<Param>, Option<String>), Error> {
+    let Some(krate) = docs.get(r.0) else {
+        return Ok((Vec::new(), None));
+    };
     let item = krate.item(r.1)?;
     let inputs = krate.fn_inputs(item)?;
     let mut params = Vec::new();
@@ -419,13 +540,33 @@ pub(crate) fn params_of(atlas: &Atlas, docs: &[Crate], r: ItemRef) -> Result<(Ve
     Ok((params, observes))
 }
 
+fn parent_module(path: &[String]) -> Vec<String> {
+    path.split_last()
+        .map(|(_, module)| module.to_vec())
+        .unwrap_or_default()
+}
+
 fn show(krate: &Crate, ty: &Value) -> Result<String, Error> {
     types::display(ty).map_err(|v| krate.unknown_type(&v))
 }
 
-fn param(atlas: &Atlas, krate: &Crate, ci: usize, name: String, ty: &Value, depth: usize) -> Result<Param, Error> {
+fn param(
+    atlas: &Atlas,
+    krate: &Crate,
+    ci: usize,
+    name: String,
+    ty: &Value,
+    depth: usize,
+) -> Result<Param, Error> {
     let shown = show(krate, ty)?;
-    let mut p = Param { name, ty: shown, optional: false, data: Vec::new(), filters: Vec::new(), nested: Vec::new() };
+    let mut p = Param {
+        name,
+        ty: shown,
+        optional: false,
+        data: Vec::new(),
+        filters: Vec::new(),
+        nested: Vec::new(),
+    };
     let mut inner = ty;
     if types::last_segment(inner) == Some("Option")
         && let Some(arg) = types::type_args(inner).first()
@@ -433,28 +574,39 @@ fn param(atlas: &Atlas, krate: &Crate, ci: usize, name: String, ty: &Value, dept
         p.optional = true;
         inner = arg;
     }
-    let Some(last) = types::last_segment(inner) else { return Ok(p) };
+    let Some(last) = types::last_segment(inner) else {
+        return Ok(p);
+    };
     let args = types::type_args(inner);
     if BevyNames::QUERIES.contains(&last) {
         if let Some(data) = args.first() {
-            p.data = types::members(data).into_iter().map(|t| show(krate, t)).collect::<Result<_, _>>()?;
+            p.data = types::members(data)
+                .into_iter()
+                .map(|t| show(krate, t))
+                .collect::<Result<_, _>>()?;
         }
         if let Some(filter) = args.get(1) {
-            p.filters = types::members(filter).into_iter().map(|t| show(krate, t)).collect::<Result<_, _>>()?;
+            p.filters = types::members(filter)
+                .into_iter()
+                .map(|t| show(krate, t))
+                .collect::<Result<_, _>>()?;
         }
     } else if BevyNames::PARAM_SETS.contains(&last) {
         if let Some(set) = args.first() {
             for (i, member) in types::members(set).into_iter().enumerate() {
-                p.nested.push(param(atlas, krate, ci, format!("p{i}"), member, depth + 1)?);
+                p.nested
+                    .push(param(atlas, krate, ci, format!("p{i}"), member, depth + 1)?);
             }
         }
     } else if depth < 4 {
-        let id = inner["resolved_path"]["id"].as_u64();
+        let id = inner.pointer("/resolved_path/id").and_then(Value::as_u64);
         if let Some(id) = id {
-            let local_param = krate.item(id).is_ok() && atlas.item((ci, id)).is_some_and(|i| i.system_param);
+            let local_param =
+                krate.item(id).is_ok() && atlas.item((ci, id)).is_some_and(|i| i.system_param);
             if local_param {
                 for (field, fty) in krate.struct_field_types(id)? {
-                    p.nested.push(param(atlas, krate, ci, field, fty, depth + 1)?);
+                    p.nested
+                        .push(param(atlas, krate, ci, field, fty, depth + 1)?);
                 }
             }
         }
@@ -479,8 +631,14 @@ mod tests {
     // Pins that a condition on an outer set reaches a system that is only in the inner set, naming the set it came through.
     #[test]
     fn conditions_inherit_through_nested_sets() {
-        let sets = [cfg("inner", "Update", &[], &["outer"]), cfg("outer", "Update", &["in_state(X)"], &[])];
-        assert_eq!(inherit(&sets, &["inner".into()], "Update"), [("in_state(X)".to_string(), "outer".to_string())]);
+        let sets = [
+            cfg("inner", "Update", &[], &["outer"]),
+            cfg("outer", "Update", &["in_state(X)"], &[]),
+        ];
+        assert_eq!(
+            inherit(&sets, &["inner".into()], "Update"),
+            [("in_state(X)".to_string(), "outer".to_string())]
+        );
     }
 
     // Pins that a set configured for another schedule gives its conditions to nothing here.

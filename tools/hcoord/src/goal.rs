@@ -2,10 +2,11 @@
 //! scenarios and widgets, and the checks that hold between them.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use crate::model::Coordinator;
+use crate::output::Output;
 
 /// One `### <name> (<qualifier>)` under `## Screens` or `## Project on disk`, with the heading and everything
 /// beneath it kept verbatim so a brief can quote the drawing.
@@ -32,8 +33,11 @@ impl Decision {
     pub fn names(&self, id: &str) -> bool {
         let word = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
         self.text.match_indices(id).any(|(at, _)| {
-            let before = self.text[..at].chars().next_back();
-            let after = self.text[at + id.len()..].chars().next();
+            let before = self.text.get(..at).and_then(|t| t.chars().next_back());
+            let after = self
+                .text
+                .get(at + id.len()..)
+                .and_then(|t| t.chars().next());
             !before.is_some_and(word) && !after.is_some_and(word)
         })
     }
@@ -190,11 +194,11 @@ pub fn parse(text: &str) -> Goal {
                 {
                     continue;
                 }
-                if cells.len() >= 3 {
+                if let [name, exists, provided_by, ..] = cells.as_slice() {
                     goal.widgets.push(Widget {
-                        name: cells[0].to_lowercase(),
-                        exists: cells[1].to_lowercase(),
-                        provided_by: cells[2].to_string(),
+                        name: name.to_lowercase(),
+                        exists: exists.to_lowercase(),
+                        provided_by: (*provided_by).to_string(),
                         line,
                     });
                 }
@@ -217,7 +221,12 @@ fn trim_blank_lines(text: &str) -> String {
     let start = lines.iter().position(|l| !l.trim().is_empty());
     let end = lines.iter().rposition(|l| !l.trim().is_empty());
     match (start, end) {
-        (Some(a), Some(b)) => lines[a..=b].iter().map(|l| format!("{l}\n")).collect(),
+        (Some(a), Some(b)) => lines
+            .iter()
+            .take(b + 1)
+            .skip(a)
+            .map(|l| format!("{l}\n"))
+            .collect(),
         _ => String::new(),
     }
 }
@@ -397,7 +406,7 @@ pub fn lint_tasks(goal: &Goal, tasks: &Coordinator) -> Vec<Finding> {
                 line: 0,
                 message: format!(
                     "task `{}` owns `{id}`, which the goal does not have",
-                    tasks[0]
+                    tasks.first().copied().unwrap_or_default()
                 ),
             });
         }
@@ -405,55 +414,87 @@ pub fn lint_tasks(goal: &Goal, tasks: &Coordinator) -> Vec<Finding> {
     out
 }
 
-/// `hcoord goal lint <goal.md> [--tasks <tasks.json>]`: print each finding as
+/// A goal or task list `goal lint` or `goal show` could not read, or scenarios
+/// `goal show` was asked for that the goal does not have.
+#[derive(Debug, thiserror::Error)]
+pub enum RunError {
+    #[error("cannot read {}: {source}", path.display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("cannot read {}: {source}", path.display())]
+    Tasks {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error(transparent)]
+    Missing(#[from] MissingScenarios),
+}
+
+/// The ids asked for that the goal has no scenario for.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[error("no such scenario: {}", .0.join(", "))]
+pub struct MissingScenarios(pub Vec<String>);
+
+fn read(path: &Path) -> Result<String, RunError> {
+    std::fs::read_to_string(path).map_err(|source| RunError::Read {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+/// `hcoord goal lint <goal.md> [--tasks <tasks.json>]`: each finding as
 /// `<file>:<line>: <message>` and exit 1 when there is one; exit 0 with a one-line
-/// tally when clean; exit 1 naming the file when either cannot be read.
-pub fn run_lint(goal_path: &Path, tasks_path: Option<&Path>) -> ExitCode {
-    let text = match std::fs::read_to_string(goal_path) {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("cannot read {}: {e}", goal_path.display());
-            return ExitCode::from(1);
-        }
-    };
-    let goal = parse(&text);
+/// tally when clean. `Err` when either file cannot be read.
+pub fn run_lint(goal_path: &Path, tasks_path: Option<&Path>) -> Result<Output, RunError> {
+    let goal = parse(&read(goal_path)?);
     let mut findings = lint(&goal);
     if let Some(path) = tasks_path {
-        match std::fs::read_to_string(path)
-            .map_err(|e| e.to_string())
-            .and_then(|t| serde_json::from_str::<Coordinator>(&t).map_err(|e| e.to_string()))
-        {
-            Ok(tasks) => findings.extend(lint_tasks(&goal, &tasks)),
-            Err(e) => {
-                eprintln!("cannot read {}: {e}", path.display());
-                return ExitCode::from(1);
-            }
-        }
+        let tasks: Coordinator =
+            serde_json::from_str(&read(path)?).map_err(|source| RunError::Tasks {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        findings.extend(lint_tasks(&goal, &tasks));
     }
     if findings.is_empty() {
         let hand = goal.scenarios.iter().filter(|s| s.hand).count();
-        println!(
-            "ok: {} screens, {} scenarios ({hand} hand), {} widgets",
-            goal.screens.len(),
-            goal.scenarios.len(),
-            goal.widgets.len()
-        );
-        return ExitCode::SUCCESS;
+        return Ok(Output::line(
+            &format!(
+                "ok: {} screens, {} scenarios ({hand} hand), {} widgets",
+                goal.screens.len(),
+                goal.scenarios.len(),
+                goal.widgets.len()
+            ),
+            ExitCode::SUCCESS,
+        ));
     }
+    let mut stdout = String::new();
     for f in &findings {
         if f.line == 0 {
-            println!("{}: {}", goal_path.display(), f.message);
+            stdout.push_str(&format!("{}: {}\n", goal_path.display(), f.message));
         } else {
-            println!("{}:{}: {}", goal_path.display(), f.line, f.message);
+            stdout.push_str(&format!(
+                "{}:{}: {}\n",
+                goal_path.display(),
+                f.line,
+                f.message
+            ));
         }
     }
-    ExitCode::from(1)
+    Ok(Output {
+        stdout,
+        code: ExitCode::from(1),
+    })
 }
 
 /// The text `hcoord goal show` prints for `ids`: per id, in the order asked, the
 /// scenario's heading reconstructed as `### <id> <title>    screen: <name>` and its
 /// body verbatim. `Err` names every id the goal lacks, and nothing is rendered then.
-pub fn show_text(goal: &Goal, ids: &[String]) -> Result<String, Vec<String>> {
+pub fn show_text(goal: &Goal, ids: &[String]) -> Result<String, MissingScenarios> {
     let mut out = String::new();
     let mut missing = Vec::new();
     for id in ids {
@@ -469,38 +510,25 @@ pub fn show_text(goal: &Goal, ids: &[String]) -> Result<String, Vec<String>> {
     if missing.is_empty() {
         Ok(out)
     } else {
-        Err(missing)
+        Err(MissingScenarios(missing))
     }
 }
 
-/// `hcoord goal show <goal.md> <id>...`: print the named scenarios verbatim,
-/// heading and body, in the order asked; exit 1 naming any id the goal lacks.
-pub fn run_show(goal_path: &Path, ids: &[String]) -> ExitCode {
-    let text = match std::fs::read_to_string(goal_path) {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("cannot read {}: {e}", goal_path.display());
-            return ExitCode::from(1);
-        }
-    };
-    match show_text(&parse(&text), ids) {
-        Ok(out) => {
-            print!("{out}");
-            ExitCode::SUCCESS
-        }
-        Err(missing) => {
-            eprintln!("no such scenario: {}", missing.join(", "));
-            ExitCode::from(1)
-        }
-    }
+/// `hcoord goal show <goal.md> <id>...`: the named scenarios verbatim, heading and
+/// body, in the order asked.
+pub fn run_show(goal_path: &Path, ids: &[String]) -> Result<Output, RunError> {
+    let stdout = show_text(&parse(&read(goal_path)?), ids)?;
+    Ok(Output {
+        stdout,
+        code: ExitCode::SUCCESS,
+    })
 }
 
 fn split_qualifier(head: &str) -> (String, String) {
     let head = head.trim();
-    match head.find('(') {
-        Some(open) => {
-            let name = head[..open].trim().to_string();
-            let rest = &head[open + 1..];
+    match head.split_once('(') {
+        Some((name, rest)) => {
+            let name = name.trim().to_string();
             let qualifier = rest.split(')').next().unwrap_or("").trim().to_string();
             (name, qualifier)
         }
@@ -509,11 +537,8 @@ fn split_qualifier(head: &str) -> (String, String) {
 }
 
 fn scenario_head(head: &str, line: usize) -> Scenario {
-    let (left, screen) = match head.find("screen:") {
-        Some(at) => (
-            &head[..at],
-            Some(head[at + "screen:".len()..].trim().to_string()),
-        ),
+    let (left, screen) = match head.split_once("screen:") {
+        Some((left, screen)) => (left, Some(screen.trim().to_string())),
         None => (head, None),
     };
     let mut words = left.split_whitespace();
@@ -540,8 +565,8 @@ fn is_hand(trimmed: &str) -> bool {
 }
 
 fn is_step(trimmed: &str) -> bool {
-    let digits: String = trimmed.chars().take_while(char::is_ascii_digit).collect();
-    !digits.is_empty() && trimmed[digits.len()..].starts_with(". ")
+    let rest = trimmed.trim_start_matches(|c: char| c.is_ascii_digit());
+    rest.len() < trimmed.len() && rest.starts_with(". ")
 }
 
 fn widget_names(list: &str) -> Vec<String> {
@@ -796,7 +821,7 @@ mod tests {
         assert!(out.contains("### S1 open it    screen: editor.main\n    1. `cd there && run`\n"));
         assert_eq!(
             show_text(&goal, &["S1".into(), "S9".into()]),
-            Err(vec!["S9".to_string()])
+            Err(MissingScenarios(vec!["S9".to_string()]))
         );
     }
 

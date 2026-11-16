@@ -38,7 +38,7 @@ MCP Client (Claude) → stdio JSON-RPC → LspMcpServer (server.rs)
 
 **Key design decisions:**
 
-- **Global LSP process cache**: `static Lazy<RwLock<HashMap>>` in `manager.rs`
+- **Global LSP process cache**: `static LazyLock<tokio::sync::RwLock<HashMap>>` in `manager.rs`
   keyed by `(canonical_workspace_path, server_name)`. Prevents duplicate LSP
   processes across manager instances. Checks `is_alive()` before returning
   cached clients.
@@ -57,7 +57,10 @@ MCP Client (Claude) → stdio JSON-RPC → LspMcpServer (server.rs)
 - **`server.rs`**: MCP tool definitions and response conversion. All MCP tools
   live here as `#[tool]` methods on `LspMcpServer`.
 - **`lsp/client.rs`**: Raw JSON-RPC communication with a single LSP process.
-  Owns stdin/stdout pipes behind `Arc<Mutex>`.
+  Owns stdin/stdout pipes behind `tokio::sync::Mutex` (held across the
+  write/read `.await`s); diagnostics and the child handle are behind
+  `parking_lot::Mutex`. Every request and notification is bounded by
+  `REQUEST_TIMEOUT`; a timeout kills the process so the manager respawns it.
 - **`lsp/manager.rs`**: Maps language IDs / file extensions → server configs →
   cached `LspClient` instances.
 - **`config/`**: Parses Helix `languages.toml`. `types.rs` has the full config
@@ -76,14 +79,18 @@ MCP Client (Claude) → stdio JSON-RPC → LspMcpServer (server.rs)
 2. Add the LSP request method to `LspClient` in `lsp/client.rs`.
 3. Add a `#[tool(description = "...")]` method to the
    `#[tool_router] impl LspMcpServer` block in `server.rs`. Follow the existing
-   pattern: parse URI → read file → get client → did_open → LSP request →
-   convert response.
+   pattern: `open_document` (parse URI → read file → get client → did_open),
+   then the LSP request with `.map_err(doc.failed())?`, then convert the
+   response and return it with `json_text`.
 
 ## Conventions
 
-- Custom `Result<T>` type alias in `error.rs` — use `?` for propagation, avoid
-  `unwrap()`/`expect()` in library code.
-- All LSP I/O is async via tokio. Shared state uses `Arc<Mutex<T>>`.
+- Errors are `thiserror` enums per layer: `ConfigError` (config), `LspError`
+  (client), `ManagerError` (manager), a private `ToolError` in `server.rs`
+  mapped to MCP `invalid_params` / `internal_error`, and `LspMcpError` for
+  startup. `unwrap`/`expect`/indexing are denied by the crate's lints.
+- All LSP I/O is async via tokio. Logging goes through `tracing` to stderr;
+  stdout carries the MCP protocol.
 - LSP positions are 0-indexed `(line, character)` throughout.
 - URIs are `lsp_types::Url`, converted to/from file paths at tool boundaries.
 - LSP processes spawned with `.kill_on_drop(true)`.

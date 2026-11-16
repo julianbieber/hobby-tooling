@@ -4,6 +4,10 @@
 use std::process::{Command, ExitCode};
 use std::time::{Duration, Instant};
 
+use serde_json::{Map, Value};
+
+use crate::output::Output;
+
 /// Under the ten minutes Claude Code allows a single shell call.
 pub const DEFAULT_TIMEOUT_SECS: u64 = 570;
 
@@ -71,31 +75,37 @@ impl Outcome {
 ///
 /// A repository that runs no checks reports `checks: none`, which counts as green: the
 /// alternative is waiting forever on a repo that has no CI.
-pub fn run(pr: &str, timeout_secs: u64, ready: bool) -> ExitCode {
+pub fn run(pr: &str, timeout_secs: u64, ready: bool) -> Result<Output, ViewError> {
     let deadline = Instant::now() + Duration::from_secs(timeout_secs);
     loop {
-        let view = match view(pr) {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!("hcoord merged: {e}");
-                return ExitCode::from(1);
-            }
-        };
+        let view = view(pr)?;
         let checks = view.checks();
         if let Some(outcome) = view.resolve(checks, ready) {
             let code = match outcome {
                 Outcome::Timeout => ExitCode::from(2),
                 _ => ExitCode::SUCCESS,
             };
-            println!("{}", line(pr, &outcome, &view.state, checks));
-            return code;
+            return Ok(Output::line(&line(pr, &outcome, &view.state, checks), code));
         }
         if Instant::now() >= deadline {
-            println!("{}", line(pr, &Outcome::Timeout, &view.state, checks));
-            return ExitCode::from(2);
+            return Ok(Output::line(
+                &line(pr, &Outcome::Timeout, &view.state, checks),
+                ExitCode::from(2),
+            ));
         }
         std::thread::sleep(POLL);
     }
+}
+
+/// `gh pr view` could not say what state the PR is in.
+#[derive(Debug, thiserror::Error)]
+pub enum ViewError {
+    #[error("cannot run gh: {0}")]
+    Spawn(#[source] std::io::Error),
+    #[error("gh pr view {pr}: {stderr}")]
+    Refused { pr: String, stderr: String },
+    #[error("{0}")]
+    Malformed(#[from] serde_json::Error),
 }
 
 /// One snapshot of a PR's merge state, mergeability and check rollup, as `view` reads
@@ -193,7 +203,7 @@ impl View {
 
 /// Runs `gh pr view --json state,mergeable,statusCheckRollup` for `pr` and parses its
 /// output. Err when `gh` cannot be run or exits non-zero.
-pub(crate) fn view(pr: &str) -> Result<View, String> {
+pub(crate) fn view(pr: &str) -> Result<View, ViewError> {
     let out = Command::new("gh")
         .args([
             "pr",
@@ -203,41 +213,37 @@ pub(crate) fn view(pr: &str) -> Result<View, String> {
             "state,mergeable,statusCheckRollup",
         ])
         .output()
-        .map_err(|e| format!("cannot run gh: {e}"))?;
+        .map_err(ViewError::Spawn)?;
     if !out.status.success() {
-        return Err(format!(
-            "gh pr view {pr}: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
+        return Err(ViewError::Refused {
+            pr: pr.to_owned(),
+            stderr: String::from_utf8_lossy(&out.stderr).trim().to_owned(),
+        });
     }
-    parse(&String::from_utf8_lossy(&out.stdout))
+    Ok(parse(&String::from_utf8_lossy(&out.stdout))?)
 }
 
 /// Parses a `gh pr view --json state,mergeable,statusCheckRollup` response. Err only
 /// on malformed JSON; a response missing an expected field yields an empty default for
 /// it rather than failing.
-pub(crate) fn parse(json: &str) -> Result<View, String> {
-    let value: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+pub(crate) fn parse(json: &str) -> Result<View, serde_json::Error> {
+    let value: Value = serde_json::from_str(json)?;
     let string = |key: &str| {
         value
             .get(key)
-            .and_then(serde_json::Value::as_str)
+            .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned()
     };
     let rollup = value
         .get("statusCheckRollup")
-        .and_then(serde_json::Value::as_array)
+        .and_then(Value::as_array)
         .map(|entries| {
             entries
                 .iter()
                 .map(|entry| {
-                    let field = |key: &str| {
-                        entry
-                            .get(key)
-                            .and_then(serde_json::Value::as_str)
-                            .unwrap_or_default()
-                    };
+                    let field =
+                        |key: &str| entry.get(key).and_then(Value::as_str).unwrap_or_default();
                     let verdict = [field("conclusion"), field("state"), field("status")]
                         .into_iter()
                         .find(|v| !v.is_empty())
@@ -270,16 +276,15 @@ pub(crate) fn parse(json: &str) -> Result<View, String> {
 }
 
 fn line(pr: &str, outcome: &Outcome, state: &str, checks: Checks) -> String {
-    let mut object = serde_json::json!({
-        "pr": pr,
-        "outcome": outcome.name(),
-        "state": state,
-        "checks": checks.name(),
-    });
+    let mut object = Map::new();
+    object.insert("pr".to_owned(), Value::from(pr));
+    object.insert("outcome".to_owned(), Value::from(outcome.name()));
+    object.insert("state".to_owned(), Value::from(state));
+    object.insert("checks".to_owned(), Value::from(checks.name()));
     if let Outcome::Blocked(reason) = outcome {
-        object["reason"] = serde_json::Value::String(reason.clone());
+        object.insert("reason".to_owned(), Value::from(reason.as_str()));
     }
-    object.to_string()
+    Value::Object(object).to_string()
 }
 
 #[cfg(test)]

@@ -75,11 +75,11 @@ fn same_side_dups<'a>(items: impl Iterator<Item = (&'a str, Gutter, Span)>) -> V
 }
 
 fn duplicates(doc: &Document, out: &mut Vec<Diagnostic>) {
-    let g = |li: usize| doc.lines[li].gutter;
+    let g = |li: usize| doc.lines.get(li).map(|l| l.gutter);
     for (name, span) in same_side_dups(
         doc.data
             .iter()
-            .map(|t| (t.name.value.as_str(), g(t.line), t.name.span)),
+            .filter_map(|t| Some((t.name.value.as_str(), g(t.line)?, t.name.span))),
     ) {
         out.push(Diagnostic::error(
             span,
@@ -100,7 +100,7 @@ fn duplicates(doc: &Document, out: &mut Vec<Diagnostic>) {
     for (name, span) in same_side_dups(
         doc.api
             .iter()
-            .map(|m| (m.name.value.as_str(), g(m.line), m.name.span)),
+            .filter_map(|m| Some((m.name.value.as_str(), g(m.line)?, m.name.span))),
     ) {
         out.push(Diagnostic::error(
             span,
@@ -112,7 +112,7 @@ fn duplicates(doc: &Document, out: &mut Vec<Diagnostic>) {
         for (name, span) in same_side_dups(
             m.fns
                 .iter()
-                .map(|f| (f.name.value.as_str(), g(f.line), f.name.span)),
+                .filter_map(|f| Some((f.name.value.as_str(), g(f.line)?, f.name.span))),
         ) {
             out.push(Diagnostic::error(
                 span,
@@ -125,15 +125,15 @@ fn duplicates(doc: &Document, out: &mut Vec<Diagnostic>) {
 
 fn has_link_below(doc: &Document, idx: usize, gutter: Gutter) -> bool {
     doc.children(idx).any(|c| {
-        let l = &doc.lines[c];
-        l.gutter == gutter && (l.ann.link.is_some() || has_link_below(doc, c, gutter))
+        doc.lines.get(c).is_some_and(|l| {
+            l.gutter == gutter && (l.ann.link.is_some() || has_link_below(doc, c, gutter))
+        })
     })
 }
 
 fn has_link_above(doc: &Document, idx: usize, gutter: Gutter) -> bool {
-    let mut cur = doc.lines[idx].parent;
-    while let Some(p) = cur {
-        let l = &doc.lines[p];
+    let mut cur = doc.lines.get(idx).and_then(|l| l.parent);
+    while let Some(l) = cur.and_then(|p| doc.lines.get(p)) {
         if l.gutter != gutter {
             return false;
         }

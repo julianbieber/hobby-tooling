@@ -224,7 +224,7 @@ fn path_of(node: Node, src: &str) -> Option<Vec<String>> {
 /// Whether a `Query`'s type arguments carry a filter.
 fn has_filter(type_arguments: Node, src: &str) -> bool {
     const FILTERS: &[&str] = &["With", "Without", "Changed", "Added", "Or"];
-    let text_of = &src[type_arguments.byte_range()];
+    let text_of = text(type_arguments, src);
     FILTERS.iter().any(|f| text_of.contains(&format!("{f}<")))
 }
 
@@ -241,7 +241,7 @@ fn takes_system_param(params: Node, src: &str) -> bool {
         "EventWriter",
         "Local",
     ];
-    let text_of = &src[params.byte_range()];
+    let text_of = text(params, src);
     SYSTEM_PARAMS
         .iter()
         .any(|p| text_of.contains(&format!("{p}<")) || text_of.contains(&format!(": {p}")))
@@ -266,7 +266,7 @@ fn body_allocates(function: Node, src: &str) -> bool {
     let Some(body) = function.child_by_field_name("body") else {
         return false;
     };
-    let text_of = &src[body.byte_range()];
+    let text_of = text(body, src);
     ALLOCATORS.iter().any(|a| text_of.contains(a))
 }
 
@@ -319,7 +319,7 @@ fn collect_mutable_borrows(node: Node, src: &str, facts: &mut FileFacts) {
 }
 
 fn text<'a>(node: Node, src: &'a str) -> &'a str {
-    &src[node.byte_range()]
+    src.get(node.byte_range()).unwrap_or_default()
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 //! lands in terminal cells, and where a click on it is recorded.
 
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use unicode_width::UnicodeWidthChar;
@@ -37,7 +37,7 @@ pub fn too_small(area: Rect, buf: &mut Buffer) -> bool {
             area.x,
             area.y,
             "terminal too small",
-            area.width as usize,
+            usize::from(area.width),
             Style::default().fg(DIM),
         );
     }
@@ -56,7 +56,7 @@ pub struct Item<C> {
 impl<C> Item<C> {
     /// The width in terminal cells.
     pub fn width(&self) -> u16 {
-        self.spans.iter().map(|s| s.width() as u16).sum()
+        self.spans.iter().map(|s| cells(s.width())).sum()
     }
 
     /// This item with `gap` blank columns before it when it does not start a line.
@@ -150,17 +150,16 @@ fn truncate_item<C>(mut item: Item<C>, width: u16) -> Item<C> {
 
 /// Draw `item` at `(x, y)`, cut at the right edge of `clip`, reversed while it is hovered or holds
 /// the keyboard focus, and record its hit region when it is a control.
-#[allow(clippy::too_many_arguments)]
 pub fn draw_item<C: Clone + PartialEq>(
     buf: &mut Buffer,
     hits: &mut Hits<C>,
     hovered: &Option<C>,
     focus: &Option<C>,
-    x: u16,
-    y: u16,
+    at: Position,
     item: &Item<C>,
     clip: Rect,
 ) {
+    let Position { x, y } = at;
     let highlighted =
         item.control.is_some() && (item.control == *hovered || item.control == *focus);
     let mut cx = x;
@@ -173,7 +172,7 @@ pub fn draw_item<C: Clone + PartialEq>(
         if highlighted {
             style = style.add_modifier(Modifier::REVERSED);
         }
-        let (nx, _) = buf.set_stringn(cx, y, &span.content, (limit - cx) as usize, style);
+        let (nx, _) = buf.set_stringn(cx, y, &span.content, usize::from(limit - cx), style);
         cx = nx;
     }
     if let Some(control) = &item.control {
@@ -186,7 +185,7 @@ pub fn draw_field(buf: &mut Buffer, field: Rect, content: &str, focused: bool) {
     let style = Style::default().bg(FIELD_BG);
     buf.set_style(field, style);
     let shown = tail_fitting(content, field.width.saturating_sub(1));
-    buf.set_stringn(field.x, field.y, &shown, field.width as usize, style);
+    buf.set_stringn(field.x, field.y, &shown, usize::from(field.width), style);
     if focused {
         let cx = field.x + str_width(&shown);
         if cx < field.x + field.width {
@@ -200,7 +199,7 @@ pub fn truncate_to(s: &str, width: u16) -> String {
     let mut out = String::new();
     let mut w = 0u16;
     for c in s.chars() {
-        let cw = c.width().unwrap_or(0) as u16;
+        let cw = char_width(c);
         if w + cw > width {
             break;
         }
@@ -223,7 +222,7 @@ pub fn tail_fitting(s: &str, width: u16) -> String {
     let mut out: Vec<char> = Vec::new();
     let mut w = 0u16;
     for c in s.chars().rev() {
-        let cw = c.width().unwrap_or(0) as u16;
+        let cw = char_width(c);
         if w + cw > width {
             break;
         }
@@ -235,12 +234,29 @@ pub fn tail_fitting(s: &str, width: u16) -> String {
 
 /// The width of `s` in terminal cells.
 pub fn str_width(s: &str) -> u16 {
-    s.chars().map(|c| c.width().unwrap_or(0) as u16).sum()
+    s.chars().map(char_width).sum()
+}
+
+/// `n` terminal cells as a cell count, saturating at `u16::MAX`, the widest a terminal can be.
+pub fn cells(n: usize) -> u16 {
+    u16::try_from(n).unwrap_or(u16::MAX)
+}
+
+fn char_width(c: char) -> u16 {
+    cells(c.width().unwrap_or(0))
 }
 
 /// The part of the rect at `(x, y)` (which may start above `clip`) that lies inside `clip`.
 pub fn clip_rect(x: i32, y: i32, width: u16, height: u16, clip: Rect) -> Option<Rect> {
-    let top = y.max(clip.y as i32);
-    let bottom = (y + height as i32).min((clip.y + clip.height) as i32);
-    (bottom > top).then(|| Rect::new(x as u16, top as u16, width, (bottom - top) as u16))
+    let top = y.max(i32::from(clip.y));
+    let bottom = (y + i32::from(height)).min(i32::from(clip.y + clip.height));
+    if bottom <= top {
+        return None;
+    }
+    Some(Rect::new(
+        u16::try_from(x).ok()?,
+        u16::try_from(top).ok()?,
+        width,
+        u16::try_from(bottom - top).ok()?,
+    ))
 }

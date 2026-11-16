@@ -21,27 +21,16 @@ pub fn extract_docstring(source: &str, language: &str, def_node: Node) -> Option
 
 fn extract_above_prefix(source: &str, def_node: Node, prefixes: &[&str]) -> Option<String> {
     let lines: Vec<&str> = source.lines().collect();
-    let row = def_node.start_position().row;
-    if row == 0 {
-        return None;
-    }
-    let mut collected: Vec<String> = Vec::new();
-    let mut i = row as i64 - 1;
-    while i >= 0 {
-        let line = lines.get(i as usize)?.trim_start();
-        let mut matched = false;
-        for p in prefixes {
-            if let Some(rest) = line.strip_prefix(p) {
-                collected.push(rest.trim().to_string());
-                matched = true;
-                break;
-            }
-        }
-        if !matched {
-            break;
-        }
-        i -= 1;
-    }
+    let above = lines.get(..def_node.start_position().row)?;
+    let mut collected: Vec<&str> = above
+        .iter()
+        .rev()
+        .map_while(|line| {
+            let line = line.trim_start();
+            prefixes.iter().find_map(|p| line.strip_prefix(p))
+        })
+        .map(str::trim)
+        .collect();
     if collected.is_empty() {
         None
     } else {
@@ -52,40 +41,20 @@ fn extract_above_prefix(source: &str, def_node: Node, prefixes: &[&str]) -> Opti
 
 fn extract_above_block(source: &str, def_node: Node) -> Option<String> {
     let lines: Vec<&str> = source.lines().collect();
-    let row = def_node.start_position().row;
-    if row == 0 {
+    let above = lines.get(..def_node.start_position().row)?;
+    let end_row = above.iter().rposition(|line| {
+        let trimmed = line.trim();
+        !trimmed.is_empty() && !trimmed.starts_with('@')
+    })?;
+    let through_end = above.get(..=end_row)?;
+    if !through_end.last()?.trim().ends_with("*/") {
         return None;
     }
-    // Walk upward over blank lines + annotation lines to find the line that
-    // ends with `*/`.
-    let mut end_row: Option<usize> = None;
-    let mut i = row as i64 - 1;
-    while i >= 0 {
-        let trimmed = lines.get(i as usize)?.trim();
-        if trimmed.is_empty() || trimmed.starts_with('@') {
-            i -= 1;
-            continue;
-        }
-        if trimmed.ends_with("*/") {
-            end_row = Some(i as usize);
-        }
-        break;
-    }
-    let end_row = end_row?;
-    // Walk up from end_row to find the matching `/**` (must start the block).
-    let mut start_row: Option<usize> = None;
-    let mut j = end_row as i64;
-    while j >= 0 {
-        let trimmed = lines.get(j as usize)?.trim_start();
-        if trimmed.starts_with("/**") {
-            start_row = Some(j as usize);
-            break;
-        }
-        j -= 1;
-    }
-    let start_row = start_row?;
+    let start_row = through_end
+        .iter()
+        .rposition(|line| line.trim_start().starts_with("/**"))?;
     let mut buf = String::new();
-    for line in &lines[start_row..=end_row] {
+    for line in through_end.get(start_row..)? {
         let cleaned = line
             .trim()
             .trim_start_matches("/**")

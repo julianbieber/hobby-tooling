@@ -1,6 +1,8 @@
+//! Parameters and results of the completion tool.
+
+use super::navigation::Position;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use super::navigation::Position;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CompletionParams {
@@ -14,7 +16,9 @@ pub struct CompletionParams {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct CompletionResult {
-    #[schemars(description = "Whether the completion list is incomplete (more items available with further typing)")]
+    #[schemars(
+        description = "Whether the completion list is incomplete (more items available with further typing)"
+    )]
     pub is_incomplete: bool,
     #[schemars(description = "The completion items")]
     pub items: Vec<CompletionItem>,
@@ -33,7 +37,9 @@ pub struct CompletionItem {
     #[schemars(description = "Documentation for this item")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub documentation: Option<String>,
-    #[schemars(description = "Text to insert when selecting this completion (if different from label)")]
+    #[schemars(
+        description = "Text to insert when selecting this completion (if different from label)"
+    )]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub insert_text: Option<String>,
     #[schemars(description = "String used for sorting (when different from label)")]
@@ -88,7 +94,10 @@ pub fn documentation_to_string(doc: &lsp_types::Documentation) -> String {
 pub fn convert_completion_item(item: &lsp_types::CompletionItem) -> CompletionItem {
     CompletionItem {
         label: item.label.clone(),
-        kind: item.kind.map(completion_item_kind_to_string).map(String::from),
+        kind: item
+            .kind
+            .map(completion_item_kind_to_string)
+            .map(String::from),
         detail: item.detail.clone(),
         documentation: item.documentation.as_ref().map(documentation_to_string),
         insert_text: item.insert_text.clone(),

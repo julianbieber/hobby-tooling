@@ -28,7 +28,8 @@ agrees with the installed `just` about recipe semantics and parameter kinds.
 src/
 ├── main.rs      # entry point (stdio transport)
 ├── lib.rs       # module declarations + re-exports
-├── config.rs    # Config struct + load from ~/.config/just_mcp.toml
+├── config.rs    # Config struct + load from ~/.config/just_mcp.toml (a
+│                #   present but invalid file stops the server at startup)
 ├── models.rs    # DumpFile/DumpRecipe (raw just JSON) + tool response DTOs
 ├── discover.rs  # tree walk for justfiles + path/root resolution
 ├── dump.rs      # run `just --dump`, parse, flatten recipes across submodules
@@ -70,7 +71,7 @@ The introspection contract. Relevant shape (fields not consumed are ignored):
   (0+) | `plus` (1+)), `help`.
 
 `models.rs` deserializes this with every field `#[serde(default)]` so parsing
-survives `just` version drift.
+survives `just` version drift; `kind` is the `ParamKind` enum.
 
 ### Argument assembly (`run::positional_from_map`)
 
@@ -120,8 +121,9 @@ sets `timed_out`. `dry_run` adds `--dry-run`.
 2. Add response fields in `src/models.rs` if needed.
 3. Implement logic in `discover.rs` / `dump.rs` / `run.rs`.
 4. Register the `#[tool]` in `src/server.rs` inside the `#[tool_router]` block;
-   delegate to a private `async fn` returning `Result<T, String>` and wrap with
-   `respond(...)`.
+   delegate to a private `async fn` returning `Result<T, ToolError>` and wrap
+   with `respond(...)`, which renders the error with its source chain as the
+   tool error text.
 5. Update this file, the README, and the integration tests (fixture justfiles
    are written to a temp dir per test).
 6. `cargo build && cargo install --path .`, then restart the MCP server.

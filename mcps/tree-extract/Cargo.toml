@@ -2,10 +2,12 @@
 name = "hobby-tree-extract"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.100"
 
 [lib]
 name = "hobby_tree_extract"
 path = "src/lib.rs"
+doctest = false
 
 [[bin]]
 name = "hobby-tree-extract"
@@ -19,28 +21,53 @@ path = "src/bin/hobby-tree-extract-mcp.rs"
 # Reuse helix-language-registry + grammar cache from the existing LSP crate.
 treesitter-class-lsp = { path = "../../lsps/treesitter-class-lsp" }
 
-tree-sitter = "0.25"
-streaming-iterator = "0.1"
-ignore = "0.4"
+tree-sitter = { version = "0.25", default-features = false }
+streaming-iterator = { version = "0.1", default-features = false }
+ignore = { version = "0.4", default-features = false }
 
 # Code-graph query engine: petgraph for strongly-connected-component (cycle)
 # detection, nucleo-matcher for fuzzy symbol search (same version the sibling
 # LSP crate uses).
-petgraph = "0.6"
-nucleo-matcher = "0.3"
-anyhow = "1"
-thiserror = "2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+petgraph = { version = "0.6", default-features = false }
+nucleo-matcher = { version = "0.3", default-features = false, features = ["unicode-normalization", "unicode-casefold"] }
+thiserror = { version = "2", default-features = false, features = ["std"] }
+parking_lot = { version = "0.12", default-features = false }
+serde = { version = "1", default-features = false, features = ["std", "derive"] }
+serde_json = { version = "1", default-features = false, features = ["std"] }
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt", "env-filter"] }
 
 # CLI
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
 
 # MCP
-rmcp = { version = "0.11", features = ["server", "transport-io"] }
-tokio = { version = "1", features = ["full"] }
+rmcp = { version = "0.11", default-features = false, features = ["base64", "server", "macros", "transport-io"] }
+tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread"] }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = { version = "3", default-features = false }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+indexing_slicing = "deny"
+string_slice = "deny"
+exit = "deny"
+as_conversions = "deny"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+dbg_macro = "deny"
+disallowed_methods = "deny"
+disallowed_types = "deny"
+await_holding_lock = "deny"
+
+[profile.release]
+panic = "abort"
+debug = "line-tables-only"

@@ -28,11 +28,46 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
 use crate::containment;
-use crate::extractor::{ExtractResult, Import, RefKind, SymbolKind};
+use crate::extractor::{ExtractResult, Import, RefKind, Symbol, SymbolKind};
+
+/// A persisted graph file could not be read or written.
+#[derive(Debug, thiserror::Error)]
+pub enum GraphFileError {
+    #[error("cannot read code graph {}", path.display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("code graph {} is not valid graph JSON", path.display())]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("cannot serialize the code graph")]
+    Serialize(#[source] serde_json::Error),
+    #[error("cannot write code graph {}", path.display())]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+}
+
+/// A node or edge kind named by a caller that is not one of the known kinds.
+#[derive(Debug, thiserror::Error)]
+#[error("unknown {what} {value:?}; expected one of {expected}")]
+pub struct UnknownKind {
+    pub what: &'static str,
+    pub value: String,
+    pub expected: &'static str,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -63,6 +98,30 @@ impl NodeKind {
     }
 }
 
+/// Case-insensitive; `fn` is accepted for `function`.
+impl FromStr for NodeKind {
+    type Err = UnknownKind;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "file" => Ok(NodeKind::File),
+            "class" => Ok(NodeKind::Class),
+            "struct" => Ok(NodeKind::Struct),
+            "interface" => Ok(NodeKind::Interface),
+            "enum" => Ok(NodeKind::Enum),
+            "trait" => Ok(NodeKind::Trait),
+            "type" => Ok(NodeKind::Type),
+            "function" | "fn" => Ok(NodeKind::Function),
+            "method" => Ok(NodeKind::Method),
+            _ => Err(UnknownKind {
+                what: "node kind",
+                value: s.to_string(),
+                expected: "file, class, struct, interface, enum, trait, type, function, method",
+            }),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Node {
     /// `relpath:Lstart` for symbols, bare `relpath` for files.
@@ -86,6 +145,25 @@ pub enum EdgeKind {
     Imports,
     Implements,
     Contains,
+}
+
+/// Case-insensitive; the singular (`call`, `import`, …) is accepted too.
+impl FromStr for EdgeKind {
+    type Err = UnknownKind;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "calls" | "call" => Ok(EdgeKind::Calls),
+            "imports" | "import" => Ok(EdgeKind::Imports),
+            "implements" | "implement" => Ok(EdgeKind::Implements),
+            "contains" | "contain" => Ok(EdgeKind::Contains),
+            _ => Err(UnknownKind {
+                what: "edge kind",
+                value: s.to_string(),
+                expected: "calls, imports, implements, contains",
+            }),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,14 +214,28 @@ pub struct CodeGraph {
 
 impl CodeGraph {
     /// Load a previously-written graph from JSON.
-    pub fn load(path: &Path) -> anyhow::Result<Self> {
-        let bytes = std::fs::read(path)?;
-        Ok(serde_json::from_slice(&bytes)?)
+    pub fn load(path: &Path) -> Result<Self, GraphFileError> {
+        let bytes = std::fs::read(path).map_err(|source| GraphFileError::Read {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        serde_json::from_slice(&bytes).map_err(|source| GraphFileError::Parse {
+            path: path.to_path_buf(),
+            source,
+        })
     }
 
-    /// Serialize to pretty JSON.
-    pub fn to_json(&self) -> anyhow::Result<String> {
-        Ok(serde_json::to_string_pretty(self)?)
+    /// Write the graph to `path` as pretty JSON, creating its parent directory.
+    pub fn write(&self, path: &Path) -> Result<(), GraphFileError> {
+        let json = serde_json::to_string_pretty(self).map_err(GraphFileError::Serialize)?;
+        let write_error = |source| GraphFileError::Write {
+            path: path.to_path_buf(),
+            source,
+        };
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(write_error)?;
+        }
+        std::fs::write(path, json).map_err(write_error)
     }
 }
 
@@ -235,45 +327,47 @@ pub fn build_graph(extract: &ExtractResult, root: &Path, head: Option<String>) -
     let mut edges = EdgeSet::default();
 
     // --- Contains edges (parent → child; file → top-level symbol) ---
+    let defs: Vec<Def> = symbols
+        .iter()
+        .zip(&sym_ids)
+        .map(|(symbol, id)| Def { symbol, id })
+        .collect();
+
     let parents = containment::parent_of_each(symbols);
-    for (i, parent) in parents.iter().enumerate() {
-        match parent {
-            Some(p) => edges.add(
-                sym_ids[*p].clone(),
-                sym_ids[i].clone(),
-                EdgeKind::Contains,
-                false,
-            ),
-            None => edges.add(
-                rel_of(&symbols[i].file),
-                sym_ids[i].clone(),
-                EdgeKind::Contains,
-                false,
-            ),
-        }
+    for (def, parent) in defs.iter().zip(&parents) {
+        let from = match parent.and_then(|p| defs.get(p)) {
+            Some(container) => container.id.clone(),
+            None => rel_of(&def.symbol.file),
+        };
+        edges.add(from, def.id.clone(), EdgeKind::Contains, false);
     }
 
-    // --- Name → candidate-index maps for resolution ---
-    let mut call_targets: HashMap<&str, Vec<usize>> = HashMap::new();
-    let mut impl_targets: HashMap<&str, Vec<usize>> = HashMap::new();
-    for (i, s) in symbols.iter().enumerate() {
-        call_targets.entry(s.name.as_str()).or_default().push(i);
+    // --- Name → candidate maps for resolution ---
+    let mut call_targets: HashMap<&str, Vec<&Def>> = HashMap::new();
+    let mut impl_targets: HashMap<&str, Vec<&Def>> = HashMap::new();
+    for def in &defs {
+        let s = def.symbol;
+        call_targets.entry(s.name.as_str()).or_default().push(def);
         if s.kind.is_container() || s.kind == SymbolKind::Type {
-            impl_targets.entry(s.name.as_str()).or_default().push(i);
+            impl_targets.entry(s.name.as_str()).or_default().push(def);
         }
     }
 
     // Symbols bucketed by file for enclosing-definition lookup.
-    let mut by_file: HashMap<&Path, Vec<usize>> = HashMap::new();
-    for (i, s) in symbols.iter().enumerate() {
-        by_file.entry(s.file.as_path()).or_default().push(i);
+    let mut by_file: HashMap<&Path, Vec<&Def>> = HashMap::new();
+    for def in &defs {
+        by_file
+            .entry(def.symbol.file.as_path())
+            .or_default()
+            .push(def);
     }
-    let enclosing_idx = |file: &Path, line: u32| -> Option<usize> {
-        by_file.get(file).and_then(|idxs| {
-            idxs.iter()
+    let enclosing = |file: &Path, line: u32| -> Option<&Def> {
+        by_file.get(file).and_then(|in_file| {
+            in_file
+                .iter()
                 .copied()
-                .filter(|&i| symbols[i].line_start <= line && line <= symbols[i].line_end)
-                .min_by_key(|&i| symbols[i].line_end.saturating_sub(symbols[i].line_start))
+                .filter(|d| d.symbol.line_start <= line && line <= d.symbol.line_end)
+                .min_by_key(|d| d.symbol.line_end.saturating_sub(d.symbol.line_start))
         })
     };
 
@@ -281,8 +375,8 @@ pub fn build_graph(extract: &ExtractResult, root: &Path, head: Option<String>) -
 
     // --- Calls / Implements edges from references ---
     for r in &extract.references {
-        let from_id = match enclosing_idx(&r.file, r.line) {
-            Some(i) => sym_ids[i].clone(),
+        let from_id = match enclosing(&r.file, r.line) {
+            Some(def) => def.id.clone(),
             None => rel_of(&r.file),
         };
         let (candidates, kind) = match r.ref_kind {
@@ -296,18 +390,17 @@ pub fn build_graph(extract: &ExtractResult, root: &Path, head: Option<String>) -
             continue;
         };
         // Prefer a unique same-file candidate; else single global; else all (ambiguous).
-        let same_file: Vec<usize> = cands
+        let same_file: Vec<&Def> = cands
             .iter()
             .copied()
-            .filter(|&i| symbols[i].file == r.file)
+            .filter(|d| d.symbol.file == r.file)
             .collect();
-        if same_file.len() == 1 {
-            edges.add(from_id, sym_ids[same_file[0]].clone(), kind, false);
-        } else if cands.len() == 1 {
-            edges.add(from_id, sym_ids[cands[0]].clone(), kind, false);
-        } else {
-            for &i in cands {
-                edges.add(from_id.clone(), sym_ids[i].clone(), kind, true);
+        match (same_file.as_slice(), cands.as_slice()) {
+            ([only], _) | (_, [only]) => edges.add(from_id, only.id.clone(), kind, false),
+            _ => {
+                for def in cands {
+                    edges.add(from_id.clone(), def.id.clone(), kind, true);
+                }
             }
         }
     }
@@ -358,9 +451,10 @@ pub fn build_graph(extract: &ExtractResult, root: &Path, head: Option<String>) -
     }
 }
 
-// ---------------------------------------------------------------------------
-// Import resolution (best-effort path-suffix matching)
-// ---------------------------------------------------------------------------
+struct Def<'a> {
+    symbol: &'a Symbol,
+    id: &'a String,
+}
 
 enum ImportResolution {
     Unique(String),
@@ -385,8 +479,8 @@ fn build_suffix_index<'a>(files: impl Iterator<Item = &'a String>) -> SuffixInde
         ) {
             segs.pop();
         }
-        for start in 0..segs.len() {
-            let key = segs[start..].join("/");
+        for tail in (0..segs.len()).filter_map(|start| segs.get(start..)) {
+            let key = tail.join("/");
             if !key.is_empty() {
                 idx.entry(key).or_default().push(f.clone());
             }
@@ -419,9 +513,9 @@ fn resolve_import(imp: &Import, importer_rel: &str, idx: &SuffixIndex) -> Import
     if key.is_empty() {
         return ImportResolution::External;
     }
-    match idx.get(&key) {
-        Some(v) if v.len() == 1 => ImportResolution::Unique(v[0].clone()),
-        Some(v) if v.len() > 1 => ImportResolution::Ambiguous(v.clone()),
+    match idx.get(&key).map(Vec::as_slice) {
+        Some([only]) => ImportResolution::Unique(only.clone()),
+        Some(many @ [_, _, ..]) => ImportResolution::Ambiguous(many.to_vec()),
         _ => ImportResolution::External,
     }
 }
@@ -429,7 +523,7 @@ fn resolve_import(imp: &Import, importer_rel: &str, idx: &SuffixIndex) -> Import
 /// Resolve a Python/TS-style relative import against the importer's directory.
 fn resolve_relative(module: &str, importer_dir: &str) -> String {
     let leading_dots = module.bytes().take_while(|&b| b == b'.').count();
-    let rest = module[leading_dots..].trim_start_matches('/');
+    let rest = module.trim_start_matches('.').trim_start_matches('/');
 
     let up = if module.contains('/') {
         // TS style: count ".." path segments.
@@ -463,10 +557,6 @@ fn resolve_relative(module: &str, importer_dir: &str) -> String {
     out
 }
 
-// ---------------------------------------------------------------------------
-// Path helpers
-// ---------------------------------------------------------------------------
-
 fn relpath(root: &Path, p: &Path) -> String {
     p.strip_prefix(root)
         .unwrap_or(p)
@@ -481,7 +571,7 @@ fn file_name(rel: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extractor::{Reference, Symbol};
+    use crate::extractor::Reference;
 
     fn sym(name: &str, kind: SymbolKind, file: &str, start: u32, end: u32) -> Symbol {
         Symbol {

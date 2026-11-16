@@ -1,3 +1,5 @@
+//! Ranking workspace symbols against a fuzzy query.
+
 use lsp_types::SymbolInformation;
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
@@ -49,7 +51,7 @@ pub fn fuzzy_search(symbols: &[SymbolInformation], query: &str) -> Vec<RankedSym
         .collect();
 
     // Sort by score descending (higher score = better match)
-    ranked.sort_by(|a, b| b.score.cmp(&a.score));
+    ranked.sort_by_key(|r| std::cmp::Reverse(r.score));
 
     ranked
 }
@@ -67,6 +69,10 @@ mod tests {
     use super::*;
     use lsp_types::{Location, Position, Range, SymbolKind, Url};
 
+    #[expect(
+        deprecated,
+        reason = "SymbolInformation has no constructor that leaves its deprecated field out"
+    )]
     fn make_test_symbol(name: &str, container: Option<&str>) -> SymbolInformation {
         SymbolInformation {
             name: name.to_string(),
@@ -92,10 +98,7 @@ mod tests {
 
     #[test]
     fn test_empty_query() {
-        let symbols = vec![
-            make_test_symbol("foo", None),
-            make_test_symbol("bar", None),
-        ];
+        let symbols = vec![make_test_symbol("foo", None), make_test_symbol("bar", None)];
 
         let results = fuzzy_search(&symbols, "");
         assert_eq!(results.len(), 2);
@@ -125,9 +128,11 @@ mod tests {
         let results = fuzzy_search(&symbols, "MyClass");
         assert!(!results.is_empty());
         // Should match the symbol in MyClass container
-        assert!(results
-            .iter()
-            .any(|r| r.symbol.container_name.as_deref() == Some("MyClass")));
+        assert!(
+            results
+                .iter()
+                .any(|r| r.symbol.container_name.as_deref() == Some("MyClass"))
+        );
     }
 
     #[test]

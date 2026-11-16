@@ -1,12 +1,12 @@
-use std::path::{Path, PathBuf};
-use std::process::Command;
+//! The `hobby-tree-extract` command: writes a repository's symbol map and
+//! code graph, and logs what it wrote or why it failed to stderr.
 
-use anyhow::{Context, Result};
+use std::path::PathBuf;
+use std::process::ExitCode;
+
 use clap::Parser;
 
-use hobby_tree_extract::extractor::Extractor;
-use hobby_tree_extract::md_render::{RenderOptions, render};
-use hobby_tree_extract::{gitignore, graph};
+use hobby_tree_extract::refresh::{GraphOutput, Outcome, Request, refresh};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -41,115 +41,70 @@ struct Cli {
     no_graph: bool,
 
     /// Code graph output path. Defaults to <repo>/.project-graph.json.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "no_graph")]
     graph_output: Option<PathBuf>,
 }
 
-fn main() -> Result<()> {
+impl Cli {
+    fn into_request(self) -> Request {
+        let graph = match (self.no_graph, self.graph_output) {
+            (true, _) => GraphOutput::Skip,
+            (false, Some(path)) => GraphOutput::At(path),
+            (false, None) => GraphOutput::Default,
+        };
+        Request {
+            repo: self.repo,
+            output: self.output,
+            size_threshold_bytes: Some(self.size_threshold_kib.saturating_mul(1024)),
+            skip_if_unchanged: self.skip_if_unchanged,
+            exclude_from_git: !self.no_gitignore,
+            graph,
+        }
+    }
+}
+
+fn main() -> ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .with_writer(std::io::stderr)
+        .without_time()
+        .with_target(false)
         .init();
 
-    let cli = Cli::parse();
-    let repo = cli
-        .repo
-        .canonicalize()
-        .with_context(|| format!("canonicalize {}", cli.repo.display()))?;
-    let output = cli
-        .output
-        .clone()
-        .unwrap_or_else(|| repo.join(".project-description.md"));
-
-    let head_hash = git_head(&repo).ok();
-    if cli.skip_if_unchanged
-        && let Some(current) = &head_hash
-        && let Ok(existing) = std::fs::read_to_string(&output)
-        && front_matter_head(&existing).as_deref() == Some(current.as_str())
-    {
-        eprintln!(
-            "tree-extract: {} is up to date (HEAD {})",
-            output.display(),
-            current
-        );
-        return Ok(());
-    }
-
-    eprintln!("tree-extract: scanning {}", repo.display());
-    let extractor = Extractor::new()?;
-    let extracted = extractor.extract_repo(&repo);
-    let symbols = &extracted.symbols;
-    eprintln!("tree-extract: extracted {} symbols", symbols.len());
-
-    let mut opts = RenderOptions::new(repo.clone());
-    opts.size_threshold_bytes = cli.size_threshold_kib * 1024;
-    opts.head_hash = head_hash.clone();
-    let body = render(symbols, &opts);
-
-    if let Some(parent) = output.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
-    std::fs::write(&output, body).with_context(|| format!("writing {}", output.display()))?;
-    eprintln!("tree-extract: wrote {}", output.display());
-
-    if !cli.no_gitignore {
-        gitignore::ensure_entry(&repo, &output)?;
-    }
-
-    if !cli.no_graph {
-        let graph_output = cli
-            .graph_output
-            .clone()
-            .unwrap_or_else(|| repo.join(".project-graph.json"));
-        let g = graph::build_graph(&extracted, &repo, head_hash);
-        let json = g.to_json()?;
-        if let Some(parent) = graph_output.parent() {
-            std::fs::create_dir_all(parent).ok();
+    let request = Cli::parse().into_request();
+    match refresh(&request) {
+        Ok(outcome) => {
+            report(&outcome);
+            ExitCode::SUCCESS
         }
-        std::fs::write(&graph_output, json)
-            .with_context(|| format!("writing {}", graph_output.display()))?;
-        eprintln!(
-            "tree-extract: wrote {} ({} nodes, {} edges, {} ambiguous, {} unresolved calls)",
-            graph_output.display(),
-            g.stats.nodes,
-            g.stats.edges,
-            g.stats.ambiguous_edges,
-            g.stats.unresolved_calls
-        );
-        if !cli.no_gitignore {
-            gitignore::ensure_entry(&repo, &graph_output)?;
+        Err(e) => {
+            let error: &dyn std::error::Error = &e;
+            tracing::error!(error, "refresh failed");
+            ExitCode::FAILURE
         }
     }
-    Ok(())
 }
 
-fn git_head(repo: &Path) -> Result<String> {
-    let out = Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .current_dir(repo)
-        .output()
-        .context("running git rev-parse HEAD")?;
-    if !out.status.success() {
-        anyhow::bail!("git rev-parse HEAD failed");
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
-
-fn front_matter_head(body: &str) -> Option<String> {
-    let mut lines = body.lines();
-    if lines.next()? != "---" {
-        return None;
-    }
-    for line in lines {
-        if line == "---" {
-            return None;
+fn report(outcome: &Outcome) {
+    match outcome {
+        Outcome::UpToDate { output, head } => {
+            tracing::info!(path = %output.display(), %head, "up to date");
         }
-        if let Some(rest) = line.strip_prefix("head: ") {
-            return Some(rest.trim().to_string());
+        Outcome::Written(w) => {
+            tracing::info!(path = %w.output.display(), symbols = w.symbols, bytes = w.bytes, "wrote symbol map");
+            if let Some(g) = &w.graph {
+                tracing::info!(
+                    path = %g.path.display(),
+                    nodes = g.stats.nodes,
+                    edges = g.stats.edges,
+                    ambiguous = g.stats.ambiguous_edges,
+                    unresolved_calls = g.stats.unresolved_calls,
+                    "wrote graph"
+                );
+            }
         }
     }
-    None
 }

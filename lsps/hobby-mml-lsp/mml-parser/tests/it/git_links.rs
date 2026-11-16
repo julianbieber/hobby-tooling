@@ -110,7 +110,10 @@ fn lint(w: &World, src: &str) -> Vec<Diagnostic> {
 
 fn on_line<'a>(src: &str, diags: &'a [Diagnostic], needle: &str) -> Vec<&'a Diagnostic> {
     let start = src.find(needle).expect("needle");
-    let end = start + src[start..].find('\n').unwrap_or(src.len() - start);
+    let end = src
+        .get(start..)
+        .and_then(|rest| rest.find('\n'))
+        .map_or(src.len(), |i| start + i);
     diags
         .iter()
         .filter(|d| d.span.start >= start && d.span.start <= end)
@@ -120,7 +123,7 @@ fn on_line<'a>(src: &str, diags: &'a [Diagnostic], needle: &str) -> Vec<&'a Diag
 #[test]
 fn links_resolve_against_the_task_checkout() {
     let w = world();
-    let src = delta("demo", &w.base[..10], &w.head[..10]);
+    let src = delta("demo", w.base.get(..10).unwrap(), w.head.get(..10).unwrap());
     let diags = lint(&w, &src);
 
     assert!(
@@ -178,7 +181,10 @@ fn checkout_not_found_once() {
     let diags = lint(&w, &src);
     assert_eq!(diags.len(), 1, "{diags:#?}");
     assert_eq!(diags[0].code, "checkout-not-found");
-    assert_eq!(&src[diags[0].span.start..diags[0].span.end], "elsewhere");
+    assert_eq!(
+        src.get(diags[0].span.start..diags[0].span.end),
+        Some("elsewhere")
+    );
 
     let unknown_head = delta("demo", &w.base, "abcdef0123");
     let diags = lint(&w, &unknown_head);
@@ -262,7 +268,7 @@ head: worktree
 + - past the edited file @ a/Run.rs:9
 - - removed step, base side @ Old.rs:4
 ",
-        base = &w.base[..10]
+        base = w.base.get(..10).unwrap()
     );
     let diags = lint(&w, &src);
     assert!(

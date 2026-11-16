@@ -7,7 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub fn now_unix() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
+        .ok()
+        .and_then(|d| i64::try_from(d.as_secs()).ok())
         .unwrap_or(0)
 }
 
@@ -32,7 +33,7 @@ pub fn parse_rfc3339(s: &str) -> Option<i64> {
         let pos = time_and_offset.find(['+', '-'])?;
         let (t, off) = time_and_offset.split_at(pos);
         let sign: i64 = if off.starts_with('-') { -1 } else { 1 };
-        let (oh, om) = off[1..].split_once(':')?;
+        let (oh, om) = off.get(1..)?.split_once(':')?;
         let oh: i64 = oh.parse().ok()?;
         let om: i64 = om.parse().ok()?;
         (t, sign * (oh * 3600 + om * 60))
@@ -47,7 +48,12 @@ pub fn parse_rfc3339(s: &str) -> Option<i64> {
         return None;
     }
 
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) || hour > 23 || minute > 59 || second > 60 {
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 60
+    {
         return None;
     }
 
@@ -68,6 +74,12 @@ pub fn rfc3339_utc(unix: i64) -> String {
         (secs % 3600) / 60,
         secs % 60
     )
+}
+
+/// Render seconds since the Unix epoch as the UTC date `YYYY-MM-DD`.
+pub fn date_utc(unix: i64) -> String {
+    let (year, month, day) = civil_from_days(unix.div_euclid(86400));
+    format!("{year:04}-{month:02}-{day:02}")
 }
 
 /// Seconds between `timestamp` and now, when it parses. Can come back negative
@@ -113,7 +125,7 @@ fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
     era * 146097 + day_of_era - 719468
 }
 
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
     let z = days + 719468;
     let era = if z >= 0 { z } else { z - 146096 } / 146097;
     let day_of_era = z - era * 146097;
@@ -121,12 +133,12 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
         (day_of_era - day_of_era / 1460 + day_of_era / 36524 - day_of_era / 146096) / 365;
     let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
     let month_p = (5 * day_of_year + 2) / 153;
-    let day = (day_of_year - (153 * month_p + 2) / 5 + 1) as u32;
+    let day = day_of_year - (153 * month_p + 2) / 5 + 1;
     let month = if month_p < 10 {
         month_p + 3
     } else {
         month_p - 9
-    } as u32;
+    };
     let year = year_of_era + era * 400 + i64::from(month <= 2);
     (year, month, day)
 }
@@ -153,10 +165,7 @@ mod tests {
     // A date away from the epoch, checked against its well-known Unix timestamp.
     #[test]
     fn parses_a_known_date() {
-        assert_eq!(
-            parse_rfc3339("2024-01-01T00:00:00Z"),
-            Some(1_704_067_200)
-        );
+        assert_eq!(parse_rfc3339("2024-01-01T00:00:00Z"), Some(1_704_067_200));
     }
 
     // An offset has to convert to UTC, not just be accepted and ignored.
@@ -201,5 +210,13 @@ mod tests {
         assert_eq!(human(4320), "1h 12m");
         assert_eq!(human(86400), "1d");
         assert_eq!(human(-5), "0s");
+    }
+
+    #[test]
+    fn date_utc_is_the_date_part_of_rfc3339_utc() {
+        for unix in [0, 1_709_208_000, -86_401, 4_102_444_799] {
+            assert!(rfc3339_utc(unix).starts_with(&date_utc(unix)));
+            assert_eq!(date_utc(unix).len(), 10);
+        }
     }
 }

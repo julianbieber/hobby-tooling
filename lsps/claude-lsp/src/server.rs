@@ -1,4 +1,7 @@
-use std::path::PathBuf;
+//! The language server: code actions, symbols and the send command for
+//! `claude:` comments.
+
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use tower_lsp::jsonrpc::Result;
@@ -19,7 +22,7 @@ impl ClaudeLspServer {
     pub fn new(client: Client) -> Self {
         Self {
             client,
-            bridge: ZellijBridge::new(),
+            bridge: ZellijBridge::from_env(),
             workspace_root: OnceLock::new(),
         }
     }
@@ -34,13 +37,11 @@ impl LanguageServer for ClaudeLspServer {
             .as_ref()
             .and_then(|folders| folders.first())
             .and_then(|f| f.uri.to_file_path().ok())
+            .or_else(|| params.root_uri.as_ref().and_then(|u| u.to_file_path().ok()))
             .or_else(|| {
-                #[allow(deprecated)]
-                params.root_uri.as_ref().and_then(|u| u.to_file_path().ok())
-            })
-            .or_else(|| {
-                #[allow(deprecated)]
-                params.root_path.clone().map(PathBuf::from)
+                #[expect(deprecated, reason = "the oldest clients send only rootPath")]
+                let root_path = params.root_path.clone();
+                root_path.map(PathBuf::from)
             });
 
         if let Some(root) = root {
@@ -79,26 +80,18 @@ impl LanguageServer for ClaudeLspServer {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
-        tracing::debug!("opened: {}", params.text_document.uri);
+        tracing::debug!(uri = %params.text_document.uri, "opened");
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
-        tracing::debug!("changed: {}", params.text_document.uri);
+        tracing::debug!(uri = %params.text_document.uri, "changed");
     }
 
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         let uri = &params.text_document.uri;
         let range = params.range;
 
-        // Read file content from disk (we need the full file for context)
-        let file_path = uri
-            .to_file_path()
-            .map_err(|_| tower_lsp::jsonrpc::Error::invalid_params("invalid file URI"))?;
-
-        let content = std::fs::read_to_string(&file_path).map_err(|e| {
-            tower_lsp::jsonrpc::Error::invalid_params(format!("cannot read file: {e}"))
-        })?;
-
+        let (file_path, content) = read_document(uri).await?;
         let lines: Vec<&str> = content.lines().collect();
         let path_str = file_path.to_string_lossy();
 
@@ -129,12 +122,10 @@ impl LanguageServer for ClaudeLspServer {
         // --- "Insert claude comment" action (always available) ---
         {
             let insert_line = range.start.line;
-            let indent = lines
-                .get(insert_line as usize)
-                .map(|l| {
-                    let trimmed = l.trim_start();
-                    &l[..l.len() - trimmed.len()]
-                })
+            let indent = usize::try_from(insert_line)
+                .ok()
+                .and_then(|i| lines.get(i))
+                .and_then(|l| l.strip_suffix(l.trim_start()))
                 .unwrap_or("");
             let prefix = actions::comment_prefix_for_file(&path_str);
             let new_text = format!("{indent}{prefix}\n");
@@ -183,15 +174,16 @@ impl LanguageServer for ClaudeLspServer {
                     };
                     // Delete up to the start of the next line (consuming the newline).
                     // If it's the last line, delete to the end of that line.
-                    let end = if (line_idx as usize + 1) < lines.len() {
+                    let next_line = line_idx.saturating_add(1);
+                    let end = if usize::try_from(next_line).is_ok_and(|next| next < lines.len()) {
                         Position {
-                            line: line_idx + 1,
+                            line: next_line,
                             character: 0,
                         }
                     } else {
                         Position {
                             line: line_idx,
-                            character: lines[line_idx as usize].len() as u32,
+                            character: actions::line_len(&lines, line_idx),
                         }
                     };
                     TextEdit {
@@ -226,13 +218,7 @@ impl LanguageServer for ClaudeLspServer {
         &self,
         params: DocumentSymbolParams,
     ) -> Result<Option<DocumentSymbolResponse>> {
-        let uri = &params.text_document.uri;
-        let file_path = uri
-            .to_file_path()
-            .map_err(|_| tower_lsp::jsonrpc::Error::invalid_params("invalid file URI"))?;
-        let content = std::fs::read_to_string(&file_path).map_err(|e| {
-            tower_lsp::jsonrpc::Error::invalid_params(format!("cannot read file: {e}"))
-        })?;
+        let (file_path, content) = read_document(&params.text_document.uri).await?;
         let lines: Vec<&str> = content.lines().collect();
         let path_str = file_path.to_string_lossy();
 
@@ -248,10 +234,17 @@ impl LanguageServer for ClaudeLspServer {
         &self,
         params: WorkspaceSymbolParams,
     ) -> Result<Option<Vec<SymbolInformation>>> {
-        let Some(root) = self.workspace_root.get() else {
+        let Some(root) = self.workspace_root.get().cloned() else {
             return Ok(None);
         };
-        let syms = symbols::workspace_symbols(root, &params.query);
+        let syms =
+            tokio::task::spawn_blocking(move || symbols::workspace_symbols(&root, &params.query))
+                .await
+                .map_err(|e| {
+                    let error: &dyn std::error::Error = &e;
+                    tracing::error!(error, "workspace symbol walk did not finish");
+                    tower_lsp::jsonrpc::Error::internal_error()
+                })?;
         if syms.is_empty() {
             Ok(None)
         } else {
@@ -280,6 +273,10 @@ impl LanguageServer for ClaudeLspServer {
                                 .await;
                         }
                         Err(e) => {
+                            {
+                                let error: &dyn std::error::Error = &e;
+                                tracing::warn!(error, "request not sent to Claude");
+                            }
                             self.client
                                 .show_message(
                                     MessageType::ERROR,
@@ -294,4 +291,18 @@ impl LanguageServer for ClaudeLspServer {
             _ => Ok(None),
         }
     }
+}
+
+async fn read_document(uri: &Url) -> Result<(PathBuf, String)> {
+    let path = uri
+        .to_file_path()
+        .map_err(|()| tower_lsp::jsonrpc::Error::invalid_params("invalid file URI"))?;
+    let content = read_file(&path).await?;
+    Ok((path, content))
+}
+
+async fn read_file(path: &Path) -> Result<String> {
+    tokio::fs::read_to_string(path)
+        .await
+        .map_err(|e| tower_lsp::jsonrpc::Error::invalid_params(format!("cannot read file: {e}")))
 }

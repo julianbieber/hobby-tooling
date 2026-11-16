@@ -1,11 +1,55 @@
 [workspace]
-resolver = "2"
+resolver = "3"
 members = ["crates/hdash_app", "crates/hwt_core"]
 
 [workspace.package]
 edition = "2024"
+rust-version = "1.100"
 version = "0.1.0"
 license = "MIT OR Apache-2.0"
 
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+# No panics outside tests. clippy.toml lifts these inside #[test] and #[cfg(test)].
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+indexing_slicing = "deny"
+string_slice = "deny"
+exit = "deny"
+# Conversions are checked: TryFrom/From instead of `as`.
+as_conversions = "deny"
+# Every exception is an #[expect(lint, reason = "...")]: it names why, and fails once it is no longer needed.
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+# Logging goes through tracing.
+dbg_macro = "deny"
+# The lists in clippy.toml.
+disallowed_methods = "deny"
+disallowed_types = "deny"
+await_holding_lock = "deny"
+
+[workspace.dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+hwt_core = { path = "crates/hwt_core" }
+log = { version = "0.4", default-features = false }
+nucleo-matcher = { version = "0.3", default-features = false, features = ["unicode-normalization", "unicode-casefold"] }
+parking_lot = { version = "0.12", default-features = false }
+ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
+serde = { version = "1", default-features = false, features = ["std", "derive"] }
+serde_json = { version = "1", default-features = false, features = ["std"] }
+signal-hook = { version = "0.3", default-features = false }
+thiserror = { version = "2", default-features = false, features = ["std"] }
+unicode-width = { version = "0.2", default-features = false }
+
 [profile.dev]
 opt-level = 1
+
+[profile.release]
+panic = "abort"
+debug = "line-tables-only"

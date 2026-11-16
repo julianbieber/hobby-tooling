@@ -16,7 +16,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::{DefaultTerminal, Frame};
 
-use crate::model::{BuildState, Coordinator, Status, TASKS_FILE};
+use crate::model::{BuildState, Coordinator, LoadError, Status, TASKS_FILE};
 
 const POLL: Duration = Duration::from_millis(500);
 
@@ -34,7 +34,7 @@ struct Row {
 
 struct App {
     dir: PathBuf,
-    loaded: Result<Loaded, String>,
+    loaded: Result<Loaded, LoadError>,
     seen: Vec<Option<SystemTime>>,
     scroll: u16,
     show_description: bool,
@@ -45,13 +45,13 @@ impl App {
     fn new(dir: &Path) -> Self {
         let mut app = Self {
             dir: dir.to_path_buf(),
-            loaded: Err("not loaded".into()),
+            loaded: load(dir),
             seen: Vec::new(),
             scroll: 0,
             show_description: false,
             body: Rect::default(),
         };
-        app.reload();
+        app.seen = app.mtimes();
         app
     }
 
@@ -70,41 +70,7 @@ impl App {
     }
 
     fn reload(&mut self) {
-        self.loaded = Coordinator::load(&self.dir).map(|coordinator| {
-            let prs = coordinator
-                .tasks
-                .iter()
-                .map(|t| coordinator.pr_urls(&self.dir, t))
-                .collect();
-            let acceptance = coordinator
-                .tasks
-                .iter()
-                .map(|t| {
-                    BuildState::load(&coordinator.task_notes_dir(&self.dir, t))
-                        .ok()
-                        .flatten()
-                        .and_then(|s| s.acceptance_result)
-                        .map(|a| (a.summary(), a.passed))
-                })
-                .collect();
-            let merge = coordinator
-                .tasks
-                .iter()
-                .map(|t| {
-                    BuildState::load(&coordinator.task_notes_dir(&self.dir, t))
-                        .ok()
-                        .flatten()
-                        .and_then(|s| s.merge_result)
-                        .map(|m| (m.summary(), m.merged()))
-                })
-                .collect();
-            Loaded {
-                coordinator,
-                prs,
-                acceptance,
-                merge,
-            }
-        });
+        self.loaded = load(&self.dir);
         self.seen = self.mtimes();
     }
 
@@ -131,13 +97,13 @@ impl App {
             if let Some(note) = &t.note {
                 rows.push(plain(Line::from(format!("    {note}").dim())));
             }
-            if let Some((summary, passed)) = &loaded.acceptance[i] {
+            if let Some((summary, passed)) = loaded.acceptance.get(i).and_then(Option::as_ref) {
                 rows.push(plain(summary_line(summary, *passed)));
             }
-            if let Some((summary, merged)) = &loaded.merge[i] {
+            if let Some((summary, merged)) = loaded.merge.get(i).and_then(Option::as_ref) {
                 rows.push(plain(summary_line(summary, *merged)));
             }
-            for url in &loaded.prs[i] {
+            for url in loaded.prs.get(i).into_iter().flatten() {
                 rows.push(Row {
                     line: pr_line(url),
                     url: Some(url.clone()),
@@ -178,10 +144,48 @@ impl App {
     }
 }
 
+fn load(dir: &Path) -> Result<Loaded, LoadError> {
+    Coordinator::load(dir).map(|coordinator| {
+        let prs = coordinator
+            .tasks
+            .iter()
+            .map(|t| coordinator.pr_urls(dir, t))
+            .collect();
+        let acceptance = coordinator
+            .tasks
+            .iter()
+            .map(|t| {
+                BuildState::load(&coordinator.task_notes_dir(dir, t))
+                    .ok()
+                    .flatten()
+                    .and_then(|s| s.acceptance_result)
+                    .map(|a| (a.summary(), a.passed))
+            })
+            .collect();
+        let merge = coordinator
+            .tasks
+            .iter()
+            .map(|t| {
+                BuildState::load(&coordinator.task_notes_dir(dir, t))
+                    .ok()
+                    .flatten()
+                    .and_then(|s| s.merge_result)
+                    .map(|m| (m.summary(), m.merged()))
+            })
+            .collect();
+        Loaded {
+            coordinator,
+            prs,
+            acceptance,
+            merge,
+        }
+    })
+}
+
 /// Run the view on the coordinator notes directory until `q` or Esc. A left click on a
 /// `PR #n` line opens that PR in the browser. The terminal is restored on every exit
 /// path, including a draw error.
-pub fn run(dir: &Path) -> Result<(), String> {
+pub fn run(dir: &Path) -> std::io::Result<()> {
     let mut terminal = ratatui::init();
     let mouse = execute!(std::io::stdout(), EnableMouseCapture).is_ok();
     let result = event_loop(&mut terminal, App::new(dir));
@@ -192,13 +196,11 @@ pub fn run(dir: &Path) -> Result<(), String> {
     result
 }
 
-fn event_loop(terminal: &mut DefaultTerminal, mut app: App) -> Result<(), String> {
+fn event_loop(terminal: &mut DefaultTerminal, mut app: App) -> std::io::Result<()> {
     loop {
-        terminal
-            .draw(|frame| draw(frame, &mut app))
-            .map_err(|e| e.to_string())?;
-        if event::poll(POLL).map_err(|e| e.to_string())? {
-            match event::read().map_err(|e| e.to_string())? {
+        terminal.draw(|frame| draw(frame, &mut app))?;
+        if event::poll(POLL)? {
+            match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
                     KeyCode::Char('j') | KeyCode::Down => scroll_down(&mut app),
@@ -248,7 +250,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
             let msg = Paragraph::new(vec![
                 Line::from(TASKS_FILE.bold()),
                 Line::from(""),
-                Line::from(e.as_str().fg(Color::Red)),
+                Line::from(e.to_string().fg(Color::Red)),
                 Line::from(""),
                 Line::from("q quit · r reload".dim()),
             ])
@@ -360,13 +362,16 @@ mod tests {
             show_description: false,
             body: Rect::new(0, 3, 20, 10),
         };
-        let title_rows = Paragraph::new(task_line(
-            1,
-            Status::Todo,
-            "a title long enough to wrap twice over",
-        ))
-        .wrap(Wrap { trim: false })
-        .line_count(20) as u16;
+        let title_rows = u16::try_from(
+            Paragraph::new(task_line(
+                1,
+                Status::Todo,
+                "a title long enough to wrap twice over",
+            ))
+            .wrap(Wrap { trim: false })
+            .line_count(20),
+        )
+        .unwrap();
         assert!(title_rows > 1);
         let first_pr_row = 4 + title_rows;
         assert_eq!(app.url_at(5, first_pr_row - 1), None);

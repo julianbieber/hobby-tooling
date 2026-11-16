@@ -52,24 +52,29 @@ impl Atlas {
     /// binaries has one crate each, so every one is tried and the first match wins.
     /// `path` is module names then the item name, without the crate.
     pub fn find(&self, package: &str, path: &[String]) -> Option<(usize, Id)> {
-        self.crates.iter().enumerate().filter(|(_, c)| c.package == package).find_map(|(ci, c)| {
-            c.root.find(path).map(|i| (ci, i.id))
-        })
+        self.crates
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.package == package)
+            .find_map(|(ci, c)| c.root.find(path).map(|i| (ci, i.id)))
     }
 
     /// The item behind an id from [`Atlas::find`].
     pub fn item(&self, (ci, id): (usize, Id)) -> Option<&Item> {
-        self.crates[ci].root.find_id(id)
+        self.crates.get(ci)?.root.find_id(id)
     }
 
     /// Mutable access to an item, for assigning a role found after classification.
     pub fn item_mut(&mut self, (ci, id): (usize, Id)) -> Option<&mut Item> {
-        self.crates[ci].root.find_id_mut(id)
+        self.crates.get_mut(ci)?.root.find_id_mut(id)
     }
 
     /// The shallowest module whose source file is `file`; the first crate wins a tie.
     pub fn module_of_file(&self, file: &str) -> Option<&Module> {
-        self.crates.iter().filter_map(|c| c.root.module_of_file(file)).next()
+        self.crates
+            .iter()
+            .filter_map(|c| c.root.module_of_file(file))
+            .next()
     }
 
     /// How many items in the whole atlas play this role.
@@ -86,7 +91,11 @@ impl CrateAtlas {
         let classifier = BevyClassifier::new(krate);
         let root = krate.item(krate.root())?;
         let module = build_module(krate, &classifier, &name, root, vec![name.clone()], true)?;
-        Ok(CrateAtlas { name, package, root: module })
+        Ok(CrateAtlas {
+            name,
+            package,
+            root: module,
+        })
     }
 }
 
@@ -95,7 +104,10 @@ impl Module {
         let (name, dirs) = path.split_last()?;
         let mut module = self;
         for dir in dirs {
-            module = module.children.iter().find(|c| c.path.last() == Some(dir))?;
+            module = module
+                .children
+                .iter()
+                .find(|c| c.path.last() == Some(dir))?;
         }
         module.items.iter().find(|i| &i.name == name)
     }
@@ -108,7 +120,10 @@ impl Module {
     }
 
     fn find_id(&self, id: Id) -> Option<&Item> {
-        self.items.iter().find(|i| i.id == id).or_else(|| self.children.iter().find_map(|c| c.find_id(id)))
+        self.items
+            .iter()
+            .find(|i| i.id == id)
+            .or_else(|| self.children.iter().find_map(|c| c.find_id(id)))
     }
 
     fn find_id_mut(&mut self, id: Id) -> Option<&mut Item> {
@@ -119,12 +134,20 @@ impl Module {
     }
 
     pub fn count_modules(&self) -> usize {
-        1 + self.children.iter().map(Module::count_modules).sum::<usize>()
+        1 + self
+            .children
+            .iter()
+            .map(Module::count_modules)
+            .sum::<usize>()
     }
 
     pub fn count_role(&self, role: Role) -> usize {
         self.items.iter().filter(|i| i.role == role).count()
-            + self.children.iter().map(|c| c.count_role(role)).sum::<usize>()
+            + self
+                .children
+                .iter()
+                .map(|c| c.count_role(role))
+                .sum::<usize>()
     }
 }
 

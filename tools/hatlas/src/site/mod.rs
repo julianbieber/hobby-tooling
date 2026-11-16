@@ -1,9 +1,9 @@
 //! Writing the site: an index with an overview graph, one page per module, and one per plugin,
 //! component, resource, system and observer, all as static HTML that links by relative path.
 
+pub mod check;
 mod deps;
 mod graph;
-pub mod check;
 pub mod markdown;
 pub mod names;
 pub mod swap;
@@ -26,7 +26,15 @@ code,pre{font-family:ui-monospace,monospace}pre{background:#f4f4f4;padding:.6rem
 @media(prefers-color-scheme:dark){body{background:#181818;color:#ddd}a{color:#8ab4f8}pre{background:#252525}#graph{border-color:#444}.summary,.where,.vis,.crumbs{color:#999}}";
 
 fn has_page(role: Role) -> bool {
-    matches!(role, Role::Plugin | Role::Component | Role::Resource | Role::Event | Role::System | Role::Observer)
+    matches!(
+        role,
+        Role::Plugin
+            | Role::Component
+            | Role::Resource
+            | Role::Event
+            | Role::System
+            | Role::Observer
+    )
 }
 
 struct Site<'a> {
@@ -44,7 +52,13 @@ struct Site<'a> {
 }
 
 /// Writes the whole site into `root`, marker first, and returns how many pages it holds.
-pub fn render(atlas: &Atlas, registry: &Registry, flows: &Flows, deps: &Dependencies, root: &Path) -> Result<usize, Error> {
+pub fn render(
+    atlas: &Atlas,
+    registry: &Registry,
+    flows: &Flows,
+    deps: &Dependencies,
+    root: &Path,
+) -> Result<usize, Error> {
     let _ = std::fs::remove_dir_all(root);
     write(root, swap::MARKER, "")?;
     let mut site = Site {
@@ -66,7 +80,11 @@ pub fn render(atlas: &Atlas, registry: &Registry, flows: &Flows, deps: &Dependen
     }
     for flow in &flows.flows {
         if flow.item.is_none() {
-            let page = names.item(&["events".to_string(), flow.key.crate_name.clone()], "event", &flow.key.name);
+            let page = names.item(
+                &["events".to_string(), flow.key.crate_name.clone()],
+                "event",
+                &flow.key.name,
+            );
             site.event_pages.insert(flow.key.clone(), page);
         }
     }
@@ -88,7 +106,10 @@ pub fn render(atlas: &Atlas, registry: &Registry, flows: &Flows, deps: &Dependen
 
 fn write(root: &Path, rel: &str, content: &str) -> Result<(), Error> {
     let path = root.join(rel);
-    let io = |source| Error::Io { path: path.clone(), source };
+    let io = |source| Error::Io {
+        path: path.clone(),
+        source,
+    };
     std::fs::create_dir_all(path.parent().unwrap_or(root)).map_err(io)?;
     std::fs::write(&path, content).map_err(io)
 }
@@ -111,8 +132,10 @@ impl<'a> Site<'a> {
                 let page = names.item(&module.path, &item.kind, &item.name);
                 self.item_pages.insert((ci, item.id), page);
             }
-            self.anchors
-                .insert((ci, item.id), (module.path.clone(), format!("{}.{}", item.kind, item.name)));
+            self.anchors.insert(
+                (ci, item.id),
+                (module.path.clone(), format!("{}.{}", item.kind, item.name)),
+            );
         }
         for child in &module.children {
             self.register(ci, child, names);
@@ -124,17 +147,30 @@ impl<'a> Site<'a> {
             return Some(relative(from, page));
         }
         let (module, anchor) = self.anchors.get(&(ci, id))?;
-        Some(format!("{}#{}", relative(from, &self.module_pages[module]), anchor))
+        Some(format!(
+            "{}#{}",
+            relative(from, self.module_pages.get(module)?),
+            anchor
+        ))
     }
 
-    fn docs_html(&self, ci: usize, from: &str, docs: Option<&str>, links: &[(String, Id)]) -> String {
+    fn docs_html(
+        &self,
+        ci: usize,
+        from: &str,
+        docs: Option<&str>,
+        links: &[(String, Id)],
+    ) -> String {
         match docs {
             Some(d) if !d.trim().is_empty() => {
                 let resolve = |key: &str| {
                     let id = links.iter().find(|(k, _)| k == key)?.1;
                     self.href(ci, id, from)
                 };
-                format!("<section class=\"docs\">{}</section>", render_docs(d, &resolve))
+                format!(
+                    "<section class=\"docs\">{}</section>",
+                    render_docs(d, &resolve)
+                )
             }
             _ => "<p class=\"no-docs\">no rustdoc</p>".to_string(),
         }
@@ -142,13 +178,20 @@ impl<'a> Site<'a> {
 
     fn crumbs(&self, from: &str, module_path: &[String], last: Option<&str>) -> String {
         let mut parts = Vec::new();
-        for n in 1..=module_path.len() {
-            let target = &self.module_pages[&module_path[..n].to_vec()];
-            let label = &module_path[n - 1];
-            if n == module_path.len() && last.is_none() {
-                parts.push(escape(label));
-            } else {
-                parts.push(format!("<a href=\"{}\">{}</a>", escape(&relative(from, target)), escape(label)));
+        for (n, label) in module_path.iter().enumerate() {
+            let target = module_path
+                .get(..=n)
+                .and_then(|prefix| self.module_pages.get(prefix));
+            let is_current = n + 1 == module_path.len() && last.is_none();
+            match target {
+                Some(target) if !is_current => {
+                    parts.push(format!(
+                        "<a href=\"{}\">{}</a>",
+                        escape(&relative(from, target)),
+                        escape(label)
+                    ));
+                }
+                _ => parts.push(escape(label)),
             }
         }
         if let Some(last) = last {
@@ -167,7 +210,10 @@ impl<'a> Site<'a> {
             collect_public_modules(&krate.root, &mut modules);
             body.push_str("<h3>Modules</h3>\n<ul>\n");
             for m in modules {
-                let target = relative(from, &self.module_pages[&m.path]);
+                let Some(page) = self.module_pages.get(&m.path) else {
+                    continue;
+                };
+                let target = relative(from, page);
                 body.push_str(&format!(
                     "<li><a href=\"{}\">{}</a> <span class=\"summary\">{}</span></li>\n",
                     escape(&target),
@@ -176,7 +222,14 @@ impl<'a> Site<'a> {
                 ));
             }
             body.push_str("</ul>\n");
-            for role in [Role::Plugin, Role::Component, Role::Resource, Role::Event, Role::System, Role::Observer] {
+            for role in [
+                Role::Plugin,
+                Role::Component,
+                Role::Resource,
+                Role::Event,
+                Role::System,
+                Role::Observer,
+            ] {
                 let mut items = Vec::new();
                 collect_public_items(&krate.root, role, &mut items);
                 if items.is_empty() {
@@ -184,7 +237,10 @@ impl<'a> Site<'a> {
                 }
                 body.push_str(&format!("<h3>{}s</h3>\n<ul>\n", role.label()));
                 for (module, item) in items {
-                    let target = relative(from, &self.item_pages[&(ci, item.id)]);
+                    let Some(page) = self.item_pages.get(&(ci, item.id)) else {
+                        continue;
+                    };
+                    let target = relative(from, page);
                     body.push_str(&format!(
                         "<li><a href=\"{}\">{}</a> <span class=\"where\">{}</span> <span class=\"summary\">{}</span></li>\n",
                         escape(&target),
@@ -196,13 +252,21 @@ impl<'a> Site<'a> {
                 body.push_str("</ul>\n");
             }
         }
-        let external: Vec<_> = self.flows.flows.iter().filter(|f| f.item.is_none()).collect();
+        let external: Vec<_> = self
+            .flows
+            .flows
+            .iter()
+            .filter(|f| f.item.is_none())
+            .collect();
         if !external.is_empty() {
             body.push_str("<h2>Events from dependencies</h2>\n<ul>\n");
             for flow in external {
+                let Some(page) = self.event_pages.get(&flow.key) else {
+                    continue;
+                };
                 body.push_str(&format!(
                     "<li><a href=\"{}\">{}</a> <span class=\"where\">{}</span></li>\n",
-                    escape(&relative(from, &self.event_pages[&flow.key])),
+                    escape(&relative(from, page)),
                     escape(&flow.key.name),
                     escape(flow.defined_in())
                 ));
@@ -221,14 +285,22 @@ impl<'a> Site<'a> {
     }
 
     fn write_module(&self, root: &Path, ci: usize, module: &Module) -> Result<usize, Error> {
-        let from = self.module_pages[&module.path].as_str();
+        let Some(from) = self.module_pages.get(&module.path).map(String::as_str) else {
+            return Ok(0);
+        };
         let mut body = self.crumbs(from, &module.path, None);
-        body.push_str(&format!("\n<h1>Module {}</h1>\n", escape(&module.path.join("::"))));
+        body.push_str(&format!(
+            "\n<h1>Module {}</h1>\n",
+            escape(&module.path.join("::"))
+        ));
         body.push_str(&self.docs_html(ci, from, module.docs.as_deref(), &module.links));
         if !module.children.is_empty() {
             body.push_str("\n<h2>Modules</h2>\n<ul>\n");
             for child in &module.children {
-                let target = relative(from, &self.module_pages[&child.path]);
+                let Some(page) = self.module_pages.get(&child.path) else {
+                    continue;
+                };
+                let target = relative(from, page);
                 body.push_str(&format!(
                     "<li><a href=\"{}\">{}</a>{} <span class=\"summary\">{}</span></li>\n",
                     escape(&target),
@@ -244,7 +316,11 @@ impl<'a> Site<'a> {
             for item in &module.items {
                 let anchor = format!("{}.{}", item.kind, item.name);
                 let label = match self.item_pages.get(&(ci, item.id)) {
-                    Some(p) => format!("<a href=\"{}\">{}</a>", escape(&relative(from, p)), escape(&item.name)),
+                    Some(p) => format!(
+                        "<a href=\"{}\">{}</a>",
+                        escape(&relative(from, p)),
+                        escape(&item.name)
+                    ),
                     None => escape(&item.name),
                 };
                 body.push_str(&format!(
@@ -287,14 +363,28 @@ impl<'a> Site<'a> {
         Ok(pages)
     }
 
-    fn write_item(&self, root: &Path, ci: usize, module: &Module, item: &Item) -> Result<(), Error> {
-        let from = self.item_pages[&(ci, item.id)].as_str();
+    fn write_item(
+        &self,
+        root: &Path,
+        ci: usize,
+        module: &Module,
+        item: &Item,
+    ) -> Result<(), Error> {
+        let Some(from) = self.item_pages.get(&(ci, item.id)).map(String::as_str) else {
+            return Ok(());
+        };
         let mut body = self.crumbs(from, &module.path, Some(&item.name));
-        body.push_str(&format!("\n<h1>{} {}</h1>\n", item.role.label(), escape(&item.name)));
+        body.push_str(&format!(
+            "\n<h1>{} {}</h1>\n",
+            item.role.label(),
+            escape(&item.name)
+        ));
         let location = item
             .location
             .as_ref()
-            .map_or(String::new(), |(file, line)| format!(" · {}:{line}", escape(file)));
+            .map_or(String::new(), |(file, line)| {
+                format!(" · {}:{line}", escape(file))
+            });
         body.push_str(&format!(
             "<p class=\"crumbs\">{}{} · {}</p>\n",
             escape(&item.crate_name),
@@ -302,21 +392,35 @@ impl<'a> Site<'a> {
             if item.public { "public" } else { "private" }
         ));
         if !item.traits.is_empty() {
-            body.push_str(&format!("<p>Implements: {}</p>\n", escape(&item.traits.join(", "))));
+            body.push_str(&format!(
+                "<p>Implements: {}</p>\n",
+                escape(&item.traits.join(", "))
+            ));
         }
         body.push_str(&self.docs_html(ci, from, item.docs.as_deref(), &item.links));
-        if let Some(flow) = self.flows.flows.iter().find(|f| f.item == Some((ci, item.id))) {
+        if let Some(flow) = self
+            .flows
+            .flows
+            .iter()
+            .find(|f| f.item == Some((ci, item.id)))
+        {
             body.push_str(&self.flow_html(from, flow));
         }
         if let Some(view) = self.registry.systems.get(&(ci, item.id)) {
             body.push_str(&self.system_html(from, view));
         }
         for flow in self.flows.listened_by((ci, item.id)) {
-            body.push_str(&format!("\n<h2>Listens to {}</h2>", self.event_link(from, flow)));
+            body.push_str(&format!(
+                "\n<h2>Listens to {}</h2>",
+                self.event_link(from, flow)
+            ));
             body.push_str(&self.producers_html(from, flow));
         }
         for flow in self.flows.produced_by((ci, item.id)) {
-            body.push_str(&format!("\n<h2>Produces {}</h2>", self.event_link(from, flow)));
+            body.push_str(&format!(
+                "\n<h2>Produces {}</h2>",
+                self.event_link(from, flow)
+            ));
         }
         if let Some(registered) = self.registry.registers.get(&(ci, item.id)) {
             body.push_str(&self.registers_html(from, registered));
@@ -328,18 +432,30 @@ impl<'a> Site<'a> {
             }
             body.push_str("</ul>");
         }
-        write(root, from, &page(&format!("{} {}", item.role.label(), item.name), &body))
+        write(
+            root,
+            from,
+            &page(&format!("{} {}", item.role.label(), item.name), &body),
+        )
     }
 
-    fn event_page(&self, flow: &EventFlow) -> &str {
+    fn event_page(&self, flow: &EventFlow) -> Option<&str> {
         match flow.item {
-            Some(r) => &self.item_pages[&r],
-            None => &self.event_pages[&flow.key],
+            Some(r) => self.item_pages.get(&r),
+            None => self.event_pages.get(&flow.key),
         }
+        .map(String::as_str)
     }
 
     fn event_link(&self, from: &str, flow: &EventFlow) -> String {
-        format!("<a href=\"{}\">{}</a>", escape(&relative(from, self.event_page(flow))), escape(&flow.key.name))
+        match self.event_page(flow) {
+            Some(page) => format!(
+                "<a href=\"{}\">{}</a>",
+                escape(&relative(from, page)),
+                escape(&flow.key.name)
+            ),
+            None => format!("<code>{}</code>", escape(&flow.key.name)),
+        }
     }
 
     fn endpoint_html(&self, from: &str, e: &Endpoint) -> String {
@@ -351,21 +467,33 @@ impl<'a> Site<'a> {
                     None => format!("<code>{}</code>", escape(name)),
                 }
             }
-            Party::Anonymous { module, anchor, .. } => format!(
-                "<a href=\"{}#{}\">closure</a>",
-                escape(&relative(from, &self.module_pages[module])),
-                escape(anchor)
-            ),
+            Party::Anonymous { module, anchor, .. } => match self.module_pages.get(module) {
+                Some(page) => format!(
+                    "<a href=\"{}#{}\">closure</a>",
+                    escape(&relative(from, page)),
+                    escape(anchor)
+                ),
+                None => "closure".to_string(),
+            },
             Party::Text(t) => format!("<code>{}</code>", escape(t)),
         };
         out.push_str(&format!(" · <code>{}</code>", escape(&e.via)));
         if let Some((file, line)) = &e.site {
-            out.push_str(&format!(" · <span class=\"where\">{}:{line}</span>", escape(file)));
+            out.push_str(&format!(
+                " · <span class=\"where\">{}:{line}</span>",
+                escape(file)
+            ));
         }
         out
     }
 
-    fn endpoints_html(&self, from: &str, heading: &str, none: &str, endpoints: &[Endpoint]) -> String {
+    fn endpoints_html(
+        &self,
+        from: &str,
+        heading: &str,
+        none: &str,
+        endpoints: &[Endpoint],
+    ) -> String {
         let mut out = format!("\n<h2>{heading}</h2>\n");
         if endpoints.is_empty() {
             out.push_str(&format!("<p class=\"no-docs\">{none}</p>"));
@@ -380,18 +508,33 @@ impl<'a> Site<'a> {
     }
 
     fn producers_html(&self, from: &str, flow: &EventFlow) -> String {
-        self.endpoints_html(from, "Produced by", "no producer found in the workspace", &flow.producers)
+        self.endpoints_html(
+            from,
+            "Produced by",
+            "no producer found in the workspace",
+            &flow.producers,
+        )
     }
 
     fn flow_html(&self, from: &str, flow: &EventFlow) -> String {
-        let mut out = format!("\n<p>Defined in <code>{}</code></p>", escape(flow.defined_in()));
+        let mut out = format!(
+            "\n<p>Defined in <code>{}</code></p>",
+            escape(flow.defined_in())
+        );
         out.push_str(&self.producers_html(from, flow));
-        out.push_str(&self.endpoints_html(from, "Listened to by", "no listener found in the workspace", &flow.listeners));
+        out.push_str(&self.endpoints_html(
+            from,
+            "Listened to by",
+            "no listener found in the workspace",
+            &flow.listeners,
+        ));
         out
     }
 
     fn write_event(&self, root: &Path, flow: &EventFlow) -> Result<(), Error> {
-        let from = self.event_page(flow);
+        let Some(from) = self.event_page(flow) else {
+            return Ok(());
+        };
         let mut body = format!(
             "<p class=\"crumbs\"><a href=\"{}\">Atlas</a> :: events :: {}</p>\n<h1>Event {}</h1>",
             escape(&relative(from, "index.html")),
@@ -399,7 +542,11 @@ impl<'a> Site<'a> {
             escape(&flow.key.name)
         );
         body.push_str(&self.flow_html(from, flow));
-        write(root, from, &page(&format!("Event {}", flow.key.name), &body))
+        write(
+            root,
+            from,
+            &page(&format!("Event {}", flow.key.name), &body),
+        )
     }
 
     fn registrant_html(&self, from: &str, by: &Registrant) -> String {
@@ -423,15 +570,26 @@ impl<'a> Site<'a> {
             out.push_str(&format!("schedule <code>{}</code>", escape(&reg.schedule)));
         }
         if let Some(by) = &reg.registered_by {
-            out.push_str(&format!(" · registered by {}", self.registrant_html(from, by)));
+            out.push_str(&format!(
+                " · registered by {}",
+                self.registrant_html(from, by)
+            ));
         }
-        out.push_str(&format!(" · <span class=\"where\">{}:{}</span>", escape(&reg.site.0), reg.site.1));
+        out.push_str(&format!(
+            " · <span class=\"where\">{}:{}</span>",
+            escape(&reg.site.0),
+            reg.site.1
+        ));
         let mut lines = Vec::new();
         for c in &reg.conditions {
             lines.push(format!("run if <code>{}</code>", escape(c)));
         }
         for (c, via) in &reg.inherited {
-            lines.push(format!("run if <code>{}</code> via set <code>{}</code>", escape(c), escape(via)));
+            lines.push(format!(
+                "run if <code>{}</code> via set <code>{}</code>",
+                escape(c),
+                escape(via)
+            ));
         }
         for s in &reg.sets {
             lines.push(format!("in set <code>{}</code>", escape(s)));
@@ -452,7 +610,10 @@ impl<'a> Site<'a> {
     fn system_html(&self, from: &str, view: &crate::systems::SystemView) -> String {
         let mut out = String::new();
         if let Some(observes) = &view.observes {
-            out.push_str(&format!("\n<h2>Observes</h2>\n<p><code>{}</code></p>", escape(observes)));
+            out.push_str(&format!(
+                "\n<h2>Observes</h2>\n<p><code>{}</code></p>",
+                escape(observes)
+            ));
         }
         out.push_str("\n<h2>Parameters</h2>\n");
         if view.params.is_empty() {
@@ -504,13 +665,23 @@ fn params_html(params: &[Param]) -> String {
             "<li><code>{}: {}</code>{}",
             escape(&p.name),
             escape(&p.ty),
-            if p.optional { " <span class=\"vis\">optional</span>" } else { "" }
+            if p.optional {
+                " <span class=\"vis\">optional</span>"
+            } else {
+                ""
+            }
         ));
         if !p.data.is_empty() {
-            out.push_str(&format!("<br>data: <code>{}</code>", escape(&p.data.join(", "))));
+            out.push_str(&format!(
+                "<br>data: <code>{}</code>",
+                escape(&p.data.join(", "))
+            ));
         }
         if !p.filters.is_empty() {
-            out.push_str(&format!("<br>filters: <code>{}</code>", escape(&p.filters.join(", "))));
+            out.push_str(&format!(
+                "<br>filters: <code>{}</code>",
+                escape(&p.filters.join(", "))
+            ));
         }
         if !p.nested.is_empty() {
             out.push_str(&params_html(&p.nested));
@@ -522,11 +693,19 @@ fn params_html(params: &[Param]) -> String {
 }
 
 fn vis_tag(public: bool) -> &'static str {
-    if public { "" } else { " <span class=\"vis\">private</span>" }
+    if public {
+        ""
+    } else {
+        " <span class=\"vis\">private</span>"
+    }
 }
 
 fn role_or_kind(item: &Item) -> &str {
-    if item.role == Role::Other { &item.kind } else { item.role.label() }
+    if item.role == Role::Other {
+        &item.kind
+    } else {
+        item.role.label()
+    }
 }
 
 fn collect_public_modules<'a>(module: &'a Module, out: &mut Vec<&'a Module>) {
@@ -537,7 +716,13 @@ fn collect_public_modules<'a>(module: &'a Module, out: &mut Vec<&'a Module>) {
 }
 
 fn collect_public_items<'a>(module: &'a Module, role: Role, out: &mut Vec<(&'a Module, &'a Item)>) {
-    out.extend(module.items.iter().filter(|i| i.public && i.role == role).map(|i| (module, i)));
+    out.extend(
+        module
+            .items
+            .iter()
+            .filter(|i| i.public && i.role == role)
+            .map(|i| (module, i)),
+    );
     for child in &module.children {
         collect_public_items(child, role, out);
     }

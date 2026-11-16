@@ -302,12 +302,12 @@ fn read_records(dir: &Path) -> Vec<(PathBuf, Record, u64)> {
 
 fn read_proc_stat(pid: u32) -> Option<ProcStat> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let open = stat.find('(')?;
-    let close = stat.rfind(')')?;
-    if &stat[open + 1..close] != "claude" {
+    let (_, rest) = stat.split_once('(')?;
+    let (comm, tail) = rest.rsplit_once(')')?;
+    if comm != "claude" {
         return None;
     }
-    let fields: Vec<&str> = stat[close + 1..].split_whitespace().collect();
+    let fields: Vec<&str> = tail.split_whitespace().collect();
     let utime: u64 = fields.get(11)?.parse().ok()?;
     let stime: u64 = fields.get(12)?.parse().ok()?;
     let start: u64 = fields.get(19)?.parse().ok()?;
@@ -656,8 +656,8 @@ mod tests {
         };
         let key = (1, 7);
         let mut hb = Heartbeat::default();
-        for (i, t) in (1000..=1040).step_by(5).enumerate() {
-            hb.record(key, t, 500 + 20 * i as u64);
+        for (i, t) in (0u64..).zip((1000..=1040).step_by(5)) {
+            hb.record(key, t, 500 + 20 * i);
         }
         assert_eq!(effective(&o, &hb, 1040).state, SessionState::Busy);
     }

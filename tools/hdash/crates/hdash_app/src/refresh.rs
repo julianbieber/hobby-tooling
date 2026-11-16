@@ -194,6 +194,15 @@ impl RefreshPoller {
 mod tests {
     use super::*;
 
+    fn rewrite(path: &Path, contents: &str) {
+        let before = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+        std::fs::write(path, contents).unwrap();
+        if let Some(before) = before {
+            let file = std::fs::File::options().write(true).open(path).unwrap();
+            file.set_modified(before + Duration::from_secs(1)).unwrap();
+        }
+    }
+
     #[test]
     fn fingerprint_sees_task_dirs_and_notes_files_but_not_repo_contents() {
         let root = std::env::temp_dir().join(format!("hdash_fp_{}", std::process::id()));
@@ -211,30 +220,24 @@ mod tests {
         assert!(!fp.0.keys().any(|p| p.starts_with(notes.join(".git"))));
         assert_eq!(fp, fingerprint(&wt, &notes));
 
-        std::thread::sleep(Duration::from_millis(20));
-        std::fs::write(notes.join("p/topic/task/build-task.json"), "{}").unwrap();
+        rewrite(&notes.join("p/topic/task/build-task.json"), "{}");
         assert_ne!(fp, fingerprint(&wt, &notes), "a phase write is seen");
 
         let fp = fingerprint(&wt, &notes);
-        std::thread::sleep(Duration::from_millis(20));
         std::fs::create_dir_all(notes.join("p/topic/task/aspects/spike")).unwrap();
-        std::fs::write(notes.join("p/topic/task/aspects/spike/aspect.json"), "{}").unwrap();
+        rewrite(&notes.join("p/topic/task/aspects/spike/aspect.json"), "{}");
         let with_aspect = fingerprint(&wt, &notes);
         assert_ne!(fp, with_aspect, "a new aspect is seen");
-        std::thread::sleep(Duration::from_millis(20));
-        std::fs::write(
-            notes.join("p/topic/task/aspects/spike/aspect.json"),
+        rewrite(
+            &notes.join("p/topic/task/aspects/spike/aspect.json"),
             r#"{"state":"reported"}"#,
-        )
-        .unwrap();
+        );
         let reported = fingerprint(&wt, &notes);
         assert_ne!(with_aspect, reported, "an aspect state write is seen");
-        std::thread::sleep(Duration::from_millis(20));
-        std::fs::write(
-            notes.join("p/topic/task/aspects/spike/build-task.json"),
+        rewrite(
+            &notes.join("p/topic/task/aspects/spike/build-task.json"),
             r#"{"phase":"implement"}"#,
-        )
-        .unwrap();
+        );
         assert_ne!(
             reported,
             fingerprint(&wt, &notes),

@@ -5,7 +5,10 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use crate::model::{AcceptanceResult, BuildState, CiResult, MergeResult};
+use serde_json::{Map, Value};
+
+use crate::model::{AcceptanceResult, BuildState, CiResult, LoadError, MergeResult};
+use crate::output::Output;
 
 /// Under the ten minutes Claude Code allows a single shell call.
 pub const DEFAULT_TIMEOUT_SECS: u64 = 570;
@@ -52,29 +55,24 @@ const POLL: Duration = Duration::from_secs(2);
 /// `after` names a phase that does not count: a coordinator that has already reported
 /// `await-play` passes it here so the call blocks until the person has answered and the
 /// pipeline has moved on, instead of returning at once with the same phase.
-pub fn run(task_notes_dir: &Path, timeout_secs: u64, after: Option<&str>) -> ExitCode {
+pub fn run(
+    task_notes_dir: &Path,
+    timeout_secs: u64,
+    after: Option<&str>,
+) -> Result<Output, LoadError> {
     let deadline = Instant::now() + Duration::from_secs(timeout_secs);
     match resolve(task_notes_dir, deadline, POLL, after) {
-        Resolution::Reached(line) => {
-            println!("{line}");
-            ExitCode::SUCCESS
-        }
-        Resolution::TimedOut(line) => {
-            println!("{line}");
-            ExitCode::from(2)
-        }
-        Resolution::Unreadable(error) => {
-            eprintln!("hcoord wait: {error}");
-            ExitCode::from(1)
-        }
+        Resolution::Reached(line) => Ok(Output::line(&line, ExitCode::SUCCESS)),
+        Resolution::TimedOut(line) => Ok(Output::line(&line, ExitCode::from(2))),
+        Resolution::Unreadable(error) => Err(error),
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 enum Resolution {
     Reached(String),
     TimedOut(String),
-    Unreadable(String),
+    Unreadable(LoadError),
 }
 
 fn resolve(
@@ -83,7 +81,7 @@ fn resolve(
     poll: Duration,
     after: Option<&str>,
 ) -> Resolution {
-    let mut last_error: Option<String>;
+    let mut last_error: Option<LoadError>;
     let mut last_state: Option<BuildState> = None;
     loop {
         match BuildState::load(task_notes_dir) {
@@ -114,82 +112,89 @@ fn resolve(
 }
 
 fn line(state: &BuildState, outcome: &str) -> String {
-    let mut object = serde_json::json!({ "phase": state.phase, "outcome": outcome });
+    let mut object = Map::new();
+    object.insert("phase".to_owned(), Value::from(state.phase.as_str()));
+    object.insert("outcome".to_owned(), Value::from(outcome));
     if let Some(acceptance) = &state.acceptance_result {
-        object["acceptance"] = acceptance_json(acceptance);
+        object.insert("acceptance".to_owned(), acceptance_json(acceptance));
     }
     if let Some(merge) = &state.merge_result {
-        object["merge"] = merge_json(merge);
+        object.insert("merge".to_owned(), merge_json(merge));
     }
     if let Some(ci) = &state.ci_result {
-        object["ci"] = ci_json(ci);
+        object.insert("ci".to_owned(), ci_json(ci));
     }
     if let Some(pr) = state.pr_url() {
-        object["pr"] = serde_json::Value::String(pr.to_owned());
+        object.insert("pr".to_owned(), Value::from(pr));
     }
     if let Some(decision) = state.decision() {
-        object["decision"] = serde_json::Value::String(decision);
+        object.insert("decision".to_owned(), Value::String(decision));
     }
     if let Some(phase_since) = &state.phase_since {
-        object["phase_since"] = serde_json::Value::String(phase_since.clone());
+        object.insert("phase_since".to_owned(), Value::from(phase_since.as_str()));
     }
     if let Some(written) = &state.written {
-        object["written"] = serde_json::Value::String(written.clone());
+        object.insert("written".to_owned(), Value::from(written.as_str()));
     }
     if let Some(unchanged_for) = state.unchanged_for() {
-        object["unchanged_for"] = serde_json::Value::from(unchanged_for);
+        object.insert("unchanged_for".to_owned(), Value::from(unchanged_for));
     }
-    object.to_string()
+    Value::Object(object).to_string()
 }
 
-fn merge_json(merge: &MergeResult) -> serde_json::Value {
-    let mut object = serde_json::json!({ "outcome": merge.outcome });
-    if let Some(pr) = &merge.pr {
-        object["pr"] = serde_json::Value::String(pr.clone());
-    }
-    if let Some(reason) = &merge.reason {
-        object["reason"] = serde_json::Value::String(reason.clone());
-    }
-    if let Some(check) = &merge.check {
-        object["check"] = serde_json::Value::String(check.clone());
-    }
-    if let Some(merge_commit) = &merge.merge_commit {
-        object["merge_commit"] = serde_json::Value::String(merge_commit.clone());
-    }
-    object
-}
-
-fn ci_json(ci: &CiResult) -> serde_json::Value {
-    let mut object = serde_json::json!({ "outcome": ci.outcome });
-    for (key, value) in [
-        ("case", &ci.case),
-        ("check", &ci.check),
-        ("reason", &ci.reason),
-    ] {
+fn present(object: &mut Map<String, Value>, fields: &[(&str, &Option<String>)]) {
+    for &(key, value) in fields {
         if let Some(value) = value {
-            object[key] = serde_json::Value::String(value.clone());
+            object.insert(key.to_owned(), Value::from(value.as_str()));
         }
     }
-    object
 }
 
-fn acceptance_json(acceptance: &AcceptanceResult) -> serde_json::Value {
-    let failed: Vec<serde_json::Value> = acceptance
+fn merge_json(merge: &MergeResult) -> Value {
+    let mut object = Map::new();
+    object.insert("outcome".to_owned(), Value::from(merge.outcome.as_str()));
+    present(
+        &mut object,
+        &[
+            ("pr", &merge.pr),
+            ("reason", &merge.reason),
+            ("check", &merge.check),
+            ("merge_commit", &merge.merge_commit),
+        ],
+    );
+    Value::Object(object)
+}
+
+fn ci_json(ci: &CiResult) -> Value {
+    let mut object = Map::new();
+    object.insert("outcome".to_owned(), Value::from(ci.outcome.as_str()));
+    present(
+        &mut object,
+        &[
+            ("case", &ci.case),
+            ("check", &ci.check),
+            ("reason", &ci.reason),
+        ],
+    );
+    Value::Object(object)
+}
+
+fn acceptance_json(acceptance: &AcceptanceResult) -> Value {
+    let failed: Vec<Value> = acceptance
         .checks
         .iter()
         .filter(|c| !c.is_hand() && !c.passed())
         .map(|c| serde_json::json!({ "name": c.label(), "command": c.command, "exit": c.exit }))
         .collect();
-    let mut object = serde_json::json!({
-        "passed": acceptance.passed,
-        "checks": acceptance.checks.len(),
-        "failed": failed,
-    });
+    let mut object = Map::new();
+    object.insert("passed".to_owned(), Value::from(acceptance.passed));
+    object.insert("checks".to_owned(), Value::from(acceptance.checks.len()));
+    object.insert("failed".to_owned(), Value::Array(failed));
     let hand = acceptance.hand();
     if hand > 0 {
-        object["hand"] = serde_json::Value::from(hand);
+        object.insert("hand".to_owned(), Value::from(hand));
     }
-    object
+    Value::Object(object)
 }
 
 #[cfg(test)]
@@ -227,9 +232,9 @@ mod tests {
             None,
         );
         writer.join().unwrap();
-        assert_eq!(
-            resolution,
-            Resolution::Reached(r#"{"outcome":"human","phase":"await-play"}"#.to_owned())
+        assert!(
+            matches!(&resolution, Resolution::Reached(line) if line == r#"{"outcome":"human","phase":"await-play"}"#),
+            "{resolution:?}"
         );
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -247,7 +252,9 @@ mod tests {
             None,
         );
         match resolution {
-            Resolution::Unreadable(e) => assert!(e.contains(crate::model::STATE_FILE), "{e}"),
+            Resolution::Unreadable(e) => {
+                assert!(e.to_string().contains(crate::model::STATE_FILE), "{e}")
+            }
             other => panic!("expected Unreadable, got {other:?}"),
         }
         std::fs::remove_dir_all(&dir).unwrap();
@@ -275,9 +282,9 @@ mod tests {
             Duration::from_millis(10),
             None,
         );
-        assert_eq!(
-            resolution,
-            Resolution::TimedOut(r#"{"outcome":"timeout","phase":"implement"}"#.to_owned())
+        assert!(
+            matches!(&resolution, Resolution::TimedOut(line) if line == r#"{"outcome":"timeout","phase":"implement"}"#),
+            "{resolution:?}"
         );
         std::fs::remove_dir_all(&dir).unwrap();
     }

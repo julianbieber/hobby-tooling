@@ -14,29 +14,50 @@ fn last_path_segment(path: &str) -> &str {
 pub fn display(ty: &Value) -> Result<String, String> {
     let (variant, body) = variant_of(ty)?;
     Ok(match variant {
-        "primitive" | "generic" => body.as_str().ok_or_else(|| variant.to_string())?.to_string(),
+        "primitive" | "generic" => body
+            .as_str()
+            .ok_or_else(|| variant.to_string())?
+            .to_string(),
         "resolved_path" => {
             let path = body["path"].as_str().ok_or("resolved_path")?;
             format!("{}{}", last_path_segment(path), args_text(&body["args"])?)
         }
         "tuple" => {
-            let members = list(body, "tuple")?.iter().map(display).collect::<Result<Vec<_>, _>>()?;
-            if members.len() == 1 { format!("({},)", members[0]) } else { format!("({})", members.join(", ")) }
+            let members = list(body, "tuple")?
+                .iter()
+                .map(display)
+                .collect::<Result<Vec<_>, _>>()?;
+            match members.as_slice() {
+                [one] => format!("({one},)"),
+                _ => format!("({})", members.join(", ")),
+            }
         }
         "slice" => format!("[{}]", display(body)?),
-        "array" => format!("[{}; {}]", display(&body["type"])?, body["len"].as_str().unwrap_or("_")),
+        "array" => format!(
+            "[{}; {}]",
+            display(&body["type"])?,
+            body["len"].as_str().unwrap_or("_")
+        ),
         "borrowed_ref" => {
-            let mutable = if body["is_mutable"].as_bool() == Some(true) { "mut " } else { "" };
+            let mutable = if body["is_mutable"].as_bool() == Some(true) {
+                "mut "
+            } else {
+                ""
+            };
             format!("&{mutable}{}", display(&body["type"])?)
         }
         "raw_pointer" => {
-            let mutable = if body["is_mutable"].as_bool() == Some(true) { "mut" } else { "const" };
+            let mutable = if body["is_mutable"].as_bool() == Some(true) {
+                "mut"
+            } else {
+                "const"
+            };
             format!("*{mutable} {}", display(&body["type"])?)
         }
         "dyn_trait" => {
             let traits = list(&body["traits"], "dyn_trait")?
                 .iter()
-                .map(|t| Ok(format!("{}{}", last_path_segment(t["trait"]["path"].as_str().ok_or("dyn_trait")?), args_text(&t["trait"]["args"])?)))
+                .map(|t| trait_text(t.get("trait"), "dyn_trait"))
                 .collect::<Result<Vec<_>, String>>()?;
             format!("dyn {}", traits.join(" + "))
         }
@@ -44,7 +65,7 @@ pub fn display(ty: &Value) -> Result<String, String> {
             let bounds = list(body, "impl_trait")?
                 .iter()
                 .filter_map(|b| b.get("trait_bound"))
-                .map(|b| Ok(format!("{}{}", last_path_segment(b["trait"]["path"].as_str().ok_or("impl_trait")?), args_text(&b["trait"]["args"])?)))
+                .map(|b| trait_text(b.get("trait"), "impl_trait"))
                 .collect::<Result<Vec<_>, String>>()?;
             format!("impl {}", bounds.join(" + "))
         }
@@ -54,12 +75,19 @@ pub fn display(ty: &Value) -> Result<String, String> {
                 .iter()
                 .map(|p| display(&p[1]))
                 .collect::<Result<Vec<_>, _>>()?;
-            let output = if sig["output"].is_null() { String::new() } else { format!(" -> {}", display(&sig["output"])?) };
+            let output = if sig["output"].is_null() {
+                String::new()
+            } else {
+                format!(" -> {}", display(&sig["output"])?)
+            };
             format!("fn({}){output}", inputs.join(", "))
         }
         "qualified_path" => {
             let name = body["name"].as_str().ok_or("qualified_path")?;
-            let tr = body["trait"].get("path").and_then(Value::as_str).map(last_path_segment);
+            let tr = body["trait"]
+                .get("path")
+                .and_then(Value::as_str)
+                .map(last_path_segment);
             match tr {
                 Some(tr) => format!("<{} as {tr}>::{name}", display(&body["self_type"])?),
                 None => format!("{}::{name}", display(&body["self_type"])?),
@@ -86,7 +114,10 @@ pub fn type_args(ty: &Value) -> Vec<&Value> {
 
 /// The last `::` segment of a resolved path's name; `None` for any other type.
 pub fn last_segment(ty: &Value) -> Option<&str> {
-    ty.get("resolved_path")?.get("path")?.as_str().map(last_path_segment)
+    ty.get("resolved_path")?
+        .get("path")?
+        .as_str()
+        .map(last_path_segment)
 }
 
 /// The members of a tuple type; any other type is its own single member.
@@ -107,6 +138,15 @@ fn list<'a>(v: &'a Value, what: &str) -> Result<&'a Vec<Value>, String> {
     v.as_array().ok_or_else(|| what.to_string())
 }
 
+fn trait_text(tr: Option<&Value>, variant: &str) -> Result<String, String> {
+    let path = tr
+        .and_then(|t| t.get("path"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| variant.to_string())?;
+    let args = tr.and_then(|t| t.get("args")).unwrap_or(&Value::Null);
+    Ok(format!("{}{}", last_path_segment(path), args_text(args)?))
+}
+
 fn args_text(args: &Value) -> Result<String, String> {
     if args.is_null() {
         return Ok(String::new());
@@ -123,15 +163,28 @@ fn args_text(args: &Value) -> Result<String, String> {
             }
         }
         for c in a["constraints"].as_array().into_iter().flatten() {
-            if let (Some(name), Some(ty)) = (c["name"].as_str(), c["binding"]["equality"].get("type")) {
+            if let (Some(name), Some(ty)) =
+                (c["name"].as_str(), c.pointer("/binding/equality/type"))
+            {
                 parts.push(format!("{name} = {}", display(ty)?));
             }
         }
-        return Ok(if parts.is_empty() { String::new() } else { format!("<{}>", parts.join(", ")) });
+        return Ok(if parts.is_empty() {
+            String::new()
+        } else {
+            format!("<{}>", parts.join(", "))
+        });
     }
     if let Some(p) = args.get("parenthesized") {
-        let inputs = list(&p["inputs"], "parenthesized")?.iter().map(display).collect::<Result<Vec<_>, _>>()?;
-        let output = if p["output"].is_null() { String::new() } else { format!(" -> {}", display(&p["output"])?) };
+        let inputs = list(&p["inputs"], "parenthesized")?
+            .iter()
+            .map(display)
+            .collect::<Result<Vec<_>, _>>()?;
+        let output = if p["output"].is_null() {
+            String::new()
+        } else {
+            format!(" -> {}", display(&p["output"])?)
+        };
         return Ok(format!("({}){output}", inputs.join(", ")));
     }
     Err("generic_args".to_string())
@@ -156,9 +209,15 @@ mod tests {
         let p = json!({"resolved_path": {"path": "Progress", "id": 1, "args": null}});
         let r = json!({"borrowed_ref": {"lifetime": null, "is_mutable": true, "type": p}});
         assert_eq!(display(&r).unwrap(), "&mut Progress");
-        assert_eq!(display(&json!({"tuple": [r, p]})).unwrap(), "(&mut Progress, Progress)");
+        assert_eq!(
+            display(&json!({"tuple": [r, p]})).unwrap(),
+            "(&mut Progress, Progress)"
+        );
         assert_eq!(display(&json!({"slice": p})).unwrap(), "[Progress]");
-        assert_eq!(display(&json!({"array": {"type": p, "len": "3"}})).unwrap(), "[Progress; 3]");
+        assert_eq!(
+            display(&json!({"array": {"type": p, "len": "3"}})).unwrap(),
+            "[Progress; 3]"
+        );
         assert_eq!(display(&json!({"primitive": "u32"})).unwrap(), "u32");
     }
 

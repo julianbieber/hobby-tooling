@@ -29,11 +29,11 @@ pub fn offset_of(text: &str, pos: Position) -> usize {
         }
     }
     let mut utf16 = 0u32;
-    for (rel, ch) in text[line_start..].char_indices() {
+    for (rel, ch) in text.get(line_start..).unwrap_or_default().char_indices() {
         if utf16 >= pos.character || ch == '\n' {
             return line_start + rel;
         }
-        utf16 += ch.len_utf16() as u32;
+        utf16 += u32::try_from(ch.len_utf16()).unwrap_or(2);
     }
     text.len()
 }
@@ -45,17 +45,19 @@ fn is_word(c: char) -> bool {
 /// The identifier under (or just before) `offset`.
 pub fn word_at(text: &str, offset: usize) -> Option<(Span, &str)> {
     let offset = offset.min(text.len());
-    let start = text[..offset]
+    let (before, after) = text.split_at_checked(offset)?;
+    let start = before
         .char_indices()
         .rev()
         .take_while(|&(_, c)| is_word(c))
         .last()
         .map_or(offset, |(i, _)| i);
-    let end = text[offset..]
+    let end = after
         .char_indices()
         .find(|&(_, c)| !is_word(c))
         .map_or(text.len(), |(i, _)| offset + i);
-    (start < end).then(|| (Span::new(start, end), &text[start..end]))
+    let word = text.get(start..end).filter(|w| !w.is_empty())?;
+    Some((Span::new(start, end), word))
 }
 
 fn within(span: Span, offset: usize) -> bool {
@@ -66,11 +68,12 @@ fn within(span: Span, offset: usize) -> bool {
 pub fn occurrences(text: &str, word: &str) -> Vec<Span> {
     text.match_indices(word)
         .filter(|&(i, _)| {
-            let before = text[..i].chars().next_back().is_none_or(|c| !is_word(c));
-            let after = text[i + word.len()..]
-                .chars()
-                .next()
-                .is_none_or(|c| !is_word(c));
+            let before = text
+                .get(..i)
+                .is_some_and(|b| b.chars().next_back().is_none_or(|c| !is_word(c)));
+            let after = text
+                .get(i + word.len()..)
+                .is_some_and(|a| a.chars().next().is_none_or(|c| !is_word(c)));
             before && after
         })
         .map(|(i, _)| Span::new(i, i + word.len()))
@@ -87,7 +90,7 @@ pub fn definition(doc: &Document, text: &str, offset: usize) -> Option<Definitio
     for line in &doc.lines {
         if let Some(a) = line.ann.api.iter().find(|a| within(a.span, offset)) {
             let (_, f) = doc.resolve_api(&a.value)?;
-            return Some(Definition::Local(doc.lines[f.line].span));
+            return Some(Definition::Local(doc.lines.get(f.line)?.span));
         }
         for g in line.ann.guards.iter().flatten() {
             if within(g.span, offset) {
@@ -144,10 +147,10 @@ pub fn hover(doc: &Document, text: &str, offset: usize) -> Option<String> {
             ));
         }
     }
-    if let Some(i) = doc.line_at(offset)
-        && let Some(t) = &doc.lines[i].tilde
+    if let Some(line) = doc.line_at(offset).and_then(|i| doc.lines.get(i))
+        && let Some(t) = &line.tilde
     {
-        let in_ann = doc.lines[i].ann.span.is_some_and(|s| within(s, offset));
+        let in_ann = line.ann.span.is_some_and(|s| within(s, offset));
         if !in_ann {
             return Some(format!("**before:** {}\n\n**after:** {}", t.old, t.new));
         }
@@ -159,7 +162,9 @@ pub fn hover(doc: &Document, text: &str, offset: usize) -> Option<String> {
         } else {
             t.name.span
         };
-        let src = &text[span.start.min(text.len())..span.end.min(text.len())];
+        let src = text
+            .get(span.start.min(text.len())..span.end.min(text.len()))
+            .unwrap_or_default();
         let body: Vec<&str> = src.lines().map(|l| l.get(2..).unwrap_or("")).collect();
         return Some(format!("```hmml\n{}\n```", body.join("\n")));
     }
@@ -229,8 +234,8 @@ pub fn references(doc: &Document, text: &str, offset: usize, include_decl: bool)
         }
         Some((key @ RefKey::Fn(mi, fi), _)) => {
             let mut out = Vec::new();
-            if include_decl {
-                out.push(doc.api[mi].fns[fi].name.span);
+            if include_decl && let Some(f) = doc.api.get(mi).and_then(|m| m.fns.get(fi)) {
+                out.push(f.name.span);
             }
             out.extend(doc.lines.iter().flat_map(|l| {
                 l.ann
@@ -315,8 +320,7 @@ pub fn symbols(doc: &Document) -> Vec<Sym> {
     let mut out = Vec::new();
     if let Some((span, header)) = section_span(doc, SectionKind::Intent) {
         let mut s = sym("intent", SymKind::Namespace, span, header);
-        for &li in &doc.intent {
-            let l = &doc.lines[li];
+        for l in doc.intent.iter().filter_map(|&li| doc.lines.get(li)) {
             s.children
                 .push(sym(l.text.clone(), SymKind::Text, l.span, l.span));
         }
@@ -353,15 +357,15 @@ pub fn symbols(doc: &Document) -> Vec<Sym> {
             Some(t) => format!("{} {} — {}", t.keyword(), t.target().value, u.what),
             None => u.what.clone(),
         });
-        for &li in u.steps.iter().chain(&u.invariants) {
-            if let Some(a) = &doc.lines[li].ann.anchor {
-                let mut c = sym(
-                    format!("^{}", a.value),
-                    SymKind::Anchor,
-                    doc.lines[li].span,
-                    a.span,
-                );
-                c.detail = Some(doc.lines[li].text.clone());
+        let lines = u
+            .steps
+            .iter()
+            .chain(&u.invariants)
+            .filter_map(|&li| doc.lines.get(li));
+        for line in lines {
+            if let Some(a) = &line.ann.anchor {
+                let mut c = sym(format!("^{}", a.value), SymKind::Anchor, line.span, a.span);
+                c.detail = Some(line.text.clone());
                 s.children.push(c);
             }
         }
@@ -372,7 +376,9 @@ pub fn symbols(doc: &Document) -> Vec<Sym> {
         let mut s = sym(m.name.value.clone(), SymKind::Module, m.span, m.name.span);
         s.detail = Some(m.responsibility.clone());
         for f in &m.fns {
-            let line = &doc.lines[f.line];
+            let Some(line) = doc.lines.get(f.line) else {
+                continue;
+            };
             let mut c = sym(
                 f.name.value.clone(),
                 SymKind::Function,
@@ -387,11 +393,14 @@ pub fn symbols(doc: &Document) -> Vec<Sym> {
     if let Some((span, header)) = section_span(doc, SectionKind::Tests) {
         let mut s = sym("tests", SymKind::Namespace, span, header);
         for t in &doc.tests {
+            let Some(line) = doc.lines.get(t.line) else {
+                continue;
+            };
             let name = match &t.kind {
                 TestKind::Single(n) => format!("test {n}"),
                 TestKind::Group(n) => format!("tests {n}"),
             };
-            let mut c = sym(name, SymKind::Test, doc.lines[t.line].span, t.label.span);
+            let mut c = sym(name, SymKind::Test, line.span, t.label.span);
             c.detail = Some(t.description.clone());
             s.children.push(c);
         }
@@ -422,7 +431,9 @@ pub struct Item {
 pub const STEP_KEYWORDS: [&str; 6] = ["if ", "else:", "for each ", "while ", "try:", "on error "];
 
 fn line_start(text: &str, offset: usize) -> usize {
-    text[..offset].rfind('\n').map_or(0, |i| i + 1)
+    text.get(..offset)
+        .and_then(|t| t.rfind('\n'))
+        .map_or(0, |i| i + 1)
 }
 
 fn section_at(doc: &Document, offset: usize) -> Option<SectionKind> {
@@ -459,7 +470,7 @@ fn anchors(doc: &Document) -> Vec<&Line> {
 pub fn completions(doc: &Document, text: &str, offset: usize) -> Vec<Item> {
     let offset = offset.min(text.len());
     let ls = line_start(text, offset);
-    let prefix = &text[ls..offset];
+    let prefix = text.get(ls..offset).unwrap_or_default();
     let first_section = doc.sections.first().map(|s| s.header.start);
     let item =
         |label: &str, insert: &str, replace: Span, kind: ItemKind, detail: Option<String>| Item {
@@ -490,39 +501,37 @@ pub fn completions(doc: &Document, text: &str, offset: usize) -> Vec<Item> {
             .collect();
     }
 
-    if let Some(i) = prefix.rfind("@ api ") {
-        let partial = &prefix[i + 6..];
-        if !partial.contains(' ') {
-            let replace = Span::new(offset - partial.len(), offset);
-            return api_members(doc)
-                .into_iter()
-                .map(|(label, sig)| item(&label, &label, replace, ItemKind::Member, Some(sig)))
-                .collect();
-        }
+    if let Some((_, partial)) = prefix.rsplit_once("@ api ")
+        && !partial.contains(' ')
+    {
+        let replace = Span::new(offset - partial.len(), offset);
+        return api_members(doc)
+            .into_iter()
+            .map(|(label, sig)| item(&label, &label, replace, ItemKind::Member, Some(sig)))
+            .collect();
     }
 
-    if let Some(i) = prefix.rfind("@ guards ") {
-        let list = &prefix[i + 9..];
-        if list.chars().all(|c| {
+    if let Some((_, list)) = prefix.rsplit_once("@ guards ")
+        && list.chars().all(|c| {
             c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '^' | ',' | ' ')
-        }) {
-            let partial = list.rsplit([',', ' ']).next().unwrap_or("");
-            let replace = Span::new(offset - partial.len(), offset);
-            return anchors(doc)
-                .into_iter()
-                .filter_map(|l| {
-                    let a = l.ann.anchor.as_ref()?;
-                    let label = format!("^{}", a.value);
-                    Some(item(
-                        &label,
-                        &label,
-                        replace,
-                        ItemKind::Anchor,
-                        Some(l.text.clone()),
-                    ))
-                })
-                .collect();
-        }
+        })
+    {
+        let partial = list.rsplit([',', ' ']).next().unwrap_or("");
+        let replace = Span::new(offset - partial.len(), offset);
+        return anchors(doc)
+            .into_iter()
+            .filter_map(|l| {
+                let a = l.ann.anchor.as_ref()?;
+                let label = format!("^{}", a.value);
+                Some(item(
+                    &label,
+                    &label,
+                    replace,
+                    ItemKind::Anchor,
+                    Some(l.text.clone()),
+                ))
+            })
+            .collect();
     }
 
     if section_at(doc, offset) == Some(SectionKind::Data)
@@ -540,9 +549,11 @@ pub fn completions(doc: &Document, text: &str, offset: usize) -> Vec<Item> {
             .collect();
     }
 
-    if section_at(doc, offset) == Some(SectionKind::Unit) && prefix.len() >= 2 {
-        let content = prefix[2..].trim_start_matches(' ');
-        let indent = prefix.len() - 2 - content.len();
+    if section_at(doc, offset) == Some(SectionKind::Unit)
+        && let Some(body) = prefix.get(2..)
+    {
+        let content = body.trim_start_matches(' ');
+        let indent = body.len() - content.len();
         if indent.is_multiple_of(2)
             && let Some(partial) = content.strip_prefix("- ")
             && partial.chars().all(|c| c.is_ascii_lowercase() || c == ' ')
@@ -572,7 +583,7 @@ mod tests {
 
     fn line_of(span: Span) -> &'static str {
         let s = line_start(FIXTURE, span.start);
-        FIXTURE[s..].lines().next().unwrap()
+        FIXTURE.get(s..).unwrap().lines().next().unwrap()
     }
 
     #[test]
@@ -612,7 +623,7 @@ mod tests {
         let Some(Definition::Local(span)) = definition(&doc, FIXTURE, off) else {
             panic!("no definition");
         };
-        assert_eq!(&FIXTURE[span.start..span.end], "Enemy");
+        assert_eq!(FIXTURE.get(span.start..span.end), Some("Enemy"));
         assert!(line_of(span).starts_with("  component struct Enemy"));
     }
 

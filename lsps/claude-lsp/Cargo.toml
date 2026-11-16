@@ -2,25 +2,42 @@
 name = "claude-lsp"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.100"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+indexing_slicing = "deny"
+string_slice = "deny"
+exit = "deny"
+as_conversions = "deny"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+dbg_macro = "deny"
+disallowed_methods = "deny"
+disallowed_types = "deny"
+await_holding_lock = "deny"
+
+[lib]
+doctest = false
 
 [dependencies]
-# LSP server framework (use tower-lsp's re-exported lsp-types)
-tower-lsp = "0.20"
+tower-lsp = { version = "0.20", default-features = false, features = ["runtime-tokio"] }
+tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread", "io-std", "fs", "process", "time"] }
+serde = { version = "1", default-features = false, features = ["std", "derive"] }
+serde_json = { version = "1", default-features = false, features = ["std"] }
+thiserror = { version = "2", default-features = false, features = ["std"] }
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter"] }
+ignore = { version = "0.4", default-features = false }
 
-# Async runtime
-tokio = { version = "1", features = ["full", "process"] }
-
-# Serialization
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-
-# Error handling
-anyhow = "1"
-thiserror = "2"
-
-# Logging
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# Workspace file walking (respects .gitignore)
-ignore = "0.4"
+[profile.release]
+panic = "abort"
+debug = "line-tables-only"

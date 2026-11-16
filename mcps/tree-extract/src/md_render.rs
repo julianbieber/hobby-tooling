@@ -1,4 +1,6 @@
-use std::collections::BTreeMap;
+//! Rendering extracted symbols as the markdown project map.
+
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::containment::is_inside;
@@ -59,7 +61,7 @@ fn render_inner(symbols: &[Symbol], opts: &RenderOptions, drop_method_docs: bool
             .filter(|s| s.kind.is_container())
             .collect();
 
-        let mut emitted: Vec<bool> = vec![false; file_syms.len()];
+        let mut emitted: HashSet<usize> = HashSet::new();
 
         // Top-level (non-method, non-contained) first.
         for (i, sym) in file_syms.iter().enumerate() {
@@ -72,16 +74,16 @@ fn render_inner(symbols: &[Symbol], opts: &RenderOptions, drop_method_docs: bool
                 continue;
             }
             write_symbol(&mut buf, sym, 0, drop_method_docs);
-            emitted[i] = true;
+            emitted.insert(i);
             // Methods/inner that fall inside this container.
             if sym.kind.is_container() {
                 for (j, inner) in file_syms.iter().enumerate() {
-                    if i == j || emitted[j] {
+                    if i == j || emitted.contains(&j) {
                         continue;
                     }
                     if is_inside(inner, sym) {
                         write_symbol(&mut buf, inner, 1, drop_method_docs);
-                        emitted[j] = true;
+                        emitted.insert(j);
                     }
                 }
             }
@@ -89,7 +91,7 @@ fn render_inner(symbols: &[Symbol], opts: &RenderOptions, drop_method_docs: bool
 
         // Anything still un-emitted (orphan methods, free functions extracted as method).
         for (i, sym) in file_syms.iter().enumerate() {
-            if emitted[i] {
+            if emitted.contains(&i) {
                 continue;
             }
             write_symbol(&mut buf, sym, 0, drop_method_docs);
@@ -231,9 +233,9 @@ fn read_readme_first_paragraph(dir: &Path) -> Option<String> {
 fn first_paragraph(md: &str) -> String {
     let mut s = md;
     if let Some(rest) = s.strip_prefix("---\n")
-        && let Some(end) = rest.find("\n---\n")
+        && let Some((_, body)) = rest.split_once("\n---\n")
     {
-        s = &rest[end + 5..];
+        s = body;
     }
     let mut paragraph = String::new();
     for raw in s.lines() {

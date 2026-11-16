@@ -1,3 +1,6 @@
+//! The language server: answers completion, symbol, definition and reference
+//! requests from an index of the workspace kept current as files change.
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -11,7 +14,7 @@ use crate::definition;
 use crate::document_symbol;
 use crate::fuzzy;
 use crate::indexer::{self, Index, IndexEntry, Indexer};
-use crate::languages::LanguageRegistry;
+use crate::languages::{LanguageInfo, LanguageRegistry};
 use crate::references::{self, Reference};
 use crate::worktree;
 
@@ -37,7 +40,8 @@ impl Backend {
         let registry = match LanguageRegistry::load() {
             Ok(r) => r,
             Err(e) => {
-                tracing::error!("failed to load helix languages.toml: {e}");
+                let error: &dyn std::error::Error = &e;
+                tracing::error!(error, "helix languages could not be loaded");
                 // Empty registry still lets the server run; it just won't
                 // index anything.
                 LanguageRegistry::default_empty()
@@ -55,7 +59,7 @@ impl Backend {
         }
     }
 
-    async fn pick_root(&self, params: &InitializeParams) -> Option<PathBuf> {
+    fn pick_root(params: &InitializeParams) -> Option<PathBuf> {
         let from_folders = params
             .workspace_folders
             .as_ref()
@@ -64,11 +68,10 @@ impl Backend {
         if let Some(p) = from_folders {
             return Some(p);
         }
-        #[allow(deprecated)]
         if let Some(uri) = params.root_uri.as_ref().and_then(|u| u.to_file_path().ok()) {
             return Some(uri);
         }
-        #[allow(deprecated)]
+        #[expect(deprecated, reason = "the oldest clients send only rootPath")]
         if let Some(p) = params.root_path.clone().map(PathBuf::from) {
             return Some(p);
         }
@@ -79,12 +82,12 @@ impl Backend {
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
-        let root = self.pick_root(&params).await.unwrap_or_else(|| PathBuf::from("."));
+        let root = Self::pick_root(&params).unwrap_or_else(|| PathBuf::from("."));
         let task = worktree::detect_task_root(&root);
         tracing::info!(
-            "initialize: client root={}, task root={}",
-            root.display(),
-            task.display()
+            client_root = %root.display(),
+            task_root = %task.display(),
+            "initialize"
         );
         *self.state.task_root.write().await = Some(task);
 
@@ -121,20 +124,19 @@ impl LanguageServer for Backend {
             return;
         };
         let state = Arc::clone(&self.state);
-        let client = self.client.clone();
-        // Run the initial walk on a blocking thread so we don't stall the
-        // async runtime on large workspaces.
-        tokio::task::spawn_blocking(move || {
-            let new_index = state.indexer.index_root(&root);
-            let count = new_index.entries().len();
-            let mut guard = futures_executor_block_on(state.index.write());
-            *guard = new_index;
-            drop(guard);
-            let _ = futures_executor_block_on(client.log_message(
+        let walk_root = root.clone();
+        let new_index = run_blocking(move || state.indexer.index_root(&walk_root)).await;
+        let count = new_index.entries().len();
+        *self.state.index.write().await = new_index;
+        self.client
+            .log_message(
                 MessageType::INFO,
-                format!("treesitter-class-lsp: indexed {count} classes under {}", root.display()),
-            ));
-        });
+                format!(
+                    "treesitter-class-lsp: indexed {count} classes under {}",
+                    root.display()
+                ),
+            )
+            .await;
     }
 
     async fn shutdown(&self) -> Result<()> {
@@ -175,7 +177,9 @@ impl LanguageServer for Backend {
 
         let prefix = {
             let docs = self.state.docs.read().await;
-            docs.get(&uri).and_then(|text| word_prefix_at(text, pos)).unwrap_or_default()
+            docs.get(&uri)
+                .and_then(|text| word_prefix_at(text, pos))
+                .unwrap_or_default()
         };
 
         let index = self.state.index.read().await;
@@ -206,26 +210,13 @@ impl LanguageServer for Backend {
         let uri = params.text_document_position_params.text_document.uri;
         let pos = params.text_document_position_params.position;
 
-        let open_text = self.state.docs.read().await.get(&uri).cloned();
-        let text = match open_text {
-            Some(t) => t,
-            None => match uri.to_file_path().ok().and_then(|p| std::fs::read_to_string(p).ok()) {
-                Some(t) => t,
-                None => return Ok(None),
-            },
+        let Some(text) = self.document_text(&uri).await else {
+            return Ok(None);
         };
         let Some(name) = definition::identifier_at(&text, pos) else {
             return Ok(None);
         };
-
-        let language = uri.to_file_path().ok().and_then(|path| {
-            self.state
-                .indexer
-                .registry()
-                .resolve(&path)
-                .map(|info| info.name.clone())
-        });
-
+        let language = self.language_of(&uri);
         let path = uri.to_file_path().ok();
         let index = self.state.index.read().await;
         let container = definition::receiver_at(&text, pos).and_then(|receiver| {
@@ -237,14 +228,14 @@ impl LanguageServer for Backend {
             language.as_deref(),
             container.as_deref(),
         )
-            .into_iter()
-            .filter_map(|e| {
-                Some(Location {
-                    uri: e.uri()?,
-                    range: e.name_range,
-                })
+        .into_iter()
+        .filter_map(|e| {
+            Some(Location {
+                uri: e.uri()?,
+                range: e.name_range,
             })
-            .collect();
+        })
+        .collect();
         if locations.is_empty() {
             Ok(None)
         } else {
@@ -256,13 +247,8 @@ impl LanguageServer for Backend {
         let uri = params.text_document_position.text_document.uri;
         let pos = params.text_document_position.position;
 
-        let open_text = self.state.docs.read().await.get(&uri).cloned();
-        let text = match open_text {
-            Some(t) => t,
-            None => match uri.to_file_path().ok().and_then(|p| std::fs::read_to_string(p).ok()) {
-                Some(t) => t,
-                None => return Ok(None),
-            },
+        let Some(text) = self.document_text(&uri).await else {
+            return Ok(None);
         };
         let Some(name) = definition::identifier_at(&text, pos) else {
             return Ok(None);
@@ -270,14 +256,7 @@ impl LanguageServer for Backend {
         let Some(root) = self.state.task_root.read().await.clone() else {
             return Ok(None);
         };
-
-        let language = uri.to_file_path().ok().and_then(|path| {
-            self.state
-                .indexer
-                .registry()
-                .resolve(&path)
-                .map(|info| info.name.clone())
-        });
+        let language = self.language_of(&uri);
 
         let declarations: Vec<(PathBuf, Range)> = if params.context.include_declaration {
             Vec::new()
@@ -292,7 +271,7 @@ impl LanguageServer for Backend {
         };
 
         let state = Arc::clone(&self.state);
-        let found = tokio::task::spawn_blocking(move || {
+        let found = run_blocking(move || {
             let needle = name.as_bytes();
             let mut found = Vec::new();
             for path in indexer::source_files(&root) {
@@ -318,8 +297,7 @@ impl LanguageServer for Backend {
             }
             found
         })
-        .await
-        .unwrap_or_default();
+        .await;
 
         let found = if params.context.include_declaration {
             found
@@ -352,14 +330,7 @@ impl LanguageServer for Backend {
         let Some(lang) = self.state.indexer.registry().resolve(&path).cloned() else {
             return Ok(None);
         };
-        let indexer = unsafe { extend_lifetime_ref(&self.state.indexer) };
-        let path_cloned = path.clone();
-        let entries = tokio::task::spawn_blocking(move || {
-            indexer.index_file(&path_cloned, &lang).unwrap_or_default()
-        })
-        .await
-        .unwrap_or_default();
-
+        let entries = self.index_file(&path, lang).await;
         let symbols = document_symbol::tree(&entries);
         self.state.index.write().await.replace_file(&path, entries);
         if symbols.is_empty() {
@@ -379,8 +350,11 @@ impl LanguageServer for Backend {
             .into_iter()
             .filter_map(|e| {
                 let uri = e.uri()?;
-                #[allow(deprecated)]
-                Some(SymbolInformation {
+                #[expect(
+                    deprecated,
+                    reason = "the protocol's deprecated field still has to be set"
+                )]
+                let symbol = SymbolInformation {
                     name: e.name.clone(),
                     kind: e.kind,
                     tags: None,
@@ -390,7 +364,8 @@ impl LanguageServer for Backend {
                         range: e.range,
                     },
                     container_name: Some(e.language.clone()),
-                })
+                };
+                Some(symbol)
             })
             .collect();
         if syms.is_empty() {
@@ -406,41 +381,67 @@ impl Backend {
         let Ok(path) = uri.to_file_path() else {
             return;
         };
-        let lang = match self.state.indexer.registry().resolve(&path) {
-            Some(l) => l.clone(),
-            None => return,
+        let Some(lang) = self.state.indexer.registry().resolve(&path).cloned() else {
+            return;
         };
-        // Parse from disk — we use FULL sync but the client's unsaved buffer
-        // isn't guaranteed to match what's on disk. For MVP we prefer the
-        // on-disk representation; saves will reconcile quickly.
-        let indexer = unsafe { extend_lifetime_ref(&self.state.indexer) };
-        let path_cloned = path.clone();
-        let lang_cloned = lang.clone();
-        let entries = tokio::task::spawn_blocking(move || {
-            indexer.index_file(&path_cloned, &lang_cloned).unwrap_or_default()
+        let entries = self.index_file(&path, lang).await;
+        self.state.index.write().await.replace_file(&path, entries);
+    }
+
+    async fn index_file(&self, path: &std::path::Path, lang: LanguageInfo) -> Vec<IndexEntry> {
+        let state = Arc::clone(&self.state);
+        let path = path.to_path_buf();
+        run_blocking(move || match state.indexer.index_file(&path, &lang) {
+            Ok(entries) => entries,
+            Err(e) => {
+                let error: &dyn std::error::Error = &e;
+                tracing::warn!(path = %path.display(), error, "file not indexed");
+                Vec::new()
+            }
         })
         .await
-        .unwrap_or_default();
+    }
 
-        let mut index = self.state.index.write().await;
-        index.replace_file(&path, entries);
+    async fn document_text(&self, uri: &Url) -> Option<String> {
+        if let Some(text) = self.state.docs.read().await.get(uri) {
+            return Some(text.clone());
+        }
+        tokio::fs::read_to_string(uri.to_file_path().ok()?)
+            .await
+            .ok()
+    }
+
+    fn language_of(&self, uri: &Url) -> Option<String> {
+        let path = uri.to_file_path().ok()?;
+        let info = self.state.indexer.registry().resolve(&path)?;
+        Some(info.name.clone())
+    }
+}
+
+async fn run_blocking<T, F>(work: F) -> T
+where
+    T: Default + Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    match tokio::task::spawn_blocking(work).await {
+        Ok(value) => value,
+        Err(e) => {
+            let error: &dyn std::error::Error = &e;
+            tracing::error!(error, "blocking task did not finish");
+            T::default()
+        }
     }
 }
 
 /// Simple word-prefix extractor: walks backwards from `pos` over identifier
 /// characters (alphanumeric + `_`).
 fn word_prefix_at(text: &str, pos: Position) -> Option<String> {
-    let line = text.lines().nth(pos.line as usize)?;
-    let byte_col = definition::char_col_to_byte_col(line, pos.character as usize)?;
-    let prefix: String = line[..byte_col]
-        .chars()
-        .rev()
-        .take_while(|c| c.is_alphanumeric() || *c == '_')
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-    Some(prefix)
+    let line = definition::line_at(text, pos.line)?;
+    let head = line.get(..definition::byte_col_at(line, pos.character)?)?;
+    let start = head
+        .trim_end_matches(|c: char| c.is_alphanumeric() || c == '_')
+        .len();
+    head.get(start..).map(str::to_string)
 }
 
 fn is_completable(e: &IndexEntry) -> bool {
@@ -459,26 +460,6 @@ fn symbol_kind_to_completion_kind(k: SymbolKind) -> CompletionItemKind {
 }
 
 fn detail_for(e: &IndexEntry) -> String {
-    let file = e
-        .file
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
+    let file = e.file.file_name().and_then(|n| n.to_str()).unwrap_or("");
     format!("{} · {}", e.language, file)
-}
-
-/// SAFETY: we only extend the lifetime for the duration of a single
-/// `spawn_blocking` whose output we await immediately below; `state` lives
-/// inside `Arc<State>` held by `self` and therefore outlives the blocking
-/// task.
-unsafe fn extend_lifetime_ref<T>(r: &T) -> &'static T {
-    unsafe { &*(r as *const T) }
-}
-
-/// Block on a future from a synchronous (spawn_blocking) context without
-/// creating a nested runtime. `tokio::task::spawn_blocking` doesn't provide a
-/// clean way to call back into async code without a handle, so we use the
-/// current handle.
-fn futures_executor_block_on<F: std::future::Future>(fut: F) -> F::Output {
-    tokio::runtime::Handle::current().block_on(fut)
 }

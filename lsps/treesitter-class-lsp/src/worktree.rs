@@ -1,18 +1,23 @@
-use std::path::{Path, PathBuf};
+//! Widening a client's workspace root to the task directory that holds it.
 
-use regex::Regex;
+use std::path::{Component, Path, PathBuf};
 
 /// Given a starting path (usually the LSP's cwd or the client's workspace root),
 /// walk upward and look for `.../worktrees/<topic>/<task>/...`. Return the
 /// `<topic>/<task>` directory. If the path is outside `~/worktrees/`, fall back
 /// to `start` itself.
 pub fn detect_task_root(start: &Path) -> PathBuf {
-    let s = start.to_string_lossy();
-    let re = Regex::new(r"^(?P<root>.*/worktrees/[^/]+/[^/]+)(/|$)").expect("valid regex");
-    if let Some(caps) = re.captures(&s) {
-        return PathBuf::from(&caps["root"]);
+    let components: Vec<Component> = start.components().collect();
+    let worktrees = components.windows(3).rposition(|window| {
+        matches!(
+            window,
+            [Component::Normal(dir), Component::Normal(_), Component::Normal(_)] if *dir == "worktrees"
+        )
+    });
+    match worktrees {
+        Some(at) => components.iter().take(at + 3).collect(),
+        None => start.to_path_buf(),
     }
-    start.to_path_buf()
 }
 
 #[cfg(test)]
@@ -24,10 +29,7 @@ mod tests {
         let got = detect_task_root(Path::new(
             "/home/x/worktrees/topic-a/task-b/some-repo/src/main.rs",
         ));
-        assert_eq!(
-            got,
-            PathBuf::from("/home/x/worktrees/topic-a/task-b")
-        );
+        assert_eq!(got, PathBuf::from("/home/x/worktrees/topic-a/task-b"));
     }
 
     #[test]

@@ -168,6 +168,23 @@ impl Counts {
     }
 }
 
+/// A coordinator's or a task's JSON file that could not be read into its type.
+#[derive(Debug, thiserror::Error)]
+pub enum LoadError {
+    #[error("cannot read {}: {source}", path.display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{}: {source}", path.display())]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+}
+
 impl Coordinator {
     /// Path of the list inside a coordinator's notes directory.
     pub fn tasks_path(dir: &Path) -> PathBuf {
@@ -176,16 +193,18 @@ impl Coordinator {
 
     /// Read `tasks.json` from a coordinator's notes directory. A missing or malformed
     /// file is an error — the caller decides whether that means "empty" or "broken".
-    pub fn load(dir: &Path) -> Result<Self, String> {
+    pub fn load(dir: &Path) -> Result<Self, LoadError> {
         let path = Self::tasks_path(dir);
-        let text = std::fs::read_to_string(&path)
-            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-        Self::parse(&text).map_err(|e| format!("{}: {e}", path.display()))
+        let text = std::fs::read_to_string(&path).map_err(|source| LoadError::Read {
+            path: path.clone(),
+            source,
+        })?;
+        Self::parse(&text).map_err(|source| LoadError::Parse { path, source })
     }
 
     /// Parse the file's contents.
-    pub fn parse(text: &str) -> Result<Self, String> {
-        serde_json::from_str(text).map_err(|e| e.to_string())
+    pub fn parse(text: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(text)
     }
 
     /// The notes directory of one of this coordinator's tasks, given the coordinator's
@@ -384,7 +403,6 @@ impl AcceptanceResult {
 
 /// What a task session recorded about merging its own PR. Absent when `merge` in the
 /// seeded state file is `mine` or unset, or before the `merge` phase has run.
-#[allow(dead_code)]
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct MergeResult {
     /// `"merged"` or `"blocked"`. A `String` rather than an enum: this file is written
@@ -527,14 +545,14 @@ fn read_prs(task_notes_dir: &Path) -> Vec<String> {
 impl BuildState {
     /// Read a task's state file. `None` when the file does not exist yet — the session
     /// has not started, or has not reached its first transition.
-    pub fn load(task_notes_dir: &Path) -> Result<Option<Self>, String> {
+    pub fn load(task_notes_dir: &Path) -> Result<Option<Self>, LoadError> {
         let path = task_notes_dir.join(STATE_FILE);
         match std::fs::read_to_string(&path) {
             Ok(text) => serde_json::from_str(&text)
                 .map(Some)
-                .map_err(|e| format!("{}: {e}", path.display())),
+                .map_err(|source| LoadError::Parse { path, source }),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(format!("cannot read {}: {e}", path.display())),
+            Err(source) => Err(LoadError::Read { path, source }),
         }
     }
 

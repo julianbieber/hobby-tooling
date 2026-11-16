@@ -1,30 +1,84 @@
-use crate::config::Config;
-use crate::discover;
-use crate::dump;
+//! The MCP server: the tools it exposes and how each call is answered.
+
+use crate::config::{Config, ConfigError};
+use crate::discover::{self, ResolveError};
+use crate::dump::{self, JustError};
 use crate::models::{ProjectEntry, ProjectsResult, RecipesResult, RunResult, ShowResult};
 use crate::params::*;
-use crate::run;
+use crate::run::{self, ArgsError, RunError};
 
 use std::path::Path;
 use std::time::Duration;
 
 use rmcp::{
-    ErrorData as McpError, ServerHandler,
+    ErrorData as McpError, ServerHandler, ServiceExt,
     handler::server::{tool::ToolRouter, wrapper::Parameters},
     model::{CallToolResult, Content, ServerCapabilities, ServerInfo},
     tool, tool_handler, tool_router,
 };
 
-/// Serialize a success value as pretty JSON, or surface the error string to the
-/// client as a tool error (rather than an opaque protocol error).
-fn respond<T: serde::Serialize>(result: Result<T, String>) -> Result<CallToolResult, McpError> {
+/// Serving the protocol could not start or ended abnormally.
+#[derive(Debug, thiserror::Error)]
+pub enum ServeError {
+    #[error(transparent)]
+    Config(#[from] ConfigError),
+    #[error("MCP handshake failed")]
+    Initialize(#[source] Box<rmcp::service::ServerInitializeError>),
+    #[error("MCP service task failed")]
+    Service(#[from] tokio::task::JoinError),
+}
+
+/// Load the configuration and serve MCP on stdin/stdout until the client
+/// disconnects.
+pub async fn serve_stdio() -> Result<(), ServeError> {
+    let config = Config::load()?;
+    let service = JustMcpServer::new(config)
+        .serve(rmcp::transport::stdio())
+        .await
+        .map_err(|e| ServeError::Initialize(Box::new(e)))?;
+    service.waiting().await?;
+    Ok(())
+}
+
+#[derive(Debug, thiserror::Error)]
+enum ToolError {
+    #[error(transparent)]
+    Resolve(#[from] ResolveError),
+    #[error(transparent)]
+    Just(#[from] JustError),
+    #[error(transparent)]
+    Arguments(#[from] ArgumentsError),
+    #[error(transparent)]
+    Args(#[from] ArgsError),
+    #[error(transparent)]
+    Run(#[from] RunError),
+    #[error("recipe '{0}' not found; cannot map named args. Use `positional` instead.")]
+    UnknownRecipe(String),
+    #[error("justfile has no parent directory")]
+    NoParentDir,
+    #[error("justfile discovery did not complete")]
+    Discovery(#[source] tokio::task::JoinError),
+}
+
+fn error_chain(error: &dyn std::error::Error) -> String {
+    let mut text = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        text.push_str(": ");
+        text.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    text
+}
+
+fn respond<T: serde::Serialize>(result: Result<T, ToolError>) -> Result<CallToolResult, McpError> {
     match result {
         Ok(value) => {
             let json = serde_json::to_string_pretty(&value)
                 .map_err(|e| McpError::internal_error(e.to_string(), None))?;
             Ok(CallToolResult::success(vec![Content::text(json)]))
         }
-        Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
+        Err(e) => Ok(CallToolResult::error(vec![Content::text(error_chain(&e))])),
     }
 }
 
@@ -34,17 +88,11 @@ pub struct JustMcpServer {
     tool_router: ToolRouter<Self>,
 }
 
-impl Default for JustMcpServer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[tool_router]
 impl JustMcpServer {
-    pub fn new() -> Self {
+    pub fn new(config: Config) -> Self {
         Self {
-            config: Config::load(),
+            config,
             tool_router: Self::tool_router(),
         }
     }
@@ -91,9 +139,15 @@ impl JustMcpServer {
 }
 
 impl JustMcpServer {
-    async fn discover_projects(&self, params: ProjectsParams) -> Result<ProjectsResult, String> {
+    async fn discover_projects(&self, params: ProjectsParams) -> Result<ProjectsResult, ToolError> {
         let root = discover::resolve_root(params.root.as_deref(), &self.config.roots)?;
-        let justfiles = discover::discover(&root, &self.config.ignore, self.config.max_depth);
+        let walk_root = root.clone();
+        let ignore = self.config.ignore.clone();
+        let max_depth = self.config.max_depth;
+        let justfiles =
+            tokio::task::spawn_blocking(move || discover::discover(&walk_root, &ignore, max_depth))
+                .await
+                .map_err(ToolError::Discovery)?;
 
         let mut projects = Vec::with_capacity(justfiles.len());
         for justfile in justfiles {
@@ -116,7 +170,7 @@ impl JustMcpServer {
                     recipe_count: 0,
                     module_count: 0,
                     default_recipe: None,
-                    error: Some(e),
+                    error: Some(error_chain(&e)),
                 },
             };
             projects.push(entry);
@@ -129,7 +183,7 @@ impl JustMcpServer {
         })
     }
 
-    async fn list_recipes(&self, params: RecipesParams) -> Result<RecipesResult, String> {
+    async fn list_recipes(&self, params: RecipesParams) -> Result<RecipesResult, ToolError> {
         let justfile = discover::resolve_justfile(Path::new(&params.justfile))?;
         let d = dump::dump(&justfile).await?;
         let recipes = dump::flatten_recipes(&d, params.include_private);
@@ -148,7 +202,7 @@ impl JustMcpServer {
         })
     }
 
-    async fn show(&self, params: ShowParams) -> Result<ShowResult, String> {
+    async fn show(&self, params: ShowParams) -> Result<ShowResult, ToolError> {
         let justfile = discover::resolve_justfile(Path::new(&params.justfile))?;
         let source = run::show_recipe(&justfile, &params.recipe).await?;
         Ok(ShowResult {
@@ -158,56 +212,43 @@ impl JustMcpServer {
         })
     }
 
-    async fn run(&self, params: RunParams) -> Result<RunResult, String> {
-        if params.args.is_some() && params.positional.is_some() {
-            return Err("provide either `args` or `positional`, not both".into());
-        }
+    async fn run(&self, params: RunParams) -> Result<RunResult, ToolError> {
+        let request = RunRequest::try_from(params)?;
 
-        let justfile = discover::resolve_justfile(Path::new(&params.justfile))?;
+        let justfile = discover::resolve_justfile(Path::new(&request.justfile))?;
         let dir = justfile
             .parent()
-            .ok_or_else(|| "justfile has no parent directory".to_string())?
+            .ok_or(ToolError::NoParentDir)?
             .to_path_buf();
 
         let d = dump::dump(&justfile).await?;
 
-        // Resolve positional arguments.
-        let positional = if let Some(list) = params.positional {
-            list
-        } else if let Some(args) = params.args {
-            let map = args
-                .as_object()
-                .ok_or_else(|| "`args` must be an object of parameter name to value".to_string())?;
-            match dump::find_recipe(&d, &params.recipe) {
-                Some(recipe) => run::positional_from_map(recipe, map)?,
+        let positional = match request.arguments {
+            Arguments::Positional(list) => list,
+            Arguments::Named(map) => match dump::find_recipe(&d, &request.recipe) {
+                Some(recipe) => run::positional_from_map(recipe, &map)?,
                 None if map.is_empty() => Vec::new(),
-                None => {
-                    return Err(format!(
-                        "recipe '{}' not found; cannot map named args. Use `positional` instead.",
-                        params.recipe
-                    ));
-                }
-            }
-        } else {
-            Vec::new()
+                None => return Err(ToolError::UnknownRecipe(request.recipe)),
+            },
+            Arguments::None => Vec::new(),
         };
 
         let timeout = Duration::from_secs(
-            params
+            request
                 .timeout_secs
                 .unwrap_or(self.config.default_timeout_secs),
         );
 
-        run::run_recipe(
+        Ok(run::run_recipe(
             &justfile,
             &dir,
-            &params.recipe,
+            &request.recipe,
             &positional,
-            params.dry_run,
+            request.dry_run,
             self.config.use_mise,
             timeout,
         )
-        .await
+        .await?)
     }
 }
 

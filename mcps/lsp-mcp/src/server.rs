@@ -1,26 +1,33 @@
+//! The MCP server: the LSP-backed tools it exposes and how each call is
+//! answered.
+
 use rmcp::{
+    ServerHandler,
     handler::server::{tool::ToolRouter, wrapper::Parameters},
-    model::{CallToolResult, Content, ErrorData as McpError, Implementation, ProtocolVersion, ServerCapabilities, ServerInfo},
-    tool, tool_handler, tool_router, ServerHandler,
+    model::{
+        CallToolResult, Content, ErrorData as McpError, Implementation, ProtocolVersion,
+        ServerCapabilities, ServerInfo,
+    },
+    tool, tool_handler, tool_router,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
+use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::error::error_chain;
 use crate::fuzzy::fuzzy_search;
-use crate::lsp::{symbol_kind_to_string, LspManager};
+use crate::lsp::{LspClient, LspError, LspManager, ManagerError, symbol_kind_to_string};
 use crate::tools::completion::{
-    CompletionParams as McpCompletionParams, CompletionResult,
-    convert_completion_item,
+    CompletionParams as McpCompletionParams, CompletionResult, convert_completion_item,
 };
 use crate::tools::diagnostics::{
-    CodeAction, CodeActionParams, GetDiagnosticsParams, Diagnostic,
-    convert_lsp_diagnostic, extract_edits_from_code_action,
+    CodeAction, CodeActionParams, Diagnostic, GetDiagnosticsParams, convert_lsp_diagnostic,
+    extract_edits_from_code_action,
 };
-use crate::tools::document_symbols::{DocumentSymbolParams, DocumentSymbol};
+use crate::tools::document_symbols::{DocumentSymbol, DocumentSymbolParams};
 use crate::tools::hover::{HoverParams, HoverResult};
-use crate::tools::navigation::{GotoDefinitionParams, FindReferencesParams, Location, Position, Range};
+use crate::tools::navigation::{FindReferencesParams, GotoDefinitionParams, Location};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct WorkspaceSymbolParams {
@@ -34,7 +41,9 @@ pub struct WorkspaceSymbolParams {
     #[serde(default)]
     pub limit: Option<usize>,
 
-    #[schemars(description = "Optional path to a file or directory inside the target project. Used to locate the project root (via root markers like Cargo.toml) so the correct language server is queried. If omitted, the server's launch directory is used, which may index the wrong project.")]
+    #[schemars(
+        description = "Optional path to a file or directory inside the target project. Used to locate the project root (via root markers like Cargo.toml) so the correct language server is queried. If omitted, the server's launch directory is used, which may index the wrong project."
+    )]
     #[serde(default)]
     pub path: Option<String>,
 }
@@ -63,6 +72,77 @@ pub struct WorkspaceSymbolResult {
     pub score: u32,
 }
 
+#[derive(Debug, thiserror::Error)]
+enum ToolError {
+    #[error("invalid URI {uri}")]
+    InvalidUri {
+        uri: String,
+        #[source]
+        source: <lsp_types::Url as std::str::FromStr>::Err,
+    },
+    #[error("not a file URI: {0}")]
+    NotAFileUri(String),
+    #[error("failed to read file {}", .path.display())]
+    ReadFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("no language server for '{language_id}'")]
+    NoServer {
+        language_id: String,
+        #[source]
+        source: ManagerError,
+    },
+    #[error("failed to open document in {server}")]
+    Open {
+        server: String,
+        #[source]
+        source: LspError,
+    },
+    #[error("{server} request failed")]
+    Request {
+        server: String,
+        #[source]
+        source: LspError,
+    },
+    #[error("JSON serialization failed")]
+    Serialize(#[source] serde_json::Error),
+}
+
+impl From<ToolError> for McpError {
+    fn from(error: ToolError) -> Self {
+        let message = error_chain(&error);
+        match error {
+            ToolError::InvalidUri { .. } | ToolError::NotAFileUri(_) => {
+                McpError::invalid_params(message, None)
+            }
+            _ => McpError::internal_error(message, None),
+        }
+    }
+}
+
+struct OpenDocument {
+    uri: lsp_types::Url,
+    client: Arc<LspClient>,
+}
+
+impl OpenDocument {
+    fn failed(&self) -> impl FnOnce(LspError) -> ToolError + '_ {
+        |source| ToolError::Request {
+            server: self.client.server_name().to_string(),
+            source,
+        }
+    }
+}
+
+fn json_text<T: Serialize>(heading: &str, value: &T) -> Result<CallToolResult, ToolError> {
+    let json = serde_json::to_string_pretty(value).map_err(ToolError::Serialize)?;
+    Ok(CallToolResult::success(vec![Content::text(format!(
+        "{heading}\n{json}"
+    ))]))
+}
+
 #[derive(Clone)]
 pub struct LspMcpServer {
     tool_router: ToolRouter<Self>,
@@ -78,50 +158,84 @@ impl LspMcpServer {
         }
     }
 
-    #[tool(description = "Search for symbols across the workspace. Fuzzy matches against symbol names and returns locations ranked by relevance.")]
+    /// Parse the URI, read the file, find its language server rooted at the
+    /// file's project, and open the document there, as every per-file request
+    /// needs.
+    async fn open_document(&self, uri: &str, language_id: &str) -> Result<OpenDocument, ToolError> {
+        let parsed = lsp_types::Url::parse(uri).map_err(|source| ToolError::InvalidUri {
+            uri: uri.to_string(),
+            source,
+        })?;
+        let file_path = parsed
+            .to_file_path()
+            .map_err(|()| ToolError::NotAFileUri(uri.to_string()))?;
+        let file_contents = tokio::fs::read_to_string(&file_path)
+            .await
+            .map_err(|source| ToolError::ReadFile {
+                path: file_path.clone(),
+                source,
+            })?;
+        let client = self
+            .lsp_manager
+            .get_server_for_path(&file_path, language_id)
+            .await
+            .map_err(|source| ToolError::NoServer {
+                language_id: language_id.to_string(),
+                source,
+            })?;
+        client
+            .did_open(&parsed, language_id, &file_contents)
+            .await
+            .map_err(|source| ToolError::Open {
+                server: client.server_name().to_string(),
+                source,
+            })?;
+        Ok(OpenDocument {
+            uri: parsed,
+            client,
+        })
+    }
+
+    #[tool(
+        description = "Search for symbols across the workspace. Fuzzy matches against symbol names and returns locations ranked by relevance."
+    )]
     async fn workspace_symbol(
         &self,
         Parameters(params): Parameters<WorkspaceSymbolParams>,
     ) -> Result<CallToolResult, McpError> {
-        // Query the language server for the specified language. When a path is
-        // provided, root the server at the project containing it; otherwise fall
-        // back to the launch directory.
         let client = match &params.path {
             Some(path) => {
-                let file_path = std::path::PathBuf::from(path);
                 self.lsp_manager
-                    .get_server_for_path(&file_path, &params.language_id)
+                    .get_server_for_path(&PathBuf::from(path), &params.language_id)
                     .await
             }
-            None => self.lsp_manager.get_server_for_language(&params.language_id).await,
+            None => {
+                self.lsp_manager
+                    .get_server_for_language(&params.language_id)
+                    .await
+            }
         }
-        .map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32603),
-            message: Cow::from(format!("Failed to get language server for '{}': {}", params.language_id, e)),
-            data: None,
+        .map_err(|source| ToolError::NoServer {
+            language_id: params.language_id.clone(),
+            source,
         })?;
-        let symbols = client.workspace_symbol(&params.query).await.map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32603),
-            message: Cow::from(format!("LSP query failed: {}", e)),
-            data: None,
-        })?;
+        let symbols = client
+            .workspace_symbol(&params.query)
+            .await
+            .map_err(|source| ToolError::Request {
+                server: client.server_name().to_string(),
+                source,
+            })?;
 
-        // Apply fuzzy matching and ranking
-        let ranked = fuzzy_search(&symbols, &params.query);
-
-        // Limit results
-        let limit = params.limit.unwrap_or(100);
-        let limited: Vec<_> = ranked.into_iter().take(limit).collect();
-
-        // Convert to response format
-        let results: Vec<WorkspaceSymbolResult> = limited
+        let results: Vec<WorkspaceSymbolResult> = fuzzy_search(&symbols, &params.query)
             .into_iter()
+            .take(params.limit.unwrap_or(100))
             .map(|ranked_symbol| {
                 let symbol = ranked_symbol.symbol;
                 WorkspaceSymbolResult {
-                    name: symbol.name.clone(),
+                    name: symbol.name,
                     kind: symbol_kind_to_string(symbol.kind).to_string(),
-                    container: symbol.container_name.clone(),
+                    container: symbol.container_name,
                     uri: symbol.location.uri.to_string(),
                     line: symbol.location.range.start.line,
                     character: symbol.location.range.start.character,
@@ -130,308 +244,103 @@ impl LspMcpServer {
             })
             .collect();
 
-        // Format as JSON
-        let result_json = serde_json::to_string_pretty(&results).map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32603),
-            message: Cow::from(format!("JSON serialization failed: {}", e)),
-            data: None,
-        })?;
-
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Found {} symbols:\n{}",
-            results.len(),
-            result_json
-        ))]))
+        Ok(json_text(
+            &format!("Found {} symbols:", results.len()),
+            &results,
+        )?)
     }
 
-    #[tool(description = "Get the current language configuration. Returns the configured language servers and language definitions loaded from Helix config.")]
+    #[tool(
+        description = "Get the current language configuration. Returns the configured language servers and language definitions loaded from Helix config."
+    )]
     async fn get_language_config(&self) -> Result<CallToolResult, McpError> {
-        let config = self.lsp_manager.config();
-
-        let result_json = serde_json::to_string_pretty(config).map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32603),
-            message: Cow::from(format!("JSON serialization failed: {}", e)),
-            data: None,
-        })?;
-
+        let result_json = serde_json::to_string_pretty(self.lsp_manager.config())
+            .map_err(ToolError::Serialize)?;
         Ok(CallToolResult::success(vec![Content::text(result_json)]))
     }
 
-    #[tool(description = "Go to the definition of a symbol at a given position. Returns the location(s) where the symbol is defined. The position must be exactly on an identifier (e.g., a variable name, function name, or type) - whitespace or punctuation will return no results.")]
+    #[tool(
+        description = "Go to the definition of a symbol at a given position. Returns the location(s) where the symbol is defined. The position must be exactly on an identifier (e.g., a variable name, function name, or type) - whitespace or punctuation will return no results."
+    )]
     async fn goto_definition(
         &self,
         Parameters(params): Parameters<GotoDefinitionParams>,
     ) -> Result<CallToolResult, McpError> {
-        // Parse URI
-        let uri = lsp_types::Url::parse(&params.uri).map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32602),
-            message: Cow::from(format!("Invalid URI: {}", e)),
-            data: None,
-        })?;
-
-        // Get file path and read contents
-        let file_path = uri.to_file_path().map_err(|_| McpError {
-            code: rmcp::model::ErrorCode(-32602),
-            message: Cow::from("Invalid file URI"),
-            data: None,
-        })?;
-        let file_contents = std::fs::read_to_string(&file_path).map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32603),
-            message: Cow::from(format!("Failed to read file: {}", e)),
-            data: None,
-        })?;
-
-        // Get the language server
-        let client = self
-            .lsp_manager
-            .get_server_for_path(&file_path, &params.language_id)
+        let doc = self.open_document(&params.uri, &params.language_id).await?;
+        let response = doc
+            .client
+            .goto_definition(&doc.uri, params.position.into())
             .await
-            .map_err(|e| McpError {
-                code: rmcp::model::ErrorCode(-32603),
-                message: Cow::from(format!("Failed to get language server: {}", e)),
-                data: None,
-            })?;
+            .map_err(doc.failed())?;
 
-        // Open the document in the LSP server
-        client.did_open(&uri, &params.language_id, &file_contents).await.map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32603),
-            message: Cow::from(format!("Failed to open document: {}", e)),
-            data: None,
-        })?;
-
-        // Convert position
-        let position = lsp_types::Position {
-            line: params.position.line,
-            character: params.position.character,
-        };
-
-        // Request definition
-        let response = client.goto_definition(&uri, position).await.map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32603),
-            message: Cow::from(format!("LSP request failed: {}", e)),
-            data: None,
-        })?;
-
-        // Convert response to our Location format
         let locations: Vec<Location> = match response {
-            Some(lsp_types::GotoDefinitionResponse::Scalar(loc)) => {
-                vec![Location {
-                    uri: loc.uri.to_string(),
-                    range: Range {
-                        start: Position {
-                            line: loc.range.start.line,
-                            character: loc.range.start.character,
-                        },
-                        end: Position {
-                            line: loc.range.end.line,
-                            character: loc.range.end.character,
-                        },
-                    },
-                }]
-            }
+            Some(lsp_types::GotoDefinitionResponse::Scalar(loc)) => vec![loc.into()],
             Some(lsp_types::GotoDefinitionResponse::Array(locs)) => {
-                locs.into_iter()
-                    .map(|loc| Location {
-                        uri: loc.uri.to_string(),
-                        range: Range {
-                            start: Position {
-                                line: loc.range.start.line,
-                                character: loc.range.start.character,
-                            },
-                            end: Position {
-                                line: loc.range.end.line,
-                                character: loc.range.end.character,
-                            },
-                        },
-                    })
-                    .collect()
+                locs.into_iter().map(Location::from).collect()
             }
-            Some(lsp_types::GotoDefinitionResponse::Link(links)) => {
-                links.into_iter()
-                    .map(|link| Location {
-                        uri: link.target_uri.to_string(),
-                        range: Range {
-                            start: Position {
-                                line: link.target_selection_range.start.line,
-                                character: link.target_selection_range.start.character,
-                            },
-                            end: Position {
-                                line: link.target_selection_range.end.line,
-                                character: link.target_selection_range.end.character,
-                            },
-                        },
-                    })
-                    .collect()
-            }
+            Some(lsp_types::GotoDefinitionResponse::Link(links)) => links
+                .into_iter()
+                .map(|link| Location {
+                    uri: link.target_uri.to_string(),
+                    range: link.target_selection_range.into(),
+                })
+                .collect(),
             None => vec![],
         };
 
-        // Format as JSON
-        let result_json = serde_json::to_string_pretty(&locations).map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32603),
-            message: Cow::from(format!("JSON serialization failed: {}", e)),
-            data: None,
-        })?;
-
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Found {} definition(s):\n{}",
-            locations.len(),
-            result_json
-        ))]))
+        Ok(json_text(
+            &format!("Found {} definition(s):", locations.len()),
+            &locations,
+        )?)
     }
 
-    #[tool(description = "Find all references to a symbol at a given position. Returns all locations where the symbol is used. The position must be exactly on an identifier.")]
+    #[tool(
+        description = "Find all references to a symbol at a given position. Returns all locations where the symbol is used. The position must be exactly on an identifier."
+    )]
     async fn find_references(
         &self,
         Parameters(params): Parameters<FindReferencesParams>,
     ) -> Result<CallToolResult, McpError> {
-        // Parse URI
-        let uri = lsp_types::Url::parse(&params.uri).map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32602),
-            message: Cow::from(format!("Invalid URI: {}", e)),
-            data: None,
-        })?;
-
-        // Get file path and read contents
-        let file_path = uri.to_file_path().map_err(|_| McpError {
-            code: rmcp::model::ErrorCode(-32602),
-            message: Cow::from("Invalid file URI"),
-            data: None,
-        })?;
-        let file_contents = std::fs::read_to_string(&file_path).map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32603),
-            message: Cow::from(format!("Failed to read file: {}", e)),
-            data: None,
-        })?;
-
-        // Get the language server
-        let client = self
-            .lsp_manager
-            .get_server_for_path(&file_path, &params.language_id)
+        let doc = self.open_document(&params.uri, &params.language_id).await?;
+        let response = doc
+            .client
+            .find_references(&doc.uri, params.position.into(), params.include_declaration)
             .await
-            .map_err(|e| McpError {
-                code: rmcp::model::ErrorCode(-32603),
-                message: Cow::from(format!("Failed to get language server: {}", e)),
-                data: None,
-            })?;
+            .map_err(doc.failed())?;
 
-        // Open the document in the LSP server
-        client.did_open(&uri, &params.language_id, &file_contents).await.map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32603),
-            message: Cow::from(format!("Failed to open document: {}", e)),
-            data: None,
-        })?;
-
-        // Convert position
-        let position = lsp_types::Position {
-            line: params.position.line,
-            character: params.position.character,
-        };
-
-        // Request references
-        let response = client.find_references(&uri, position, params.include_declaration).await.map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32603),
-            message: Cow::from(format!("LSP request failed: {}", e)),
-            data: None,
-        })?;
-
-        // Convert response to our Location format
         let locations: Vec<Location> = response
             .unwrap_or_default()
             .into_iter()
-            .map(|loc| Location {
-                uri: loc.uri.to_string(),
-                range: Range {
-                    start: Position {
-                        line: loc.range.start.line,
-                        character: loc.range.start.character,
-                    },
-                    end: Position {
-                        line: loc.range.end.line,
-                        character: loc.range.end.character,
-                    },
-                },
-            })
+            .map(Location::from)
             .collect();
 
-        // Format as JSON
-        let result_json = serde_json::to_string_pretty(&locations).map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32603),
-            message: Cow::from(format!("JSON serialization failed: {}", e)),
-            data: None,
-        })?;
-
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Found {} reference(s):\n{}",
-            locations.len(),
-            result_json
-        ))]))
+        Ok(json_text(
+            &format!("Found {} reference(s):", locations.len()),
+            &locations,
+        )?)
     }
 
-    #[tool(description = "Get hover information (type info, documentation) for a symbol at a given position. The position must be exactly on an identifier.")]
+    #[tool(
+        description = "Get hover information (type info, documentation) for a symbol at a given position. The position must be exactly on an identifier."
+    )]
     async fn hover(
         &self,
         Parameters(params): Parameters<HoverParams>,
     ) -> Result<CallToolResult, McpError> {
-        // Parse URI
-        let uri = lsp_types::Url::parse(&params.uri).map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32602),
-            message: Cow::from(format!("Invalid URI: {}", e)),
-            data: None,
-        })?;
-
-        // Get file path and read contents
-        let file_path = uri.to_file_path().map_err(|_| McpError {
-            code: rmcp::model::ErrorCode(-32602),
-            message: Cow::from("Invalid file URI"),
-            data: None,
-        })?;
-        let file_contents = std::fs::read_to_string(&file_path).map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32603),
-            message: Cow::from(format!("Failed to read file: {}", e)),
-            data: None,
-        })?;
-
-        // Get the language server
-        let client = self
-            .lsp_manager
-            .get_server_for_path(&file_path, &params.language_id)
+        let doc = self.open_document(&params.uri, &params.language_id).await?;
+        let response = doc
+            .client
+            .hover(&doc.uri, params.position.into())
             .await
-            .map_err(|e| McpError {
-                code: rmcp::model::ErrorCode(-32603),
-                message: Cow::from(format!("Failed to get language server: {}", e)),
-                data: None,
-            })?;
-
-        // Open the document in the LSP server
-        client.did_open(&uri, &params.language_id, &file_contents).await.map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32603),
-            message: Cow::from(format!("Failed to open document: {}", e)),
-            data: None,
-        })?;
-
-        // Convert position
-        let position = lsp_types::Position {
-            line: params.position.line,
-            character: params.position.character,
-        };
-
-        // Request hover
-        let response = client.hover(&uri, position).await.map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32603),
-            message: Cow::from(format!("LSP request failed: {}", e)),
-            data: None,
-        })?;
+            .map_err(doc.failed())?;
 
         match response {
             Some(hover) => {
-                let contents = hover_contents_to_string(&hover.contents);
-                let result = HoverResult { contents };
-                let result_json = serde_json::to_string_pretty(&result).map_err(|e| McpError {
-                    code: rmcp::model::ErrorCode(-32603),
-                    message: Cow::from(format!("JSON serialization failed: {}", e)),
-                    data: None,
-                })?;
+                let result = HoverResult {
+                    contents: hover_contents_to_string(&hover.contents),
+                };
+                let result_json =
+                    serde_json::to_string_pretty(&result).map_err(ToolError::Serialize)?;
                 Ok(CallToolResult::success(vec![Content::text(result_json)]))
             }
             None => Ok(CallToolResult::success(vec![Content::text(
@@ -440,338 +349,134 @@ impl LspMcpServer {
         }
     }
 
-    #[tool(description = "Get all symbols in a specific document. Returns a hierarchical list of symbols (functions, classes, variables, etc.) in the file.")]
+    #[tool(
+        description = "Get all symbols in a specific document. Returns a hierarchical list of symbols (functions, classes, variables, etc.) in the file."
+    )]
     async fn document_symbol(
         &self,
         Parameters(params): Parameters<DocumentSymbolParams>,
     ) -> Result<CallToolResult, McpError> {
-        // Parse URI
-        let uri = lsp_types::Url::parse(&params.uri).map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32602),
-            message: Cow::from(format!("Invalid URI: {}", e)),
-            data: None,
-        })?;
-
-        // Get file path and read contents
-        let file_path = uri.to_file_path().map_err(|_| McpError {
-            code: rmcp::model::ErrorCode(-32602),
-            message: Cow::from("Invalid file URI"),
-            data: None,
-        })?;
-        let file_contents = std::fs::read_to_string(&file_path).map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32603),
-            message: Cow::from(format!("Failed to read file: {}", e)),
-            data: None,
-        })?;
-
-        // Get the appropriate language server, rooted at the file's project
-        let client = self
-            .lsp_manager
-            .get_server_for_path(&file_path, &params.language_id)
+        let doc = self.open_document(&params.uri, &params.language_id).await?;
+        let response = doc
+            .client
+            .document_symbol(&doc.uri)
             .await
-            .map_err(|e| McpError {
-                code: rmcp::model::ErrorCode(-32603),
-                message: Cow::from(format!("Failed to get language server: {}", e)),
-                data: None,
-            })?;
+            .map_err(doc.failed())?;
 
-        // Open the document in the LSP server (required before documentSymbol)
-        client.did_open(&uri, &params.language_id, &file_contents).await.map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32603),
-            message: Cow::from(format!("Failed to open document: {}", e)),
-            data: None,
-        })?;
-
-        // Request document symbols
-        let response = client.document_symbol(&uri).await.map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32603),
-            message: Cow::from(format!("LSP request failed: {}", e)),
-            data: None,
-        })?;
-
-        // Convert response to our format
-        let symbols = match response {
-            Some(lsp_types::DocumentSymbolResponse::Flat(symbol_info)) => {
-                // Convert flat SymbolInformation to DocumentSymbol
-                symbol_info
-                    .into_iter()
-                    .map(|info| DocumentSymbol {
-                        name: info.name,
-                        kind: symbol_kind_to_string(info.kind).to_string(),
-                        detail: None,
-                        start_line: info.location.range.start.line,
-                        start_character: info.location.range.start.character,
-                        end_line: info.location.range.end.line,
-                        end_character: info.location.range.end.character,
-                        children: vec![],
-                    })
-                    .collect()
-            }
+        let symbols: Vec<DocumentSymbol> = match response {
+            Some(lsp_types::DocumentSymbolResponse::Flat(symbol_info)) => symbol_info
+                .into_iter()
+                .map(|info| DocumentSymbol {
+                    name: info.name,
+                    kind: symbol_kind_to_string(info.kind).to_string(),
+                    detail: None,
+                    start_line: info.location.range.start.line,
+                    start_character: info.location.range.start.character,
+                    end_line: info.location.range.end.line,
+                    end_character: info.location.range.end.character,
+                    children: vec![],
+                })
+                .collect(),
             Some(lsp_types::DocumentSymbolResponse::Nested(doc_symbols)) => {
-                // Convert hierarchical DocumentSymbol
-                fn convert_doc_symbol(symbol: lsp_types::DocumentSymbol) -> DocumentSymbol {
-                    DocumentSymbol {
-                        name: symbol.name,
-                        kind: symbol_kind_to_string(symbol.kind).to_string(),
-                        detail: symbol.detail,
-                        start_line: symbol.selection_range.start.line,
-                        start_character: symbol.selection_range.start.character,
-                        end_line: symbol.selection_range.end.line,
-                        end_character: symbol.selection_range.end.character,
-                        children: symbol
-                            .children
-                            .unwrap_or_default()
-                            .into_iter()
-                            .map(convert_doc_symbol)
-                            .collect(),
-                    }
-                }
                 doc_symbols.into_iter().map(convert_doc_symbol).collect()
             }
             None => vec![],
         };
 
-        // Format as JSON
-        let result_json = serde_json::to_string_pretty(&symbols).map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32603),
-            message: Cow::from(format!("JSON serialization failed: {}", e)),
-            data: None,
-        })?;
-
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Found {} symbols:\n{}",
-            symbols.len(),
-            result_json
-        ))]))
+        Ok(json_text(
+            &format!("Found {} symbols:", symbols.len()),
+            &symbols,
+        )?)
     }
 
-    #[tool(description = "Get diagnostics (errors, warnings) for a file. Opens the file in the language server and returns all diagnostic issues found.")]
+    #[tool(
+        description = "Get diagnostics (errors, warnings) for a file. Opens the file in the language server and returns all diagnostic issues found."
+    )]
     async fn get_diagnostics(
         &self,
         Parameters(params): Parameters<GetDiagnosticsParams>,
     ) -> Result<CallToolResult, McpError> {
-        // Parse URI
-        let uri = lsp_types::Url::parse(&params.uri).map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32602),
-            message: Cow::from(format!("Invalid URI: {}", e)),
-            data: None,
-        })?;
+        let doc = self.open_document(&params.uri, &params.language_id).await?;
 
-        // Get file path and read contents
-        let file_path = uri.to_file_path().map_err(|_| McpError {
-            code: rmcp::model::ErrorCode(-32602),
-            message: Cow::from("Invalid file URI"),
-            data: None,
-        })?;
-        let file_contents = std::fs::read_to_string(&file_path).map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32603),
-            message: Cow::from(format!("Failed to read file: {}", e)),
-            data: None,
-        })?;
-
-        // Get the language server
-        let client = self
-            .lsp_manager
-            .get_server_for_path(&file_path, &params.language_id)
-            .await
-            .map_err(|e| McpError {
-                code: rmcp::model::ErrorCode(-32603),
-                message: Cow::from(format!("Failed to get language server: {}", e)),
-                data: None,
-            })?;
-
-        // Open the document in the LSP server
-        client.did_open(&uri, &params.language_id, &file_contents).await.map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32603),
-            message: Cow::from(format!("Failed to open document: {}", e)),
-            data: None,
-        })?;
-
-        // Try pull diagnostics first, fall back to stored diagnostics from notifications
-        let lsp_diagnostics = match client.pull_diagnostics(&uri).await {
+        let lsp_diagnostics = match doc.client.pull_diagnostics(&doc.uri).await {
             Ok(diags) => diags,
-            Err(_) => client.get_stored_diagnostics(&uri).await,
+            Err(_) => doc.client.get_stored_diagnostics(&doc.uri),
         };
 
-        // Convert to our format
-        let diagnostics: Vec<Diagnostic> = lsp_diagnostics
-            .iter()
-            .map(convert_lsp_diagnostic)
-            .collect();
+        let diagnostics: Vec<Diagnostic> =
+            lsp_diagnostics.iter().map(convert_lsp_diagnostic).collect();
 
-        let result_json = serde_json::to_string_pretty(&diagnostics).map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32603),
-            message: Cow::from(format!("JSON serialization failed: {}", e)),
-            data: None,
-        })?;
-
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Found {} diagnostic(s):\n{}",
-            diagnostics.len(),
-            result_json
-        ))]))
+        Ok(json_text(
+            &format!("Found {} diagnostic(s):", diagnostics.len()),
+            &diagnostics,
+        )?)
     }
 
-    #[tool(description = "Get code actions (quick fixes, refactorings) available at a given range. Typically used after get_diagnostics to get fixes for specific issues.")]
+    #[tool(
+        description = "Get code actions (quick fixes, refactorings) available at a given range. Typically used after get_diagnostics to get fixes for specific issues."
+    )]
     async fn code_action(
         &self,
         Parameters(params): Parameters<CodeActionParams>,
     ) -> Result<CallToolResult, McpError> {
-        // Parse URI
-        let uri = lsp_types::Url::parse(&params.uri).map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32602),
-            message: Cow::from(format!("Invalid URI: {}", e)),
-            data: None,
-        })?;
+        let doc = self.open_document(&params.uri, &params.language_id).await?;
+        let range: lsp_types::Range = params.range.into();
 
-        // Get file path and read contents
-        let file_path = uri.to_file_path().map_err(|_| McpError {
-            code: rmcp::model::ErrorCode(-32602),
-            message: Cow::from("Invalid file URI"),
-            data: None,
-        })?;
-        let file_contents = std::fs::read_to_string(&file_path).map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32603),
-            message: Cow::from(format!("Failed to read file: {}", e)),
-            data: None,
-        })?;
-
-        // Get the language server
-        let client = self
-            .lsp_manager
-            .get_server_for_path(&file_path, &params.language_id)
-            .await
-            .map_err(|e| McpError {
-                code: rmcp::model::ErrorCode(-32603),
-                message: Cow::from(format!("Failed to get language server: {}", e)),
-                data: None,
-            })?;
-
-        // Open the document in the LSP server
-        client.did_open(&uri, &params.language_id, &file_contents).await.map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32603),
-            message: Cow::from(format!("Failed to open document: {}", e)),
-            data: None,
-        })?;
-
-        // Convert range
-        let range = lsp_types::Range {
-            start: lsp_types::Position {
-                line: params.range.start.line,
-                character: params.range.start.character,
-            },
-            end: lsp_types::Position {
-                line: params.range.end.line,
-                character: params.range.end.character,
-            },
-        };
-
-        // Get stored diagnostics that overlap the given range to provide context
-        let stored_diags = client.get_stored_diagnostics(&uri).await;
-        let relevant_diags: Vec<lsp_types::Diagnostic> = stored_diags
+        let relevant_diags: Vec<lsp_types::Diagnostic> = doc
+            .client
+            .get_stored_diagnostics(&doc.uri)
             .into_iter()
             .filter(|d| ranges_overlap(&d.range, &range))
             .collect();
 
-        // Request code actions
-        let response = client.code_action(&uri, range, relevant_diags).await.map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32603),
-            message: Cow::from(format!("LSP request failed: {}", e)),
-            data: None,
-        })?;
+        let response = doc
+            .client
+            .code_action(&doc.uri, range, relevant_diags)
+            .await
+            .map_err(doc.failed())?;
 
-        // Convert response
         let actions: Vec<CodeAction> = response
             .unwrap_or_default()
             .into_iter()
-            .filter_map(|action_or_cmd| match action_or_cmd {
+            .map(|action_or_cmd| match action_or_cmd {
                 lsp_types::CodeActionOrCommand::CodeAction(action) => {
                     let edits = extract_edits_from_code_action(&action);
-                    Some(CodeAction {
+                    CodeAction {
                         title: action.title,
                         kind: action.kind.map(|k| k.as_str().to_string()),
                         is_preferred: action.is_preferred,
                         edits,
-                    })
+                    }
                 }
-                lsp_types::CodeActionOrCommand::Command(cmd) => Some(CodeAction {
+                lsp_types::CodeActionOrCommand::Command(cmd) => CodeAction {
                     title: cmd.title,
                     kind: None,
                     is_preferred: None,
                     edits: vec![],
-                }),
+                },
             })
             .collect();
 
-        let result_json = serde_json::to_string_pretty(&actions).map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32603),
-            message: Cow::from(format!("JSON serialization failed: {}", e)),
-            data: None,
-        })?;
-
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Found {} code action(s):\n{}",
-            actions.len(),
-            result_json
-        ))]))
+        Ok(json_text(
+            &format!("Found {} code action(s):", actions.len()),
+            &actions,
+        )?)
     }
 
-    #[tool(description = "Get completion suggestions at a given position in a file. Returns possible completions based on the cursor context (e.g., after a dot, partial identifier, etc.).")]
+    #[tool(
+        description = "Get completion suggestions at a given position in a file. Returns possible completions based on the cursor context (e.g., after a dot, partial identifier, etc.)."
+    )]
     async fn completion(
         &self,
         Parameters(params): Parameters<McpCompletionParams>,
     ) -> Result<CallToolResult, McpError> {
-        // Parse URI
-        let uri = lsp_types::Url::parse(&params.uri).map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32602),
-            message: Cow::from(format!("Invalid URI: {}", e)),
-            data: None,
-        })?;
-
-        // Get file path and read contents
-        let file_path = uri.to_file_path().map_err(|_| McpError {
-            code: rmcp::model::ErrorCode(-32602),
-            message: Cow::from("Invalid file URI"),
-            data: None,
-        })?;
-        let file_contents = std::fs::read_to_string(&file_path).map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32603),
-            message: Cow::from(format!("Failed to read file: {}", e)),
-            data: None,
-        })?;
-
-        // Get the language server
-        let client = self
-            .lsp_manager
-            .get_server_for_path(&file_path, &params.language_id)
+        let doc = self.open_document(&params.uri, &params.language_id).await?;
+        let response = doc
+            .client
+            .completion(&doc.uri, params.position.into())
             .await
-            .map_err(|e| McpError {
-                code: rmcp::model::ErrorCode(-32603),
-                message: Cow::from(format!("Failed to get language server: {}", e)),
-                data: None,
-            })?;
+            .map_err(doc.failed())?;
 
-        // Open the document in the LSP server
-        client.did_open(&uri, &params.language_id, &file_contents).await.map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32603),
-            message: Cow::from(format!("Failed to open document: {}", e)),
-            data: None,
-        })?;
-
-        // Convert position
-        let position = lsp_types::Position {
-            line: params.position.line,
-            character: params.position.character,
-        };
-
-        // Request completions
-        let response = client.completion(&uri, position).await.map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32603),
-            message: Cow::from(format!("LSP request failed: {}", e)),
-            data: None,
-        })?;
-
-        // Convert response
         let result = match response {
             Some(lsp_types::CompletionResponse::Array(items)) => CompletionResult {
                 is_incomplete: false,
@@ -787,18 +492,34 @@ impl LspMcpServer {
             },
         };
 
-        let result_json = serde_json::to_string_pretty(&result).map_err(|e| McpError {
-            code: rmcp::model::ErrorCode(-32603),
-            message: Cow::from(format!("JSON serialization failed: {}", e)),
-            data: None,
-        })?;
-
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Found {} completion(s){}:\n{}",
+        let heading = format!(
+            "Found {} completion(s){}:",
             result.items.len(),
-            if result.is_incomplete { " (incomplete list)" } else { "" },
-            result_json
-        ))]))
+            if result.is_incomplete {
+                " (incomplete list)"
+            } else {
+                ""
+            }
+        );
+        Ok(json_text(&heading, &result)?)
+    }
+}
+
+fn convert_doc_symbol(symbol: lsp_types::DocumentSymbol) -> DocumentSymbol {
+    DocumentSymbol {
+        name: symbol.name,
+        kind: symbol_kind_to_string(symbol.kind).to_string(),
+        detail: symbol.detail,
+        start_line: symbol.selection_range.start.line,
+        start_character: symbol.selection_range.start.character,
+        end_line: symbol.selection_range.end.line,
+        end_character: symbol.selection_range.end.character,
+        children: symbol
+            .children
+            .unwrap_or_default()
+            .into_iter()
+            .map(convert_doc_symbol)
+            .collect(),
     }
 }
 

@@ -314,17 +314,17 @@ install-mcps:
 
 # Build + install the hdash dashboard
 install-dash:
-    cd tools/hdash && cargo install --path crates/hdash_app
+    cd tools/hdash && cargo install --path crates/hdash_app --locked
     @echo "Installed hdash. If the retired dashboards are still on PATH:"
     @echo "    cargo uninstall hwt_app issues_app"
 
 # The coordinator's task-list pane, `hcoord wait` and `hcoord merged`; `hcdev coordinator` needs it on PATH
 install-coord:
-    cd tools/hcoord && cargo install --path .
+    cd tools/hcoord && cargo install --path . --locked
 
 # A Bevy workspace's plugins, components and resources as linked HTML, from rustdoc JSON
 install-atlas:
-    cd tools/hatlas && cargo install --path .
+    cd tools/hatlas && cargo install --path . --locked
 
 # `lsps/` vendors four servers that used to be buildable only from the work checkout,
 # which left a hobby-only machine unable to install them at all. They keep their
@@ -355,16 +355,16 @@ install-lsps:
 
 # Build + install the forked HMML language server and parser CLI
 install-mml:
-    cd lsps/hobby-mml-lsp && cargo install --path mml-lsp
-    cd lsps/hobby-mml-lsp && cargo install --path mml-parser
+    cd lsps/hobby-mml-lsp && cargo install --path mml-lsp --locked
+    cd lsps/hobby-mml-lsp && cargo install --path mml-parser --locked
 
 # The parser CLI matters twice over: it is what `just structure` runs, and what a
 # repo's own CI would call to gate on its structure.hstruct.
 
 # Build + install the HSTRUCT language server and checker CLI
 install-struct:
-    cd lsps/hobby-struct-lsp && cargo install --path struct-lsp
-    cd lsps/hobby-struct-lsp && cargo install --path struct-parser
+    cd lsps/hobby-struct-lsp && cargo install --path struct-lsp --locked
+    cd lsps/hobby-struct-lsp && cargo install --path struct-parser --locked
 
 # Build + install the .hresearch language server: goto-definition on a link opens it
 install-research:
@@ -402,19 +402,19 @@ doctor:
 
 # Run every test in the repo (all language servers + MCP servers + the dashboard)
 test:
-    cd lsps/hobby-mml-lsp && cargo test --workspace
-    cd lsps/hobby-struct-lsp && cargo test --workspace
-    cd lsps/hobby-research-lsp && cargo test
-    cd lsps/claude-lsp && cargo test
-    cd lsps/claude-skills-lsp && cargo test
-    cd lsps/treesitter-class-lsp && cargo test
-    cd lsps/path-lsp && cargo test
-    cd mcps/just-mcp && cargo test
-    cd mcps/lsp-mcp && cargo test
-    cd mcps/tree-extract && cargo test
-    cd tools/hdash && cargo test --workspace
-    cd tools/hcoord && cargo test
-    cd tools/hatlas && cargo test
+    cd lsps/hobby-mml-lsp && cargo test --workspace --locked
+    cd lsps/hobby-struct-lsp && cargo test --workspace --locked
+    cd lsps/hobby-research-lsp && cargo test --locked
+    cd lsps/claude-lsp && cargo test --locked
+    cd lsps/claude-skills-lsp && cargo test --locked
+    cd lsps/treesitter-class-lsp && cargo test --locked
+    cd lsps/path-lsp && cargo test --locked
+    cd mcps/just-mcp && cargo test --locked
+    cd mcps/lsp-mcp && cargo test --locked
+    cd mcps/tree-extract && cargo test --locked
+    cd tools/hdash && cargo test --workspace --locked
+    cd tools/hcoord && cargo test --locked
+    cd tools/hatlas && cargo test --locked
 
 # ---------------------------------------------------------------------------
 # Uninstall
