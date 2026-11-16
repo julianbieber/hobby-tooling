@@ -7,27 +7,31 @@ const SCHEMES: [&str; 2] = ["https://", "http://"];
 /// a ref the file lists no source for.
 pub fn target_at(text: &str, line: u32, character: u32) -> Option<String> {
     url_at(text, line, character).or_else(|| {
-        let line = text.lines().nth(line as usize)?;
+        let line = nth_line(text, line)?;
         let k = ref_at(line, byte_offset(line, character))?;
         source_url(text, k)
     })
 }
 
+fn nth_line(text: &str, line: u32) -> Option<&str> {
+    text.lines().nth(usize::try_from(line).ok()?)
+}
+
 fn url_at(text: &str, line: u32, character: u32) -> Option<String> {
-    let line = text.lines().nth(line as usize)?;
+    let line = nth_line(text, line)?;
     let cursor = byte_offset(line, character);
     SCHEMES
         .iter()
-        .flat_map(|scheme| line.match_indices(scheme).map(|(start, _)| start))
-        .map(|start| (start, start + url_len(&line[start..])))
-        .find(|&(start, end)| start <= cursor && cursor < end)
-        .map(|(start, end)| line[start..end].to_string())
+        .flat_map(|scheme| line.match_indices(scheme))
+        .filter_map(|(start, _)| Some((start, url_prefix(line.get(start..)?))))
+        .find(|(start, url)| *start <= cursor && cursor < start + url.len())
+        .map(|(_, url)| url.to_string())
 }
 
 fn ref_at(line: &str, cursor: usize) -> Option<&str> {
     line.match_indices('[').find_map(|(open, _)| {
-        let close = open + line[open..].find(']')?;
-        let k = &line[open + 1..close];
+        let (k, _) = line.get(open + 1..)?.split_once(']')?;
+        let close = open + 1 + k.len();
         let is_ref = !k.is_empty() && k.bytes().all(|b| b.is_ascii_digit());
         (is_ref && open <= cursor && cursor <= close).then_some(k)
     })
@@ -41,22 +45,24 @@ fn source_url(text: &str, k: &str) -> Option<String> {
         let rest = rest.strip_prefix(&label)?;
         let url = rest.trim_start();
         let is_url = rest.starts_with(' ') && SCHEMES.iter().any(|s| url.starts_with(s));
-        is_url.then(|| url[..url_len(url)].to_string())
+        is_url.then(|| url_prefix(url).to_string())
     })
 }
 
-fn url_len(s: &str) -> usize {
-    s.find(|c: char| c.is_whitespace() || c == '│')
-        .unwrap_or(s.len())
+fn url_prefix(s: &str) -> &str {
+    s.split(|c: char| c.is_whitespace() || c == '│')
+        .next()
+        .unwrap_or(s)
 }
 
 fn byte_offset(line: &str, character: u32) -> usize {
-    let mut units = 0u32;
+    let character = usize::try_from(character).unwrap_or(usize::MAX);
+    let mut units = 0;
     for (i, c) in line.char_indices() {
         if units >= character {
             return i;
         }
-        units += c.len_utf16() as u32;
+        units += c.len_utf16();
     }
     line.len()
 }
@@ -72,7 +78,7 @@ mod tests {
 
     fn col(line: &str, needle: &str) -> u32 {
         let byte = line.find(needle).unwrap();
-        line[..byte].encode_utf16().count() as u32
+        u32::try_from(line.get(..byte).unwrap().encode_utf16().count()).unwrap()
     }
 
     // The cursor anywhere inside a source line's URL yields the whole URL,

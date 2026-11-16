@@ -4,6 +4,8 @@
 //! budget only moves down, and ordinary edits to the code do not force an edit
 //! to the file.
 
+#![allow(clippy::expect_used, reason = "test code")]
+
 use std::path::Path;
 use struct_parser::diagnostic::code;
 use struct_parser::{Severity, check, parse, ratchet};

@@ -1,3 +1,45 @@
 [workspace]
 resolver = "3"
 members = ["mml-parser", "mml-lsp"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.100"
+version = "3.0.0"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+indexing_slicing = "deny"
+string_slice = "deny"
+exit = "deny"
+as_conversions = "deny"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+dbg_macro = "deny"
+disallowed_methods = "deny"
+disallowed_types = "deny"
+await_holding_lock = "deny"
+
+[workspace.dependencies]
+mml-parser = { path = "mml-parser", package = "hobby-mml-parser" }
+parking_lot = { version = "0.12", default-features = false }
+serde = { version = "1", default-features = false, features = ["std", "derive"] }
+serde_json = { version = "1", default-features = false, features = ["std"] }
+thiserror = { version = "2", default-features = false, features = ["std"] }
+tempfile = { version = "3", default-features = false }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "io-std", "macros"] }
+tower-lsp = { version = "0.20", default-features = false, features = ["runtime-tokio"] }
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt"] }
+
+[profile.release]
+panic = "abort"
+debug = "line-tables-only"

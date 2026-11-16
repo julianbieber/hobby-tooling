@@ -1,13 +1,17 @@
+//! Walking a workspace and parsing its files into an index of the definitions
+//! they hold.
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use anyhow::Context;
 use ignore::WalkBuilder;
-use tower_lsp::lsp_types::{Position, Range, SymbolKind, Url};
+use parking_lot::Mutex;
 use streaming_iterator::StreamingIterator;
+use tower_lsp::lsp_types::{Position, Range, SymbolKind, Url};
 use tree_sitter::{Parser, Query, QueryCursor};
 
-use crate::grammars::GrammarCache;
+use crate::grammars::{GrammarCache, GrammarError};
 use crate::languages::{LanguageInfo, LanguageRegistry, load_tags_query};
 
 #[derive(Debug, Clone)]
@@ -49,14 +53,14 @@ impl Index {
             // for large indices.
             let mut drop_mask = vec![false; self.entries.len()];
             for idx in old_idxs {
-                if idx < drop_mask.len() {
-                    drop_mask[idx] = true;
+                if let Some(dropped) = drop_mask.get_mut(idx) {
+                    *dropped = true;
                 }
             }
             let mut remapped: HashMap<usize, usize> = HashMap::new();
             let mut kept = Vec::with_capacity(self.entries.len());
-            for (i, entry) in self.entries.drain(..).enumerate() {
-                if !drop_mask[i] {
+            for ((i, entry), dropped) in self.entries.drain(..).enumerate().zip(drop_mask) {
+                if !dropped {
                     remapped.insert(i, kept.len());
                     kept.push(entry);
                 }
@@ -134,18 +138,17 @@ fn attach_containers(entries: &mut [IndexEntry]) {
     }
 }
 
-fn range_from_ts_node(node: tree_sitter::Node) -> Range {
-    let s = node.start_position();
-    let e = node.end_position();
+pub(crate) fn range_from_ts_node(node: tree_sitter::Node) -> Range {
     Range {
-        start: Position {
-            line: s.row as u32,
-            character: s.column as u32,
-        },
-        end: Position {
-            line: e.row as u32,
-            character: e.column as u32,
-        },
+        start: position_from_ts_point(node.start_position()),
+        end: position_from_ts_point(node.end_position()),
+    }
+}
+
+fn position_from_ts_point(point: tree_sitter::Point) -> Position {
+    Position {
+        line: u32::try_from(point.row).unwrap_or(u32::MAX),
+        character: u32::try_from(point.column).unwrap_or(u32::MAX),
     }
 }
 
@@ -174,7 +177,7 @@ pub struct Indexer {
     grammars: GrammarCache,
     /// Cached (parsed Query, capture indices) per language. A `Query` is tied
     /// to a `Language`, which lives for the process lifetime via `GrammarCache`.
-    queries: std::sync::Mutex<HashMap<String, std::sync::Arc<CompiledQuery>>>,
+    queries: Mutex<HashMap<String, Arc<CompiledQuery>>>,
 }
 
 struct CompiledQuery {
@@ -191,7 +194,7 @@ impl Indexer {
         Self {
             registry,
             grammars: GrammarCache::new(),
-            queries: std::sync::Mutex::new(HashMap::new()),
+            queries: Mutex::new(HashMap::new()),
         }
     }
 
@@ -224,27 +227,28 @@ impl Indexer {
                     count_files += 1;
                 }
                 Err(e) => {
-                    tracing::debug!("index {} failed: {}", path.display(), e);
+                    let error: &dyn std::error::Error = &e;
+                    tracing::debug!(path = %path.display(), error, "indexing a file failed");
                 }
             }
         }
         tracing::info!(
-            "indexed {} files, {} symbols under {}",
-            count_files,
-            index.entries.len(),
-            root.display()
+            files = count_files,
+            symbols = index.entries.len(),
+            root = %root.display(),
+            "indexed workspace"
         );
         index
     }
 
     /// Parse a single file and return its definitions (class-like, functions, methods). Returns an
     /// empty Vec on failure modes that aren't worth surfacing (missing query,
-    /// unreadable file).
+    /// unreadable file); an error only when `lang`'s grammar does not load.
     pub fn index_file(
         &self,
         path: &Path,
         lang: &LanguageInfo,
-    ) -> anyhow::Result<Vec<IndexEntry>> {
+    ) -> Result<Vec<IndexEntry>, GrammarError> {
         let source = match std::fs::read(path) {
             Ok(b) => b,
             Err(_) => return Ok(Vec::new()),
@@ -254,10 +258,7 @@ impl Indexer {
             return Ok(Vec::new());
         }
 
-        let grammar = self
-            .grammars
-            .get_or_load(&self.registry, lang)
-            .with_context(|| format!("loading grammar for {}", lang.name))?;
+        let grammar = self.grammars.get_or_load(&self.registry, lang)?;
 
         let compiled = match self.compiled_query(lang, &grammar.language) {
             Some(q) => q,
@@ -283,7 +284,11 @@ impl Indexer {
             let mut fallback_range: Option<Range> = None;
 
             for cap in m.captures {
-                let kind_opt = compiled.def_kinds.get(cap.index as usize).copied().flatten();
+                let kind_opt = usize::try_from(cap.index)
+                    .ok()
+                    .and_then(|i| compiled.def_kinds.get(i))
+                    .copied()
+                    .flatten();
                 if let Some(kind) = kind_opt {
                     def_kind = Some(kind);
                     def_range = Some(range_from_ts_node(cap.node));
@@ -326,19 +331,17 @@ impl Indexer {
         &self,
         lang: &LanguageInfo,
         language: &tree_sitter::Language,
-    ) -> Option<std::sync::Arc<CompiledQuery>> {
-        {
-            let guard = self.queries.lock().unwrap();
-            if let Some(q) = guard.get(&lang.name) {
-                return Some(std::sync::Arc::clone(q));
-            }
+    ) -> Option<Arc<CompiledQuery>> {
+        if let Some(q) = self.queries.lock().get(&lang.name) {
+            return Some(Arc::clone(q));
         }
         let runtime = self.registry.runtime();
         let source = load_tags_query(runtime, &lang.name)?;
         let query = match Query::new(language, &source) {
             Ok(q) => q,
             Err(e) => {
-                tracing::warn!("compile tags query for {}: {}", lang.name, e);
+                let error: &dyn std::error::Error = &e;
+                tracing::warn!(language = %lang.name, error, "tags query does not compile");
                 return None;
             }
         };
@@ -350,23 +353,23 @@ impl Indexer {
         let name_idx = capture_names
             .iter()
             .position(|n| n.trim_start_matches('@') == "name")
-            .map(|i| i as u32);
+            .and_then(|i| u32::try_from(i).ok());
 
         // Skip languages whose queries don't yield any definition captures.
         if def_kinds.iter().all(|k| k.is_none()) {
             return None;
         }
 
-        let compiled = std::sync::Arc::new(CompiledQuery {
+        let compiled = Arc::new(CompiledQuery {
             query,
             def_kinds,
             name_idx,
         });
-        let mut guard = self.queries.lock().unwrap();
-        Some(std::sync::Arc::clone(
-            guard
+        Some(Arc::clone(
+            self.queries
+                .lock()
                 .entry(lang.name.clone())
-                .or_insert_with(|| std::sync::Arc::clone(&compiled)),
+                .or_insert(compiled),
         ))
     }
 }

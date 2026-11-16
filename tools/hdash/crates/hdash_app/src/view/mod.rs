@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
-use hwt_core::{Interval, Reply, spawn_job};
+use hwt_core::{Interval, Reply, Roots, spawn_job};
 use log::warn;
 use ratatui::layout::Rect;
 
@@ -19,7 +19,7 @@ use crate::facets::Chip;
 use crate::focus::{PresenceProbe, Presences};
 use crate::hits::Hits;
 use crate::model::item::{Item, Model, UiState, in_pr_scope, item_visible, merge, scan};
-use crate::model::pull::{PullMsg, PullOutcome, pull};
+use crate::model::pull::{PullError, PullMsg, PullOutcome, pull};
 use crate::model::task::{
     BlockPrMsg, CachedPr, GitMsg, PrMsg, PrStatus, Task, TaskId, adopt, clear_pr_cache, read_git,
     read_pr_cache, read_pr_status, record_block_pr_state, set_backlog, toggle_done, write_pr_cache,
@@ -388,7 +388,7 @@ impl DashView {
         let msgs: Vec<BlockPrMsg> = self.block_pr_rx.try_iter().take(DRAIN_CAP).collect();
         let mut changed = false;
         for msg in msgs {
-            match record_block_pr_state(&msg.id, &msg.url, msg.status) {
+            match record_block_pr_state(&Roots::of_user(), &msg.id, &msg.url, msg.status) {
                 Ok(Some(block)) => {
                     if let Some(task) = self.model.task_mut(&msg.id) {
                         task.block = Some(block);
@@ -555,7 +555,7 @@ impl DashView {
             self.pull_tx.clone(),
             PullMsg {
                 project: name.clone(),
-                result: Err("the pull job stopped before it finished".to_owned()),
+                result: Err(PullError::JobStopped),
             },
         );
         spawn_job(move || {
@@ -579,7 +579,7 @@ impl DashView {
                 Err(reason) => {
                     warn!("git pull failed for {}: {reason}", msg.project);
                     Pull {
-                        state: PullState::Failed(reason),
+                        state: PullState::Failed(reason.to_string()),
                         expires: None,
                     }
                 }
@@ -612,7 +612,7 @@ impl DashView {
     }
 
     fn toggle_done(&mut self, id: &TaskId) {
-        match toggle_done(id) {
+        match toggle_done(&Roots::of_user(), id) {
             Ok(done) => {
                 if let Some(task) = self.model.task_mut(id) {
                     task.done = done;
@@ -631,7 +631,7 @@ impl DashView {
             return;
         }
         let backlog = !item.backlogged();
-        if let Err(err) = set_backlog(id, backlog) {
+        if let Err(err) = set_backlog(&Roots::of_user(), id, backlog) {
             warn!("recording backlog failed for {id:?}: {err}");
             return;
         }
@@ -642,7 +642,7 @@ impl DashView {
     }
 
     fn adopt(&mut self, id: &TaskId) {
-        match adopt(id) {
+        match adopt(&Roots::of_user(), id) {
             Ok(()) => {
                 if let Some(task) = self.model.task_mut(id) {
                     task.adopted = true;

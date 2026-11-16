@@ -34,20 +34,33 @@ pub fn char_col_to_byte_col(line: &str, char_col: usize) -> Option<usize> {
 /// the buffer has no such line, the column is outside the line, or neither the
 /// character under the cursor nor the one before it is an identifier character.
 pub fn identifier_at(text: &str, pos: Position) -> Option<String> {
-    let line = text.lines().nth(pos.line as usize)?;
-    let (start, end) = identifier_span(line, pos.character as usize)?;
-    Some(line[start..end].to_string())
+    let line = line_at(text, pos.line)?;
+    let (start, end) = identifier_span(line, pos.character)?;
+    line.get(start..end).map(str::to_string)
 }
 
-fn identifier_span(line: &str, char_col: usize) -> Option<(usize, usize)> {
-    let byte_col = char_col_to_byte_col(line, char_col)?;
-    let (head, tail) = line.split_at(byte_col);
+/// The `line`th line of `text`, counted from zero.
+pub fn line_at(text: &str, line: u32) -> Option<&str> {
+    text.lines().nth(usize::try_from(line).ok()?)
+}
+
+/// Byte offset in `line` of the character at LSP column `character`; `None`
+/// past the end of the line.
+pub fn byte_col_at(line: &str, character: u32) -> Option<usize> {
+    char_col_to_byte_col(line, usize::try_from(character).ok()?)
+}
+
+fn identifier_span(line: &str, character: u32) -> Option<(usize, usize)> {
+    let byte_col = byte_col_at(line, character)?;
+    let (head, tail) = line.split_at_checked(byte_col)?;
     let (head, tail) = if tail.chars().next().is_some_and(is_identifier_char) {
         (head, tail)
     } else {
-        let previous = head.chars().next_back().filter(|c| is_identifier_char(*c))?;
-        let cut = head.len() - previous.len_utf8();
-        (&line[..cut], &line[cut..])
+        let previous = head
+            .chars()
+            .next_back()
+            .filter(|c| is_identifier_char(*c))?;
+        line.split_at_checked(head.len() - previous.len_utf8())?
     };
     let start = head.trim_end_matches(is_identifier_char).len();
     let end = head.len() + tail.find(|c| !is_identifier_char(c)).unwrap_or(tail.len());
@@ -71,14 +84,14 @@ pub enum Receiver {
 /// `::`, when nothing identifier-like sits before the separator, or when the
 /// cursor is not on an identifier.
 pub fn receiver_at(text: &str, pos: Position) -> Option<Receiver> {
-    let line = text.lines().nth(pos.line as usize)?;
-    let (name_start, _) = identifier_span(line, pos.character as usize)?;
-    let before = &line[..name_start];
+    let line = line_at(text, pos.line)?;
+    let (name_start, _) = identifier_span(line, pos.character)?;
+    let before = line.get(..name_start)?;
     let before = before
         .strip_suffix("->")
         .or_else(|| before.strip_suffix("::"))
         .or_else(|| before.strip_suffix('.'))?;
-    let receiver = &before[before.trim_end_matches(is_identifier_char).len()..];
+    let receiver = before.get(before.trim_end_matches(is_identifier_char).len()..)?;
     match receiver {
         "" => None,
         "self" | "this" => Some(Receiver::SelfLike),
@@ -123,7 +136,8 @@ pub fn receiver_type(
             let escaped = regex::escape(var);
             let ty = r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*";
             let annotation = Regex::new(&format!(r"\b{escaped}\s*:\s*({ty})")).ok()?;
-            let assignment = Regex::new(&format!(r"\b{escaped}\s*=\s*(?:new\s+)?({ty})\s*\(")).ok()?;
+            let assignment =
+                Regex::new(&format!(r"\b{escaped}\s*=\s*(?:new\s+)?({ty})\s*\(")).ok()?;
             declared_type(text, pos.line, &annotation)
                 .or_else(|| declared_type(text, pos.line, &assignment))
         }
@@ -133,12 +147,12 @@ pub fn receiver_type(
 fn declared_type(text: &str, line: u32, pattern: &Regex) -> Option<String> {
     let mut above: Option<(u32, String)> = None;
     let mut below: Option<(u32, String)> = None;
-    for (i, l) in text.lines().enumerate() {
-        let i = i as u32;
-        let Some(caps) = pattern.captures(l) else {
+    for (i, l) in (0u32..).zip(text.lines()) {
+        let Some(declared) = pattern.captures(l).and_then(|caps| caps.get(1)) else {
             continue;
         };
-        let ty = caps[1].rsplit('.').next().unwrap_or(&caps[1]).to_string();
+        let declared = declared.as_str();
+        let ty = declared.rsplit('.').next().unwrap_or(declared).to_string();
         if i <= line {
             above = Some((i, ty));
         } else if below.is_none() {
@@ -278,14 +292,23 @@ mod tests {
     // Pins that in `a.b` the cursor's own segment is the name, since a method is looked up alone.
     #[test]
     fn dotted_access_resolves_the_segment_under_the_cursor() {
-        assert_eq!(identifier_at("obj.draw()", at(0, 5)).as_deref(), Some("draw"));
-        assert_eq!(identifier_at("obj.draw()", at(0, 1)).as_deref(), Some("obj"));
+        assert_eq!(
+            identifier_at("obj.draw()", at(0, 5)).as_deref(),
+            Some("draw")
+        );
+        assert_eq!(
+            identifier_at("obj.draw()", at(0, 1)).as_deref(),
+            Some("obj")
+        );
     }
 
     // Pins that columns count characters, so a multibyte character earlier in the line does not shift the name.
     #[test]
     fn multibyte_characters_before_the_name_do_not_shift_it() {
-        assert_eq!(identifier_at("é = make()", at(0, 5)).as_deref(), Some("make"));
+        assert_eq!(
+            identifier_at("é = make()", at(0, 5)).as_deref(),
+            Some("make")
+        );
     }
 
     // Pins S4: a name defined in two languages lists the buffer's language first, though its file sorts later.
@@ -336,10 +359,19 @@ mod tests {
         assert_eq!(files(&found)[0], "z.py");
     }
 
-    fn scoped(name: &str, kind: SymbolKind, file: &str, lines: (u32, u32), container: Option<&str>) -> IndexEntry {
+    fn scoped(
+        name: &str,
+        kind: SymbolKind,
+        file: &str,
+        lines: (u32, u32),
+        container: Option<&str>,
+    ) -> IndexEntry {
         let mut e = entry(name, "python", file, lines.0);
         e.kind = kind;
-        e.range.end = Position { line: lines.1, character: 0 };
+        e.range.end = Position {
+            line: lines.1,
+            character: 0,
+        };
         e.container = container.map(str::to_string);
         e
     }
@@ -347,8 +379,14 @@ mod tests {
     // Pins that `self.method` is recognised as a call on the enclosing class, whatever the method is called.
     #[test]
     fn self_receiver_is_self_like() {
-        assert_eq!(receiver_at("    self.get_state()", at(0, 12)), Some(Receiver::SelfLike));
-        assert_eq!(receiver_at("this.get()", at(0, 6)), Some(Receiver::SelfLike));
+        assert_eq!(
+            receiver_at("    self.get_state()", at(0, 12)),
+            Some(Receiver::SelfLike)
+        );
+        assert_eq!(
+            receiver_at("this.get()", at(0, 6)),
+            Some(Receiver::SelfLike)
+        );
     }
 
     // Pins that any other identifier before the dot is carried through as the receiver's name.
@@ -393,7 +431,13 @@ mod tests {
             scoped("Inner", SymbolKind::CLASS, "a.py", (5, 10), Some("Outer")),
             scoped("Elsewhere", SymbolKind::CLASS, "b.py", (0, 20), None),
         ];
-        let got = receiver_type("", at(7, 4), &Receiver::SelfLike, Some(Path::new("a.py")), &entries);
+        let got = receiver_type(
+            "",
+            at(7, 4),
+            &Receiver::SelfLike,
+            Some(Path::new("a.py")),
+            &entries,
+        );
         assert_eq!(got.as_deref(), Some("Inner"));
     }
 
@@ -427,14 +471,26 @@ mod tests {
     #[test]
     fn receiver_naming_an_indexed_class_is_that_class() {
         let entries = [scoped("Foo", SymbolKind::CLASS, "a.py", (0, 5), None)];
-        let got = receiver_type("Foo.bar()", at(0, 5), &Receiver::Named("Foo".to_string()), None, &entries);
+        let got = receiver_type(
+            "Foo.bar()",
+            at(0, 5),
+            &Receiver::Named("Foo".to_string()),
+            None,
+            &entries,
+        );
         assert_eq!(got.as_deref(), Some("Foo"));
     }
 
     // Pins that a variable the file never types resolves to nothing, so the caller falls back to name alone.
     #[test]
     fn untyped_variable_resolves_to_nothing() {
-        let got = receiver_type("x.run()", at(0, 3), &Receiver::Named("x".to_string()), None, &[]);
+        let got = receiver_type(
+            "x.run()",
+            at(0, 3),
+            &Receiver::Named("x".to_string()),
+            None,
+            &[],
+        );
         assert_eq!(got, None);
     }
 
@@ -442,8 +498,20 @@ mod tests {
     #[test]
     fn container_keeps_only_that_classes_method() {
         let entries = [
-            scoped("get_state", SymbolKind::METHOD, "a.py", (2, 3), Some("Widget")),
-            scoped("get_state", SymbolKind::METHOD, "a.py", (8, 9), Some("Gadget")),
+            scoped(
+                "get_state",
+                SymbolKind::METHOD,
+                "a.py",
+                (2, 3),
+                Some("Widget"),
+            ),
+            scoped(
+                "get_state",
+                SymbolKind::METHOD,
+                "a.py",
+                (8, 9),
+                Some("Gadget"),
+            ),
         ];
         let found = lookup(&entries, "get_state", Some("python"), Some("Gadget"));
         assert_eq!(found.len(), 1);
@@ -454,8 +522,20 @@ mod tests {
     #[test]
     fn container_matching_nothing_falls_back_to_every_definition() {
         let entries = [
-            scoped("get_state", SymbolKind::METHOD, "a.py", (2, 3), Some("Widget")),
-            scoped("get_state", SymbolKind::METHOD, "a.py", (8, 9), Some("Gadget")),
+            scoped(
+                "get_state",
+                SymbolKind::METHOD,
+                "a.py",
+                (2, 3),
+                Some("Widget"),
+            ),
+            scoped(
+                "get_state",
+                SymbolKind::METHOD,
+                "a.py",
+                (8, 9),
+                Some("Gadget"),
+            ),
         ];
         let found = lookup(&entries, "get_state", Some("python"), Some("Base"));
         assert_eq!(found.len(), 2);

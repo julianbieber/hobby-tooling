@@ -300,21 +300,20 @@ fn resolve(
     parent: &[String],
     known: &BTreeSet<Vec<String>>,
 ) -> Option<Vec<String>> {
-    let mut absolute: Vec<String> = match used.first().map(String::as_str) {
-        Some("crate") => Vec::new(),
-        Some("super") => parent.to_vec(),
-        Some("self") => here.to_vec(),
+    let (anchor, rest) = used.split_first()?;
+    let mut absolute: Vec<String> = match anchor.as_str() {
+        "crate" => Vec::new(),
+        "super" => parent.to_vec(),
+        "self" => here.to_vec(),
         _ => return None,
     };
-    absolute.extend_from_slice(&used[1..]);
+    absolute.extend_from_slice(rest);
 
-    for end in (1..=absolute.len()).rev() {
-        let candidate = absolute[..end].to_vec();
-        if known.contains(&candidate) {
-            return Some(candidate);
-        }
-    }
-    None
+    (1..=absolute.len())
+        .rev()
+        .filter_map(|end| absolute.get(..end))
+        .find(|candidate| known.contains(*candidate))
+        .map(<[String]>::to_vec)
 }
 
 /// Rewrite every `budget:` line the code has moved below, and return how many
@@ -331,14 +330,16 @@ pub fn ratchet(source: &str, measured: &[Measured]) -> (String, usize) {
     edits.sort_by_key(|(_, start)| std::cmp::Reverse(*start));
 
     let mut out = source.to_owned();
+    let mut tightened = 0;
     for (m, start) in &edits {
-        let end = out[*start..]
-            .find('\n')
-            .map(|i| start + i)
-            .unwrap_or(out.len());
+        let Some(line) = out.get(*start..) else {
+            continue;
+        };
+        let end = line.find('\n').map_or(out.len(), |i| start + i);
         out.replace_range(*start..end, &format!("budget: {}", m.actual));
+        tightened += 1;
     }
-    (out, edits.len())
+    (out, tightened)
 }
 
 /// Whether any diagnostic is an error.

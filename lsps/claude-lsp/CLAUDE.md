@@ -25,9 +25,11 @@ Helix <--LSP--> claude-lsp --zellij write-chars--> Claude Code (zellij pane)
 ## Key modules
 
 - `main.rs` — entry point, LSP transport setup
+- `lib.rs` — the modules below, as the library `main.rs` runs
 - `server.rs` — `LanguageServer` trait impl, code action handling
 - `actions.rs` — comment detection, prompt formatting, context gathering
 - `bridge.rs` — Zellij pane communication
+- `symbols.rs` — claude comments as document and workspace symbols
 
 ## Build
 

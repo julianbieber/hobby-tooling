@@ -10,7 +10,8 @@ pub use interval::Interval;
 pub use jobs::{Reply, spawn_job};
 pub use logfile::log_to_file;
 
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -50,20 +51,46 @@ pub fn notes_root() -> PathBuf {
     home().join("fun_repos/hobby-mimisbrunnr/notes")
 }
 
+/// The trees hobby work lives in, all under one home directory: [`notes_root`],
+/// [`worktrees_root`], [`aspects_root`] and [`projects_root`] for a given home.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Roots {
+    pub notes: PathBuf,
+    pub worktrees: PathBuf,
+    pub aspects: PathBuf,
+    pub projects: PathBuf,
+}
+
+impl Roots {
+    pub fn under(home: &Path) -> Self {
+        Self {
+            notes: home.join("fun_repos/hobby-mimisbrunnr/notes"),
+            worktrees: home.join("fun_worktrees"),
+            aspects: home.join("fun_aspects"),
+            projects: home.join("fun_repos"),
+        }
+    }
+
+    /// The trees under [`home`].
+    pub fn of_user() -> Self {
+        Self::under(&home())
+    }
+}
+
 /// `$XDG_CACHE_HOME/<app>/<file>` (default `~/.cache/<app>/<file>`).
 pub fn xdg_cache_path(app: &str, file: &str) -> PathBuf {
-    let base = std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home().join(".cache"));
-    base.join(app).join(file)
+    xdg_path(std::env::var_os("XDG_CACHE_HOME"), ".cache", app, file)
 }
 
 /// `$XDG_CONFIG_HOME/<app>/<file>` (default `~/.config/<app>/<file>`).
 pub fn xdg_config_path(app: &str, file: &str) -> PathBuf {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home().join(".config"));
-    base.join(app).join(file)
+    xdg_path(std::env::var_os("XDG_CONFIG_HOME"), ".config", app, file)
+}
+
+fn xdg_path(base: Option<OsString>, home_default: &str, app: &str, file: &str) -> PathBuf {
+    base.map_or_else(|| home().join(home_default), PathBuf::from)
+        .join(app)
+        .join(file)
 }
 
 // ---------------------------------------------------------------------------
@@ -380,29 +407,30 @@ mod tests {
 
     #[test]
     fn xdg_paths_honor_env() {
-        // SAFETY: no other test in this crate reads these vars concurrently.
-        unsafe {
-            std::env::set_var("XDG_CACHE_HOME", "/tmp/xdg-cache-test");
-            std::env::set_var("XDG_CONFIG_HOME", "/tmp/xdg-config-test");
-        }
         assert_eq!(
-            xdg_cache_path("app", "f.json"),
+            xdg_path(
+                Some("/tmp/xdg-cache-test".into()),
+                ".cache",
+                "app",
+                "f.json"
+            ),
             PathBuf::from("/tmp/xdg-cache-test/app/f.json")
         );
         assert_eq!(
-            xdg_config_path("app", "f.json"),
+            xdg_path(
+                Some("/tmp/xdg-config-test".into()),
+                ".config",
+                "app",
+                "f.json"
+            ),
             PathBuf::from("/tmp/xdg-config-test/app/f.json")
         );
-        unsafe {
-            std::env::remove_var("XDG_CACHE_HOME");
-            std::env::remove_var("XDG_CONFIG_HOME");
-        }
         assert_eq!(
-            xdg_cache_path("app", "f.json"),
+            xdg_path(None, ".cache", "app", "f.json"),
             home().join(".cache/app/f.json")
         );
         assert_eq!(
-            xdg_config_path("app", "f.json"),
+            xdg_path(None, ".config", "app", "f.json"),
             home().join(".config/app/f.json")
         );
     }

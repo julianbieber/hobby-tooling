@@ -1,42 +1,39 @@
-use anyhow::Result;
-use hobby_lsp_mcp::{config, lsp, LspMcpServer};
-use rmcp::{transport::stdio, ServiceExt};
-use std::env;
+//! The `hobby-lsp-mcp` binary: serves MCP on stdio, with logs on stderr
+//! because stdout carries the protocol.
+//!
+//! The optional first argument is the fallback workspace root; it defaults to
+//! the current directory.
+
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::process::ExitCode;
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    // Load Helix language server configuration
-    let config = config::load_helix_config()?;
-    let helix_config_path = config::helix_config_path()?;
+async fn main() -> ExitCode {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_ansi(false)
+        .init();
 
-    // Determine workspace root (use current directory or passed argument)
-    let workspace_root = env::args()
-        .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| env::current_dir().expect("Failed to get current directory"));
+    let workspace_root = match std::env::args_os().nth(1) {
+        Some(arg) => PathBuf::from(arg),
+        None => match std::env::current_dir() {
+            Ok(dir) => dir,
+            Err(e) => return fail(&hobby_lsp_mcp::LspMcpError::WorkspaceRoot(e)),
+        },
+    };
 
-    // Startup diagnostics must go to stderr: this server speaks MCP JSON-RPC
-    // over stdout, and any non-JSON line there corrupts the client's stream.
-    eprintln!(
-        "LSP-MCP Server starting with workspace: {}",
-        workspace_root.display()
+    match hobby_lsp_mcp::serve_stdio(workspace_root).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => fail(&e),
+    }
+}
+
+fn fail(e: &hobby_lsp_mcp::LspMcpError) -> ExitCode {
+    let error: &dyn std::error::Error = e;
+    tracing::error!(
+        error,
+        error_class = std::any::type_name_of_val(e),
+        "LSP-MCP server stopped"
     );
-    eprintln!("Helix config: {}", helix_config_path.display());
-    eprintln!(
-        "Loaded {} language servers from Helix config",
-        config.language_servers.len()
-    );
-
-    // Create LSP manager
-    let lsp_manager = Arc::new(lsp::LspManager::new(config, workspace_root));
-
-    // Create and start the MCP server with stdio transport
-    let service = LspMcpServer::new(lsp_manager).serve(stdio()).await?;
-
-    // Wait for the server to complete
-    service.waiting().await?;
-
-    Ok(())
+    ExitCode::FAILURE
 }

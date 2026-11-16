@@ -1,0 +1,16 @@
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+allow-dbg-in-tests = true
+allow-print-in-tests = true
+
+disallowed-types = [
+    { path = "std::sync::Mutex", reason = "poisoning forces an unwrap; use parking_lot::Mutex, or tokio::sync::Mutex when held across .await" },
+    { path = "std::sync::RwLock", reason = "poisoning forces an unwrap; use parking_lot::RwLock" },
+    { path = "anyhow::Error", reason = "errors are typed with thiserror", allow-invalid = true },
+    { path = "anyhow::Result", reason = "errors are typed with thiserror", allow-invalid = true },
+    { path = "eyre::Report", reason = "errors are typed with thiserror", allow-invalid = true },
+    { path = "eyre::Result", reason = "errors are typed with thiserror", allow-invalid = true },
+    { path = "chrono::Local", reason = "times are DateTime<Utc>; convert to a named zone only at the edge", allow-invalid = true },
+]

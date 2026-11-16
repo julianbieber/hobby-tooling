@@ -33,6 +33,11 @@ fn parse(args: &[String]) -> Result<hatlas::Options, String> {
 }
 
 fn main() -> ExitCode {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .without_time()
+        .with_target(false)
+        .init();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "-h" || a == "--help") {
         println!("{USAGE}");
@@ -41,35 +46,41 @@ fn main() -> ExitCode {
     let options = match parse(&args) {
         Ok(options) => options,
         Err(why) => {
-            eprintln!("hatlas: {why}\n{USAGE}");
+            tracing::error!(reason = %why, "bad arguments");
+            tracing::info!("{USAGE}");
             return ExitCode::FAILURE;
         }
     };
     match hatlas::run(&options) {
         Ok(s) => {
-            println!(
-                "{} ({} crates, {} modules, {} plugins, {} components, {} resources, {} systems, {} observers, {} events, {} dependencies ({} items, {} undocumented, {} unmapped), {} unresolved, {} pages)",
-                s.index.display(),
-                s.crates,
-                s.modules,
-                s.plugins,
-                s.components,
-                s.resources,
-                s.systems,
-                s.observers,
-                s.events,
-                s.dependencies,
-                s.dependency_items,
-                s.undocumented,
-                s.unmapped,
-                s.unresolved,
-                s.pages
-            );
+            println!("{}", summary_line(&s));
             ExitCode::SUCCESS
         }
-        Err(why) => {
-            eprintln!("hatlas: {why}");
+        Err(e) => {
+            let error: &dyn std::error::Error = &e;
+            tracing::error!(error, "hatlas failed");
             ExitCode::FAILURE
         }
     }
+}
+
+fn summary_line(s: &hatlas::Summary) -> String {
+    format!(
+        "{} ({} crates, {} modules, {} plugins, {} components, {} resources, {} systems, {} observers, {} events, {} dependencies ({} items, {} undocumented, {} unmapped), {} unresolved, {} pages)",
+        s.index.display(),
+        s.crates,
+        s.modules,
+        s.plugins,
+        s.components,
+        s.resources,
+        s.systems,
+        s.observers,
+        s.events,
+        s.dependencies,
+        s.dependency_items,
+        s.undocumented,
+        s.unmapped,
+        s.unresolved,
+        s.pages
+    )
 }

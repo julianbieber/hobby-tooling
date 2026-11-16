@@ -4,7 +4,10 @@
 use std::process::{Command, ExitCode};
 use std::time::{Duration, Instant};
 
-use crate::merged::{self, Checks};
+use serde_json::{Map, Value};
+
+use crate::merged::{self, Checks, ViewError};
+use crate::output::Output;
 
 /// Matches the acceptance-repair cap `/task:auto`'s `verify` phase already uses, so the
 /// pipeline has one bound rather than two (`business-context.md` `## fix-loop-bound`).
@@ -151,9 +154,18 @@ fn excerpt(log: &str, max_lines: usize) -> String {
         .copied()
         .filter(|l| LOG_SIGNATURE_NEEDLES.iter().any(|n| l.contains(n)))
         .collect();
-    let chosen: &[&str] = if signature.is_empty() { &lines } else { &signature };
+    let chosen: &[&str] = if signature.is_empty() {
+        &lines
+    } else {
+        &signature
+    };
     let start = chosen.len().saturating_sub(max_lines);
-    let joined = chosen[start..].join("\n");
+    let joined = chosen
+        .iter()
+        .skip(start)
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n");
     let char_count = joined.chars().count();
     if char_count > 2000 {
         joined.chars().skip(char_count - 2000).collect()
@@ -174,8 +186,7 @@ fn repo_from_url(url: &str) -> Option<(String, String)> {
 }
 
 fn ids_from_details_url(url: &str) -> Option<(String, String)> {
-    let marker = "/actions/runs/";
-    let rest = &url[url.find(marker)? + marker.len()..];
+    let (_, rest) = url.split_once("/actions/runs/")?;
     let mut segments = rest.split('/');
     let run = segments.next()?;
     if segments.next()? != "job" {
@@ -193,31 +204,25 @@ fn ids_from_details_url(url: &str) -> Option<(String, String)> {
 }
 
 fn parse_base_checks(json: &str) -> Vec<String> {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+    let Ok(value) = serde_json::from_str::<Value>(json) else {
         return Vec::new();
     };
     value
         .get("check_runs")
-        .and_then(serde_json::Value::as_array)
+        .and_then(Value::as_array)
         .map(|entries| {
             entries
                 .iter()
                 .filter(|e| {
-                    let status = e
-                        .get("status")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or_default();
+                    let status = e.get("status").and_then(Value::as_str).unwrap_or_default();
                     let conclusion = e
                         .get("conclusion")
-                        .and_then(serde_json::Value::as_str)
+                        .and_then(Value::as_str)
                         .unwrap_or_default();
-                    status == "completed" && !matches!(conclusion, "success" | "neutral" | "skipped")
+                    status == "completed"
+                        && !matches!(conclusion, "success" | "neutral" | "skipped")
                 })
-                .filter_map(|e| {
-                    e.get("name")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_owned)
-                })
+                .filter_map(|e| e.get("name").and_then(Value::as_str).map(str::to_owned))
                 .collect()
         })
         .unwrap_or_default()
@@ -239,16 +244,13 @@ fn base_failing_checks(pr: &str) -> Vec<String> {
     let Some(pr_json) = gh_stdout(&["pr", "view", pr, "--json", "url,baseRefName"]) else {
         return Vec::new();
     };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&pr_json) else {
+    let Ok(value) = serde_json::from_str::<Value>(&pr_json) else {
         return Vec::new();
     };
-    let url = value
-        .get("url")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
+    let url = value.get("url").and_then(Value::as_str).unwrap_or_default();
     let base = value
         .get("baseRefName")
-        .and_then(serde_json::Value::as_str)
+        .and_then(Value::as_str)
         .unwrap_or_default();
     let Some((owner, repo)) = repo_from_url(url) else {
         return Vec::new();
@@ -286,19 +288,18 @@ fn gather_evidence(pr: &str, view: &merged::View) -> Evidence {
     }
 }
 
-fn line(pr: &str, outcome: &str, extra: serde_json::Value, spent: u32, bound: u32) -> String {
-    let mut object = serde_json::json!({
-        "pr": pr,
-        "outcome": outcome,
-        "spent": spent,
-        "bound": bound,
-    });
-    if let serde_json::Value::Object(fields) = extra {
-        for (k, v) in fields {
-            object[k] = v;
-        }
-    }
-    object.to_string()
+fn line(pr: &str, outcome: &str, extra: Map<String, Value>, spent: u32, bound: u32) -> String {
+    let mut object = Map::new();
+    object.insert("pr".to_owned(), Value::from(pr));
+    object.insert("outcome".to_owned(), Value::from(outcome));
+    object.insert("spent".to_owned(), Value::from(spent));
+    object.insert("bound".to_owned(), Value::from(bound));
+    object.extend(extra);
+    Value::Object(object).to_string()
+}
+
+fn checks(name: &str) -> Map<String, Value> {
+    Map::from_iter([("checks".to_owned(), Value::from(name))])
 }
 
 /// Poll the PR's checks until they resolve, then decide what happens next: `hcoord ci`
@@ -308,72 +309,52 @@ fn line(pr: &str, outcome: &str, extra: serde_json::Value, spent: u32, bound: u3
 /// or the checks never resolve within the timeout (2) — the same split `hcoord merged`
 /// uses. A repo with no checks is green here exactly as it is in `merged`: anything else
 /// would stop every PR in a repo with no CI, this one included.
-pub fn run(pr: &str, spent: u32, bound: u32, timeout_secs: u64) -> ExitCode {
+pub fn run(pr: &str, spent: u32, bound: u32, timeout_secs: u64) -> Result<Output, ViewError> {
     let deadline = Instant::now() + Duration::from_secs(timeout_secs);
     loop {
-        let view = match merged::view(pr) {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!("hcoord ci: {e}");
-                return ExitCode::from(1);
-            }
-        };
+        let view = merged::view(pr)?;
         match view.checks() {
             Checks::Pending => {
                 if Instant::now() >= deadline {
-                    println!(
-                        "{}",
-                        line(pr, "timeout", serde_json::json!({}), spent, bound)
-                    );
-                    return ExitCode::from(2);
+                    return Ok(Output::line(
+                        &line(pr, "timeout", Map::new(), spent, bound),
+                        ExitCode::from(2),
+                    ));
                 }
                 std::thread::sleep(POLL);
             }
             Checks::Green => {
-                println!(
-                    "{}",
-                    line(
-                        pr,
-                        "green",
-                        serde_json::json!({"checks": "green"}),
-                        spent,
-                        bound
-                    )
-                );
-                return ExitCode::SUCCESS;
+                return Ok(Output::line(
+                    &line(pr, "green", checks("green"), spent, bound),
+                    ExitCode::SUCCESS,
+                ));
             }
             Checks::None => {
-                println!(
-                    "{}",
-                    line(
-                        pr,
-                        "green",
-                        serde_json::json!({"checks": "none"}),
-                        spent,
-                        bound
-                    )
-                );
-                return ExitCode::SUCCESS;
+                return Ok(Output::line(
+                    &line(pr, "green", checks("none"), spent, bound),
+                    ExitCode::SUCCESS,
+                ));
             }
             Checks::Failing => {
                 let evidence = gather_evidence(pr, &view);
                 let verdict = classify(&evidence);
                 let report = resolve(verdict, spent, bound);
-                let first = evidence.failing.first();
-                let mut extra = serde_json::json!({});
+                let mut extra = Map::new();
                 if let Some(case) = report.case {
-                    extra["case"] = serde_json::Value::String(case.name().to_owned());
+                    extra.insert("case".to_owned(), Value::from(case.name()));
                 }
-                if let Some(reason) = &report.reason {
-                    extra["reason"] = serde_json::Value::String(reason.clone());
+                if let Some(reason) = report.reason {
+                    extra.insert("reason".to_owned(), Value::String(reason));
                 }
-                if let Some(f) = first {
-                    extra["check"] = serde_json::Value::String(f.name.clone());
-                    extra["run"] = serde_json::Value::String(f.run.clone());
-                    extra["log"] = serde_json::Value::String(f.log.clone());
+                if let Some(f) = evidence.failing.first() {
+                    extra.insert("check".to_owned(), Value::from(f.name.as_str()));
+                    extra.insert("run".to_owned(), Value::from(f.run.as_str()));
+                    extra.insert("log".to_owned(), Value::from(f.log.as_str()));
                 }
-                println!("{}", line(pr, report.outcome, extra, spent, bound));
-                return ExitCode::SUCCESS;
+                return Ok(Output::line(
+                    &line(pr, report.outcome, extra, spent, bound),
+                    ExitCode::SUCCESS,
+                ));
             }
         }
     }

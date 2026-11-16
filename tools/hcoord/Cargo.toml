@@ -2,14 +2,47 @@
 name = "hcoord"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.100"
 license = "MIT OR Apache-2.0"
 description = "The coordinator's task list: a ratatui view of tasks.json, and a blocking wait on a task's pipeline state."
+
+[lib]
+path = "src/lib.rs"
+doctest = false
 
 [[bin]]
 name = "hcoord"
 path = "src/main.rs"
 
 [dependencies]
-ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+ratatui = { version = "0.30", default-features = false, features = ["crossterm", "unstable-rendered-line-info"] }
+serde = { version = "1", default-features = false, features = ["std", "derive"] }
+serde_json = { version = "1", default-features = false, features = ["std"] }
+thiserror = { version = "2", default-features = false, features = ["std"] }
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+indexing_slicing = "deny"
+string_slice = "deny"
+exit = "deny"
+as_conversions = "deny"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+dbg_macro = "deny"
+disallowed_methods = "deny"
+disallowed_types = "deny"
+await_holding_lock = "deny"
+
+[profile.release]
+panic = "abort"
+debug = "line-tables-only"

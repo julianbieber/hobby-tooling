@@ -4,19 +4,29 @@
 # and evicting its binaries on every `cargo install`.
 name = "hdash_app"
 edition.workspace = true
+rust-version.workspace = true
 version.workspace = true
 license.workspace = true
 description = "A terminal dashboard of hobby work items: the tasks in the notes repo and their worktrees, PRs and Claude sessions."
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/lib.rs"
+doctest = false
 
 [[bin]]
 name = "hdash"
 path = "src/main.rs"
 
 [dependencies]
-hwt_core = { path = "../hwt_core" }
-log = "0.4"
-ratatui = "0.30"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-signal-hook = "0.3"
-unicode-width = "0.2"
+hwt_core.workspace = true
+log.workspace = true
+parking_lot.workspace = true
+ratatui.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+signal-hook.workspace = true
+thiserror.workspace = true
+unicode-width.workspace = true

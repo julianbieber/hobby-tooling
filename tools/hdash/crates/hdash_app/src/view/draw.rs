@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 
@@ -19,8 +19,8 @@ use crate::model::project::Project;
 use crate::model::task::{AspectRef, Pr, PrStatus, Repo, Task, TaskId, TodoCount, TodoStatus};
 use crate::session::{Session, SessionState, now_secs};
 use crate::widgets::{
-    self, ACCENT, AMBER, CLOSED, DIM, DONE, Lines, MERGED, SIDEBAR_COLS, badge, button, clean,
-    clip_rect, draw_field, draw_item, flow, text, too_small, truncate,
+    self, ACCENT, AMBER, CLOSED, DIM, DONE, Lines, MERGED, SIDEBAR_COLS, badge, button, cells,
+    clean, clip_rect, draw_field, draw_item, flow, text, too_small, truncate,
 };
 
 type Item_ = widgets::Item<Control>;
@@ -134,12 +134,12 @@ impl DashView {
             inner.x,
             inner.y + 1,
             hint,
-            inner.width as usize,
+            usize::from(inner.width),
             Style::default().fg(DIM),
         );
 
         let field_y = inner.y + 2;
-        let field_w = inner.width.saturating_sub("[clear]".len() as u16 + 1);
+        let field_w = inner.width.saturating_sub(cells("[clear]".len()) + 1);
         let field = Rect::new(inner.x, field_y, field_w, 1);
         draw_field(
             buf,
@@ -169,7 +169,7 @@ impl DashView {
                 per_project.get(p.name.as_str()).copied().unwrap_or(0),
             )
         }));
-        let max_scroll = (rows.len() as u16).saturating_sub(list.height);
+        let max_scroll = cells(rows.len()).saturating_sub(list.height);
         self.scroll_sidebar = self.scroll_sidebar.min(max_scroll);
         if listed.is_empty() {
             let msg = if projects.is_empty() {
@@ -183,16 +183,16 @@ impl DashView {
                 list.x,
                 list.y + 1,
                 clean(&msg),
-                list.width as usize,
+                usize::from(list.width),
                 Style::default().fg(DIM),
             );
         }
         for (i, (project, n)) in rows
             .into_iter()
             .enumerate()
-            .skip(self.scroll_sidebar as usize)
+            .skip(usize::from(self.scroll_sidebar))
         {
-            let y = list.y + (i as u16 - self.scroll_sidebar);
+            let y = list.y + cells(i).saturating_sub(self.scroll_sidebar);
             if y >= list.y + list.height {
                 break;
             }
@@ -211,13 +211,13 @@ impl DashView {
             buf.set_style(row, style);
             let count = n.to_string();
             let pull_w: u16 = 7;
-            let name_w = list.width.saturating_sub(count.len() as u16 + pull_w + 1);
+            let name_w = list.width.saturating_sub(cells(count.len()) + pull_w + 1);
             let label = name.clone().unwrap_or_else(|| "All".to_owned());
             buf.set_stringn(
                 row.x,
                 y,
                 truncate(&clean(&label), name_w),
-                name_w as usize,
+                usize::from(name_w),
                 style,
             );
             self.hits.record(row, list, control);
@@ -234,7 +234,7 @@ impl DashView {
                 }
             }
             buf.set_string(
-                row.x + list.width - count.len() as u16,
+                row.x + list.width - cells(count.len()),
                 y,
                 &count,
                 style.fg(DIM),
@@ -262,7 +262,7 @@ impl DashView {
         buf.set_string(
             inner.x,
             y,
-            "─".repeat(inner.width as usize),
+            "─".repeat(usize::from(inner.width)),
             Style::default().fg(DIM),
         );
         y += 1;
@@ -462,7 +462,7 @@ impl DashView {
                 list.x,
                 list.y,
                 msg,
-                list.width as usize,
+                usize::from(list.width),
                 Style::default().fg(DIM),
             );
             self.scroll_list = 0;
@@ -473,15 +473,15 @@ impl DashView {
         let mut total: u16 = 0;
         for (_, lines) in &cards {
             tops.push(total);
-            total = total.saturating_add(lines.len() as u16 + 2);
+            total = total.saturating_add(cells(lines.len()) + 2);
         }
         if std::mem::take(&mut self.scroll_to_selected)
-            && let Some(i) = cards
+            && let Some(((_, lines), &top)) = cards
                 .iter()
-                .position(|(id, _)| Some(id) == self.selected.as_ref())
+                .zip(&tops)
+                .find(|((id, _), _)| Some(id) == self.selected.as_ref())
         {
-            let top = tops[i];
-            let bottom = top + cards[i].1.len() as u16 + 2;
+            let bottom = top + cells(lines.len()) + 2;
             if top < self.scroll_list {
                 self.scroll_list = top;
             } else if bottom > self.scroll_list + list.height {
@@ -494,29 +494,32 @@ impl DashView {
             .iter()
             .zip(&tops)
             .filter(|((_, lines), top)| {
-                **top >= scroll && **top + lines.len() as u16 + 2 <= scroll + list.height
+                **top >= scroll && **top + cells(lines.len()) + 2 <= scroll + list.height
             })
             .count()
             .max(1);
 
         for ((id, lines), top) in cards.iter().zip(&tops) {
-            let height = lines.len() as u16 + 2;
+            let height = cells(lines.len()) + 2;
             if top + height <= scroll || *top >= scroll + list.height {
                 continue;
             }
             let selected = self.selected.as_ref() == Some(id);
             let border = Style::default().fg(if selected { ACCENT } else { DIM });
-            let card_y = list.y as i32 + *top as i32 - scroll as i32;
-            if let Some(body) = clip_rect(list.x as i32, card_y, list.width, height, list) {
+            let card_y = i32::from(list.y) + i32::from(*top) - i32::from(scroll);
+            if let Some(body) = clip_rect(i32::from(list.x), card_y, list.width, height, list) {
                 self.hits.record(body, list, Control::CardBody(id.clone()));
             }
             for li in 0..height {
-                let y = card_y + li as i32;
-                if y < list.y as i32 || y >= (list.y + list.height) as i32 {
+                let y = card_y + i32::from(li);
+                if y >= i32::from(list.y + list.height) {
                     continue;
                 }
-                let y = y as u16;
-                let w = list.width as usize;
+                let Ok(y) = u16::try_from(y) else { continue };
+                if y < list.y {
+                    continue;
+                }
+                let w = usize::from(list.width);
                 let edge = |l: &str, r: &str| format!("{l}{}{r}", "─".repeat(w.saturating_sub(2)));
                 if li == 0 {
                     buf.set_string(list.x, y, edge("┌", "┐"), border);
@@ -525,7 +528,7 @@ impl DashView {
                 } else {
                     buf.set_string(list.x, y, "│", border);
                     buf.set_string(list.x + list.width - 1, y, "│", border);
-                    for (x, item) in &lines[li as usize - 1] {
+                    for (x, item) in lines.get(usize::from(li - 1)).into_iter().flatten() {
                         self.draw_item(buf, list.x + 2 + x, y, item, list);
                     }
                 }
@@ -798,8 +801,7 @@ impl DashView {
             &mut self.hits,
             &self.hovered,
             &self.focus,
-            x,
-            y,
+            Position { x, y },
             item,
             clip,
         );

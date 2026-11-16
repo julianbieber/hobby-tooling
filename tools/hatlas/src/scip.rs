@@ -30,11 +30,18 @@ pub struct ScipIndex {
 }
 
 impl ScipIndex {
-    /// Fails with `Error::Scip` when the file cannot be read or decoded. Local
+    /// Fails with `Error::Io` when the file cannot be read and `Error::Scip` when it
+    /// does not decode. Local
     /// symbols are dropped.
     pub fn load(path: &Path) -> Result<ScipIndex, Error> {
-        let bytes = std::fs::read(path).map_err(|source| Error::Io { path: path.to_path_buf(), source })?;
-        let index = Index::parse_from_bytes(&bytes).map_err(|e| Error::Scip(format!("{}: {e}", path.display())))?;
+        let bytes = std::fs::read(path).map_err(|source| Error::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        let index = Index::parse_from_bytes(&bytes).map_err(|source| Error::Scip {
+            path: path.to_path_buf(),
+            source,
+        })?;
         Ok(ScipIndex::from_index(&index))
     }
 
@@ -43,14 +50,23 @@ impl ScipIndex {
         let mut lines: HashMap<(String, usize), Vec<Occurrence>> = HashMap::new();
         for doc in &index.documents {
             for occ in &doc.occurrences {
-                if occ.symbol.is_empty() || occ.symbol.starts_with("local ") || occ.range.len() < 3 {
+                if occ.symbol.is_empty() || occ.symbol.starts_with("local ") {
                     continue;
                 }
-                let (line, start) = (occ.range[0].max(0) as usize, occ.range[1].max(0) as usize);
+                let &[line, start, _, ..] = occ.range.as_slice() else {
+                    continue;
+                };
+                let (line, start) = (
+                    usize::try_from(line).unwrap_or(0),
+                    usize::try_from(start).unwrap_or(0),
+                );
                 lines
                     .entry((doc.relative_path.clone(), line))
                     .or_default()
-                    .push(Occurrence { start, symbol: occ.symbol.clone() });
+                    .push(Occurrence {
+                        start,
+                        symbol: occ.symbol.clone(),
+                    });
             }
         }
         ScipIndex { lines }
@@ -58,9 +74,10 @@ impl ScipIndex {
 
     /// Every kept occurrence as `(file, zero-based line, symbol)`, in no particular order.
     pub fn occurrences(&self) -> impl Iterator<Item = (&str, usize, &str)> {
-        self.lines
-            .iter()
-            .flat_map(|((file, line), occs)| occs.iter().map(move |o| (file.as_str(), *line, o.symbol.as_str())))
+        self.lines.iter().flat_map(|((file, line), occs)| {
+            occs.iter()
+                .map(move |o| (file.as_str(), *line, o.symbol.as_str()))
+        })
     }
 
     /// The symbol whose occurrence starts at exactly this zero-based line and column.
@@ -79,7 +96,9 @@ impl ScipIndex {
             .lines
             .get(&(file.to_string(), line))?
             .iter()
-            .filter(|o| parse_symbol(&o.symbol).is_some_and(|s| s.path.last().is_some_and(|l| l == name)))
+            .filter(|o| {
+                parse_symbol(&o.symbol).is_some_and(|s| s.path.last().is_some_and(|l| l == name))
+            })
             .map(|o| o.symbol.as_str());
         let first = found.next()?;
         found.all(|s| s == first).then_some(first)
@@ -182,7 +201,9 @@ mod tests {
     // Pins that a free function inside nested modules yields its module path and name, which is what an atlas lookup needs.
     #[test]
     fn function_symbol_gives_module_path() {
-        let s = parse_symbol("rust-analyzer cargo wusel 0.1.0 gameplay/world/refresh_edited_chunks().").unwrap();
+        let s =
+            parse_symbol("rust-analyzer cargo wusel 0.1.0 gameplay/world/refresh_edited_chunks().")
+                .unwrap();
         assert_eq!((s.package.as_str(), s.version.as_str()), ("wusel", "0.1.0"));
         assert_eq!(s.path, ["gameplay", "world", "refresh_edited_chunks"]);
     }
@@ -190,19 +211,26 @@ mod tests {
     // Pins that an enum variant keeps both the enum and the variant, so `WorldSystems::Refresh` resolves to the set.
     #[test]
     fn variant_symbol_keeps_enum_and_variant() {
-        assert_eq!(path("rust-analyzer cargo wusel 0.1.0 gameplay/world/WorldSystems#Refresh#"), ["gameplay", "world", "WorldSystems", "Refresh"]);
+        assert_eq!(
+            path("rust-analyzer cargo wusel 0.1.0 gameplay/world/WorldSystems#Refresh#"),
+            ["gameplay", "world", "WorldSystems", "Refresh"]
+        );
     }
 
     // Pins that a unit struct is its own type descriptor.
     #[test]
     fn type_symbol_ends_at_the_type() {
-        assert_eq!(path("rust-analyzer cargo wusel 0.1.0 gameplay/city_panel/CityPanelSystems#"), ["gameplay", "city_panel", "CityPanelSystems"]);
+        assert_eq!(
+            path("rust-analyzer cargo wusel 0.1.0 gameplay/city_panel/CityPanelSystems#"),
+            ["gameplay", "city_panel", "CityPanelSystems"]
+        );
     }
 
     // Pins that a symbol of another package keeps that package, so a dependency is told apart from workspace code.
     #[test]
     fn external_symbol_names_its_package() {
-        let s = parse_symbol("rust-analyzer cargo bevy_state 0.19.0 condition/in_state().").unwrap();
+        let s =
+            parse_symbol("rust-analyzer cargo bevy_state 0.19.0 condition/in_state().").unwrap();
         assert_eq!(s.package, "bevy_state");
         assert_eq!(s.path, ["condition", "in_state"]);
     }
@@ -211,16 +239,31 @@ mod tests {
     #[test]
     fn impl_members_carry_type_and_trait() {
         let s = parse_symbol("rust-analyzer cargo bevy_ecs 0.19.0 lib/system/commands/impl#[`Commands<'w, 's>`]spawn().").unwrap();
-        assert_eq!((s.impl_type.as_deref(), s.impl_trait), (Some("Commands"), None));
-        let s = parse_symbol("rust-analyzer cargo bevy_ecs 0.19.0 lib/entity/impl#[Entity][`PartialEq<Self>`]eq().").unwrap();
-        assert_eq!((s.impl_type.as_deref(), s.impl_trait.as_deref()), (Some("Entity"), Some("PartialEq")));
+        assert_eq!(
+            (s.impl_type.as_deref(), s.impl_trait),
+            (Some("Commands"), None)
+        );
+        let s = parse_symbol(
+            "rust-analyzer cargo bevy_ecs 0.19.0 lib/entity/impl#[Entity][`PartialEq<Self>`]eq().",
+        )
+        .unwrap();
+        assert_eq!(
+            (s.impl_type.as_deref(), s.impl_trait.as_deref()),
+            (Some("Entity"), Some("PartialEq"))
+        );
         assert_eq!(s.path, ["lib", "entity", "impl", "eq"]);
     }
 
     // Pins that a generic parameter and a backtick-quoted name do not corrupt the path.
     #[test]
     fn generics_and_quoted_names_are_handled() {
-        assert_eq!(path("rust-analyzer cargo p 1.0.0 m/Wrapper#new().[T]"), ["m", "Wrapper", "new"]);
-        assert_eq!(path("rust-analyzer cargo p 1.0.0 `my-mod`/f()."), ["my-mod", "f"]);
+        assert_eq!(
+            path("rust-analyzer cargo p 1.0.0 m/Wrapper#new().[T]"),
+            ["m", "Wrapper", "new"]
+        );
+        assert_eq!(
+            path("rust-analyzer cargo p 1.0.0 `my-mod`/f()."),
+            ["my-mod", "f"]
+        );
     }
 }

@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// The `format_version`s a committed fixture covers.
-pub const SUPPORTED: &[u32] = &[57, 61];
+pub const SUPPORTED: &[u64] = &[57, 61];
 
 /// An item id. Numeric in item fields, a string as an `index` or `paths` key.
 pub type Id = u64;
@@ -15,7 +15,7 @@ pub type Id = u64;
 /// One loaded rustdoc JSON file.
 pub struct Crate {
     file: PathBuf,
-    version: u32,
+    version: u64,
     json: Value,
     name: String,
     root: Id,
@@ -39,7 +39,10 @@ impl Crate {
             path: file.to_path_buf(),
             source,
         })?;
-        let json = serde_json::from_str(&text).map_err(|e| Error::Metadata(format!("{}: {e}", file.display())))?;
+        let json = serde_json::from_str(&text).map_err(|source| Error::RustdocJson {
+            path: file.to_path_buf(),
+            source,
+        })?;
         Crate::from_value(file.to_path_buf(), json)
     }
 
@@ -48,7 +51,7 @@ impl Crate {
     /// Fails with `MissingField` when a required top-level field is absent and
     /// with `UnsupportedFormat` when `format_version` is not in [`SUPPORTED`].
     pub fn from_value(file: PathBuf, json: Value) -> Result<Crate, Error> {
-        let missing = |version: Option<u32>, field: &str| Error::MissingField {
+        let missing = |version: Option<u64>, field: &str| Error::MissingField {
             file: file.clone(),
             version,
             field: field.to_string(),
@@ -56,7 +59,7 @@ impl Crate {
         let version = json
             .get("format_version")
             .and_then(Value::as_u64)
-            .ok_or_else(|| missing(None, "format_version"))? as u32;
+            .ok_or_else(|| missing(None, "format_version"))?;
         if !SUPPORTED.contains(&version) {
             return Err(Error::UnsupportedFormat {
                 file,
@@ -73,13 +76,20 @@ impl Crate {
                 return Err(missing(Some(version), field));
             }
         }
-        let name = json["index"]
-            .get(root.to_string())
+        let name = json
+            .get("index")
+            .and_then(|index| index.get(root.to_string()))
             .and_then(|r| r.get("name"))
             .and_then(Value::as_str)
             .ok_or_else(|| missing(Some(version), "index[root].name"))?
             .to_string();
-        Ok(Crate { file, version, json, name, root })
+        Ok(Crate {
+            file,
+            version,
+            json,
+            name,
+            root,
+        })
     }
 
     pub fn name(&self) -> &str {
@@ -92,8 +102,8 @@ impl Crate {
 
     /// The item with this id.
     pub fn item(&self, id: Id) -> Result<&Value, Error> {
-        self.json["index"]
-            .get(id.to_string())
+        self.json
+            .pointer(&format!("/index/{id}"))
             .ok_or_else(|| self.missing(format!("index[{id}]")))
     }
 
@@ -108,7 +118,9 @@ impl Crate {
 
     /// True only for `visibility == "public"`; `crate`, `default` and `restricted` are not.
     pub fn is_public(&self, item: &Value) -> Result<bool, Error> {
-        let vis = item.get("visibility").ok_or_else(|| self.missing("visibility"))?;
+        let vis = item
+            .get("visibility")
+            .ok_or_else(|| self.missing("visibility"))?;
         Ok(vis.as_str() == Some("public"))
     }
 
@@ -122,8 +134,8 @@ impl Crate {
     }
 
     pub fn module_items(&self, item: &Value) -> Result<Vec<Id>, Error> {
-        item["inner"]["module"]["items"]
-            .as_array()
+        item.pointer("/inner/module/items")
+            .and_then(Value::as_array)
             .map(|a| a.iter().filter_map(id_of).collect())
             .ok_or_else(|| self.missing("inner.module.items"))
     }
@@ -150,10 +162,7 @@ impl Crate {
 
     /// Every trait impl that is neither blanket nor synthetic, with a trait and a resolved `for` type.
     pub fn impls(&self) -> Vec<Impl> {
-        self.json["index"]
-            .as_object()
-            .into_iter()
-            .flat_map(|index| index.values())
+        self.index_items()
             .filter_map(|item| {
                 let imp = item.get("inner")?.get("impl")?;
                 if !imp.get("blanket_impl").is_none_or(Value::is_null) {
@@ -176,13 +185,15 @@ impl Crate {
 
     /// The name of the crate that defines this id; `None` when `paths` does not know it.
     pub fn defining_crate(&self, id: Id) -> Option<String> {
-        let crate_id = self.json["paths"].get(id.to_string())?.get("crate_id")?.as_u64()?;
+        let crate_id = self
+            .json
+            .pointer(&format!("/paths/{id}/crate_id"))?
+            .as_u64()?;
         if crate_id == 0 {
             return Some(self.name.clone());
         }
-        self.json["external_crates"]
-            .get(crate_id.to_string())?
-            .get("name")?
+        self.json
+            .pointer(&format!("/external_crates/{crate_id}/name"))?
             .as_str()
             .map(str::to_string)
     }
@@ -190,13 +201,20 @@ impl Crate {
     /// Every item this crate defines that `paths` knows: id, full path (the crate name
     /// first) and kind. Sorted by path.
     pub fn local_paths(&self) -> Vec<(Id, Vec<String>, String)> {
-        let mut out: Vec<(Id, Vec<String>, String)> = self.json["paths"]
-            .as_object()
+        let mut out: Vec<(Id, Vec<String>, String)> = self
+            .json
+            .get("paths")
+            .and_then(Value::as_object)
             .into_iter()
             .flatten()
             .filter(|(_, v)| v.get("crate_id").and_then(Value::as_u64) == Some(0))
             .filter_map(|(k, v)| {
-                let path = v.get("path")?.as_array()?.iter().map(|s| s.as_str().map(str::to_string)).collect::<Option<Vec<_>>>()?;
+                let path = v
+                    .get("path")?
+                    .as_array()?
+                    .iter()
+                    .map(|s| s.as_str().map(str::to_string))
+                    .collect::<Option<Vec<_>>>()?;
                 Some((k.parse().ok()?, path, v.get("kind")?.as_str()?.to_string()))
             })
             .collect();
@@ -207,15 +225,23 @@ impl Crate {
     /// For every type with inherent `impl` blocks, the members of those blocks.
     pub fn inherent_impl_items(&self) -> HashMap<Id, Vec<Id>> {
         let mut out: HashMap<Id, Vec<Id>> = HashMap::new();
-        let impls = self.json["index"]
-            .as_object()
-            .into_iter()
-            .flat_map(|index| index.values())
+        let impls = self
+            .index_items()
             .filter_map(|item| item.get("inner")?.get("impl"))
             .filter(|imp| imp.get("trait").is_none_or(Value::is_null));
         for imp in impls {
-            let Some(type_id) = imp.get("for").and_then(|f| f.get("resolved_path")?.get("id")?.as_u64()) else { continue };
-            let members = imp.get("items").and_then(Value::as_array).into_iter().flatten().filter_map(id_of);
+            let Some(type_id) = imp
+                .get("for")
+                .and_then(|f| f.get("resolved_path")?.get("id")?.as_u64())
+            else {
+                continue;
+            };
+            let members = imp
+                .get("items")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(id_of);
             out.entry(type_id).or_default().extend(members);
         }
         out
@@ -225,7 +251,8 @@ impl Crate {
     pub fn trait_items(&self, trait_id: Id) -> Vec<Id> {
         self.item(trait_id)
             .ok()
-            .and_then(|t| t["inner"]["trait"]["items"].as_array())
+            .and_then(|t| t.pointer("/inner/trait/items"))
+            .and_then(Value::as_array)
             .map(|a| a.iter().filter_map(id_of).collect())
             .unwrap_or_default()
     }
@@ -233,8 +260,13 @@ impl Crate {
     /// The defining crate's name and the full path of any id `paths` knows, whichever
     /// crate defines it. Used to point an intra-doc link at another page.
     pub fn path_of(&self, id: Id) -> Option<(String, Vec<String>)> {
-        let entry = self.json["paths"].get(id.to_string())?;
-        let path: Vec<String> = entry.get("path")?.as_array()?.iter().filter_map(|s| s.as_str().map(str::to_string)).collect();
+        let entry = self.json.pointer(&format!("/paths/{id}"))?;
+        let path: Vec<String> = entry
+            .get("path")?
+            .as_array()?
+            .iter()
+            .filter_map(|s| s.as_str().map(str::to_string))
+            .collect();
         let krate = self.defining_crate(id)?;
         Some((krate, path))
     }
@@ -248,8 +280,9 @@ impl Crate {
     ///
     /// Fails with `MissingField` when the item has no `inner.function.sig.inputs`.
     pub fn fn_inputs<'a>(&self, item: &'a Value) -> Result<Vec<(String, &'a Value)>, Error> {
-        let inputs = item["inner"]["function"]["sig"]["inputs"]
-            .as_array()
+        let inputs = item
+            .pointer("/inner/function/sig/inputs")
+            .and_then(Value::as_array)
             .ok_or_else(|| self.missing("inner.function.sig.inputs"))?;
         inputs
             .iter()
@@ -269,10 +302,10 @@ impl Crate {
     /// Fails with `MissingField` when the item is not a struct with a plain or tuple kind.
     pub fn struct_field_types(&self, id: Id) -> Result<Vec<(String, &Value)>, Error> {
         let item = self.item(id)?;
-        let kind = &item["inner"]["struct"]["kind"];
-        let (ids, named) = if let Some(plain) = kind.get("plain") {
-            (plain["fields"].as_array(), true)
-        } else if let Some(tuple) = kind.get("tuple") {
+        let kind = item.pointer("/inner/struct/kind");
+        let (ids, named) = if let Some(plain) = kind.and_then(|k| k.get("plain")) {
+            (plain.get("fields").and_then(Value::as_array), true)
+        } else if let Some(tuple) = kind.and_then(|k| k.get("tuple")) {
             (tuple.as_array(), false)
         } else {
             return Err(self.missing("inner.struct.kind"));
@@ -282,11 +315,25 @@ impl Crate {
         for (n, field) in ids.iter().enumerate() {
             let Some(field) = id_of(field) else { continue };
             let item = self.item(field)?;
-            let ty = item["inner"].get("struct_field").ok_or_else(|| self.missing("inner.struct_field"))?;
-            let name = if named { Crate::item_name(item).unwrap_or("").to_string() } else { n.to_string() };
+            let ty = item
+                .pointer("/inner/struct_field")
+                .ok_or_else(|| self.missing("inner.struct_field"))?;
+            let name = if named {
+                Crate::item_name(item).unwrap_or("").to_string()
+            } else {
+                n.to_string()
+            };
             out.push((name, ty));
         }
         Ok(out)
+    }
+
+    fn index_items(&self) -> impl Iterator<Item = &Value> {
+        self.json
+            .get("index")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flat_map(|index| index.values())
     }
 
     fn missing(&self, field: impl Into<String>) -> Error {

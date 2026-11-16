@@ -54,7 +54,11 @@ impl Site<'_> {
     pub(super) fn write_graph(&self, root: &Path) -> Result<(), Error> {
         write(root, "assets/cytoscape.min.js", CYTOSCAPE)?;
         let json = serde_json::to_string(&self.graph_json()).unwrap_or_else(|_| "{}".to_string());
-        write(root, "graph-data.js", &format!("window.HATLAS_GRAPH = {};\n", script_safe(&json)))
+        write(
+            root,
+            "graph-data.js",
+            &format!("window.HATLAS_GRAPH = {};\n", script_safe(&json)),
+        )
     }
 
     fn graph_json(&self) -> Value {
@@ -66,8 +70,12 @@ impl Site<'_> {
             node_items(&krate.root, ci, &mut items);
         }
         for (ci, module_path, id) in &items {
-            let Some(item) = self.atlas.item((*ci, *id)) else { continue };
-            let Some(page) = self.item_pages.get(&(*ci, *id)) else { continue };
+            let Some(item) = self.atlas.item((*ci, *id)) else {
+                continue;
+            };
+            let Some(page) = self.item_pages.get(&(*ci, *id)) else {
+                continue;
+            };
             let node = format!("i{ci}-{id}");
             if item.role == crate::bevy::Role::Plugin {
                 roots.push(node.clone());
@@ -81,14 +89,20 @@ impl Site<'_> {
                 "href": relative("index.html", page),
             }}));
         }
-        for (ci, krate) in self.deps.crates.iter().enumerate() {
+        for (ci, (krate, page)) in self
+            .deps
+            .crates
+            .iter()
+            .zip(&self.dep_crate_pages)
+            .enumerate()
+        {
             let node = format!("d{ci}");
             ids.insert(node.clone());
             nodes.push(json!({"data": {
                 "id": node,
                 "label": format!("{}@{}", krate.name, krate.version),
                 "kind": "crate",
-                "href": relative("index.html", &self.dep_crate_pages[ci]),
+                "href": relative("index.html", page),
             }}));
         }
 
@@ -127,7 +141,9 @@ impl Site<'_> {
             for used in &krate.items {
                 for file in used.uses.keys() {
                     for (ci, c) in self.atlas.crates.iter().enumerate() {
-                        let Some(module) = c.root.module_of_file(file) else { continue };
+                        let Some(module) = c.root.module_of_file(file) else {
+                            continue;
+                        };
                         for item in module.items.iter().filter(|i| i.public && has_page(i.role)) {
                             edges.insert((format!("i{ci}-{}", item.id), format!("d{dci}"), "uses"));
                         }

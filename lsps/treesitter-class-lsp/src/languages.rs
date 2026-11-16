@@ -1,7 +1,27 @@
+//! Which helix language, grammar and tags query a source file belongs to, read
+//! from helix's own configuration and runtime.
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+
+/// Helix's `languages.toml` could not be turned into a registry.
+#[derive(Debug, thiserror::Error)]
+pub enum RegistryError {
+    #[error("cannot read helix languages file {}", path.display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("helix languages file {} is not valid", path.display())]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: toml::de::Error,
+    },
+}
 
 /// Helix's config directory, `$XDG_CONFIG_HOME/helix` or `~/.config/helix`.
 /// Falls back to a relative `.config/helix` when neither variable is set, which
@@ -44,7 +64,6 @@ pub struct LanguageInfo {
     /// Optional tags query path (`runtime/queries/<lang>/tags.scm`). Kept as a
     /// precomputed flag; the actual source is read (with inheritance expanded)
     /// via `load_tags_query`.
-    #[allow(dead_code)]
     pub tags_query: Option<PathBuf>,
 }
 
@@ -64,12 +83,19 @@ impl LanguageRegistry {
         }
     }
 
-    pub fn load() -> anyhow::Result<Self> {
+    pub fn load() -> Result<Self, RegistryError> {
         let runtime = helix_runtime();
         let languages_toml = helix_languages_toml();
-        let raw = std::fs::read_to_string(&languages_toml)
-            .map_err(|e| anyhow::anyhow!("read {}: {}", languages_toml.display(), e))?;
-        let doc: HelixLanguagesDoc = toml::from_str(&raw)?;
+        let raw =
+            std::fs::read_to_string(&languages_toml).map_err(|source| RegistryError::Read {
+                path: languages_toml.clone(),
+                source,
+            })?;
+        let doc: HelixLanguagesDoc =
+            toml::from_str(&raw).map_err(|source| RegistryError::Parse {
+                path: languages_toml,
+                source,
+            })?;
 
         let mut by_ext: HashMap<String, LanguageInfo> = HashMap::new();
         for lang in doc.language {
@@ -89,7 +115,9 @@ impl LanguageRegistry {
             };
             for ft in &lang.file_types {
                 if let Some(ext) = ft.as_extension() {
-                    by_ext.entry(ext.to_ascii_lowercase()).or_insert_with(|| info.clone());
+                    by_ext
+                        .entry(ext.to_ascii_lowercase())
+                        .or_insert_with(|| info.clone());
                 }
             }
         }
@@ -163,15 +191,12 @@ impl FileType {
                     }
                 }
                 // Glob-based matches (e.g. Makefile) are out of scope for MVP.
-                if let Some(g) = &o.glob
-                    && let Some(dot) = g.rfind('.')
-                {
-                    let ext = &g[dot + 1..];
-                    if !ext.contains('*') && !ext.is_empty() {
-                        return Some(ext.to_string());
-                    }
-                }
-                None
+                o.glob
+                    .as_deref()
+                    .and_then(|g| g.rsplit_once('.'))
+                    .map(|(_, ext)| ext)
+                    .filter(|ext| !ext.contains('*') && !ext.is_empty())
+                    .map(str::to_string)
             }
         }
     }

@@ -53,8 +53,9 @@ impl Parser {
             .iter()
             .position(|l| l.marker == Marker::Section)
             .unwrap_or(ls.len());
-        let header = self.header(&ls[..split]);
-        let standards = self.standards(&ls[split..]);
+        let (header_lines, standard_lines) = ls.split_at_checked(split).unwrap_or((ls, &[]));
+        let header = self.header(header_lines);
+        let standards = self.standards(standard_lines);
 
         for (key, present) in [
             ("repo", header.repo.is_some()),
@@ -93,10 +94,10 @@ impl Parser {
 
     fn header(&mut self, ls: &[Line]) -> Header {
         let mut h = Header {
-            span: ls
-                .first()
-                .map(|l| Span::new(l.span.start, ls[ls.len() - 1].span.end))
-                .unwrap_or(Span::at(0)),
+            span: match (ls.first(), ls.last()) {
+                (Some(first), Some(last)) => Span::new(first.span.start, last.span.end),
+                _ => Span::at(0),
+            },
             ..Header::default()
         };
         for l in ls {

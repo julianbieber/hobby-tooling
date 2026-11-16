@@ -1,4 +1,5 @@
 use hobby_just_mcp::JustMcpServer;
+use hobby_just_mcp::config::Config;
 use rmcp::{ServiceExt, model::CallToolRequestParam, transport::IntoTransport};
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -15,7 +16,7 @@ async fn create_server_client() -> (
     let (server_read, server_write) = tokio::io::split(server_side);
     let (client_read, client_write) = tokio::io::split(client_side);
 
-    let server = JustMcpServer::new();
+    let server = JustMcpServer::new(Config::default());
     let (server_result, client_result) = tokio::join!(
         server.serve((server_read, server_write).into_transport()),
         ().serve((client_read, client_write).into_transport())

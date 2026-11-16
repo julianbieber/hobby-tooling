@@ -21,7 +21,11 @@ pub fn toolchain_from(rustc_vv: &str) -> Toolchain {
     let nightly = rustc_vv
         .lines()
         .any(|l| l.starts_with("release:") && l.contains("nightly"));
-    if nightly { Toolchain::Repo } else { Toolchain::Nightly }
+    if nightly {
+        Toolchain::Repo
+    } else {
+        Toolchain::Nightly
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -74,16 +78,26 @@ pub struct Workspace {
 impl Workspace {
     /// Runs `rustc -vV` and `cargo metadata --locked`.
     pub fn load(repo: &Path) -> Result<Workspace, Error> {
-        let vv = run_capture(Command::new("rustc").arg("-vV").current_dir(repo), "rustc -vV")?;
+        let vv = run_capture(
+            Command::new("rustc").arg("-vV").current_dir(repo),
+            "rustc -vV",
+        )?;
         let toolchain = toolchain_from(&vv);
         let mut cmd = cargo(&toolchain);
         cmd.args(["metadata", "--format-version", "1", "--locked"])
             .current_dir(repo);
         let text = run_capture(&mut cmd, "cargo metadata")?;
-        let json: Value = serde_json::from_str(&text).map_err(|e| Error::Metadata(e.to_string()))?;
+        let json: Value = serde_json::from_str(&text).map_err(Error::MetadataJson)?;
         let (target_directory, workspace_root, targets) = parse_metadata(&json)?;
         let (packages, members) = parse_packages(&json);
-        Ok(Workspace { target_directory, workspace_root, targets, packages, members, toolchain })
+        Ok(Workspace {
+            target_directory,
+            workspace_root,
+            targets,
+            packages,
+            members,
+            toolchain,
+        })
     }
 
     /// Documents the given dependency packages in one keep-going `cargo doc --no-deps`,
@@ -97,13 +111,25 @@ impl Workspace {
             return Ok(DepDocs::default());
         }
         let dir = self.doc_target_dir();
-        let native = run_capture(cargo(&self.toolchain).args(["doc", "--help"]).current_dir(repo), "cargo doc --help")
-            .is_ok_and(|help| help.contains("--output-format"));
+        let native = run_capture(
+            cargo(&self.toolchain)
+                .args(["doc", "--help"])
+                .current_dir(repo),
+            "cargo doc --help",
+        )
+        .is_ok_and(|help| help.contains("--output-format"));
         let mut cmd = cargo(&self.toolchain);
         if native {
             cmd.arg("-Zunstable-options");
         }
-        cmd.args(["doc", "--no-deps", "--keep-going", "--locked", "--message-format", "json"]);
+        cmd.args([
+            "doc",
+            "--no-deps",
+            "--keep-going",
+            "--locked",
+            "--message-format",
+            "json",
+        ]);
         if native {
             cmd.args(["--output-format", "json"]);
         } else {
@@ -119,10 +145,16 @@ impl Workspace {
         let out = cmd
             .stderr(std::process::Stdio::inherit())
             .output()
-            .map_err(|e| Error::Cargo { step: "cargo doc (dependencies)".to_string(), status: e.to_string() })?;
+            .map_err(|source| Error::Spawn {
+                step: "cargo doc (dependencies)".to_string(),
+                source,
+            })?;
         let stdout = String::from_utf8_lossy(&out.stdout);
         let mut docs = parse_doc_messages(&stdout, &self.packages, &dir.join("doc"), wanted);
-        if !out.status.success() && docs.documented.is_empty() && docs.failed.iter().all(|(_, why)| why == NOTHING_REPORTED) {
+        if !out.status.success()
+            && docs.documented.is_empty()
+            && docs.failed.iter().all(|(_, why)| why == NOTHING_REPORTED)
+        {
             let why = format!("cargo doc exited with {}", out.status);
             for (_, reason) in &mut docs.failed {
                 *reason = why.clone();
@@ -145,16 +177,19 @@ impl Workspace {
         if self.toolchain == Toolchain::Nightly {
             cmd.arg("--target-dir").arg(&dir);
         }
-        cmd.args(["--", "--document-private-items"]).current_dir(repo);
+        cmd.args(["--", "--document-private-items"])
+            .current_dir(repo);
         let step = format!("cargo rustdoc -p {} ({})", target.package, target.name);
-        let status = cmd.status().map_err(|e| Error::Cargo {
+        let status = cmd.status().map_err(|source| Error::Spawn {
             step: step.clone(),
-            status: e.to_string(),
+            source,
         })?;
         if !status.success() {
-            return Err(Error::Cargo { step, status: status.to_string() });
+            return Err(Error::Cargo { step, status });
         }
-        let file = dir.join("doc").join(format!("{}.json", target.name.replace('-', "_")));
+        let file = dir
+            .join("doc")
+            .join(format!("{}.json", target.name.replace('-', "_")));
         Crate::load(&file)
     }
 
@@ -168,16 +203,22 @@ impl Workspace {
         let mut cmd = Command::new("rust-analyzer");
         if self.toolchain == Toolchain::Nightly {
             cmd.arg("+nightly");
-            cmd.env("CARGO_TARGET_DIR", self.target_directory.join("hatlas-nightly"));
+            cmd.env(
+                "CARGO_TARGET_DIR",
+                self.target_directory.join("hatlas-nightly"),
+            );
         }
         cmd.arg("scip").arg(repo).arg("--output").arg(&out);
         let step = "rust-analyzer scip".to_string();
         let status = cmd
             .stdout(std::process::Stdio::null())
             .status()
-            .map_err(|e| Error::Cargo { step: step.clone(), status: e.to_string() })?;
+            .map_err(|source| Error::Spawn {
+                step: step.clone(),
+                source,
+            })?;
         if !status.success() {
-            return Err(Error::Cargo { step, status: status.to_string() });
+            return Err(Error::Cargo { step, status });
         }
         Ok(out)
     }
@@ -215,7 +256,9 @@ impl Workspace {
 }
 
 fn collect_rs(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(read) = std::fs::read_dir(dir) else { return };
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in read.flatten() {
         let path = entry.path();
         if path.is_dir() {
@@ -238,29 +281,61 @@ fn run_capture(cmd: &mut Command, step: &str) -> Result<String, Error> {
     let out = cmd
         .stderr(std::process::Stdio::inherit())
         .output()
-        .map_err(|e| Error::Cargo { step: step.to_string(), status: e.to_string() })?;
+        .map_err(|source| Error::Spawn {
+            step: step.to_string(),
+            source,
+        })?;
     if !out.status.success() {
-        return Err(Error::Cargo { step: step.to_string(), status: out.status.to_string() });
+        return Err(Error::Cargo {
+            step: step.to_string(),
+            status: out.status,
+        });
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+fn str_at<'a>(json: &'a Value, pointer: &str) -> Option<&'a str> {
+    json.pointer(pointer).and_then(Value::as_str)
+}
+
+fn strs_at<'a>(json: &'a Value, pointer: &str) -> Vec<&'a str> {
+    json.pointer(pointer)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect()
 }
 
 const NOTHING_REPORTED: &str = "cargo reported nothing for it";
 
 /// Every package of the graph and the names of the workspace members.
 pub fn parse_packages(json: &Value) -> (Vec<Package>, Vec<String>) {
-    let member_ids: Vec<&str> = json["workspace_members"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+    let member_ids: Vec<&str> = json
+        .get("workspace_members")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
     let mut packages = Vec::new();
     let mut members = Vec::new();
-    for pkg in json["packages"].as_array().into_iter().flatten() {
-        let (Some(id), Some(name)) = (pkg["id"].as_str(), pkg["name"].as_str()) else { continue };
+    for pkg in json
+        .get("packages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let (Some(id), Some(name)) = (str_at(pkg, "/id"), str_at(pkg, "/name")) else {
+            continue;
+        };
         if member_ids.contains(&id) {
             members.push(name.to_string());
         }
         packages.push(Package {
             id: id.to_string(),
             name: name.to_string(),
-            version: pkg["version"].as_str().unwrap_or("").to_string(),
+            version: str_at(pkg, "/version").unwrap_or_default().to_string(),
         });
     }
     (packages, members)
@@ -271,33 +346,56 @@ pub fn parse_packages(json: &Value) -> (Vec<Package>, Vec<String>) {
 /// A package is documented when cargo emitted a doc artifact for it (one without an
 /// rmeta, rlib or shared object, and not its build script); a leftover `<crate>.json` on disk proves nothing.
 /// `doc_dir` is where the JSON lands when the artifact does not name the file.
-pub fn parse_doc_messages(stdout: &str, packages: &[Package], doc_dir: &Path, wanted: &[Wanted]) -> DepDocs {
-    let by_id = |id: &str| packages.iter().find(|p| p.id == id).map(|p| (p.name.clone(), p.version.clone()));
+pub fn parse_doc_messages(
+    stdout: &str,
+    packages: &[Package],
+    doc_dir: &Path,
+    wanted: &[Wanted],
+) -> DepDocs {
+    let by_id = |id: &str| {
+        packages
+            .iter()
+            .find(|p| p.id == id)
+            .map(|p| (p.name.clone(), p.version.clone()))
+    };
     let mut documented: Vec<(Wanted, PathBuf)> = Vec::new();
     let mut errors: Vec<(Wanted, String)> = Vec::new();
     for line in stdout.lines() {
-        let Ok(msg) = serde_json::from_str::<Value>(line) else { continue };
-        let Some(key) = msg["package_id"].as_str().and_then(by_id) else { continue };
-        match msg["reason"].as_str() {
+        let Ok(msg) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let Some(key) = str_at(&msg, "/package_id").and_then(by_id) else {
+            continue;
+        };
+        match str_at(&msg, "/reason") {
             Some("compiler-artifact") => {
-                let kinds = msg["target"]["kind"].as_array().into_iter().flatten().filter_map(Value::as_str);
-                if kinds.clone().any(|k| k == "custom-build") {
+                let kinds = strs_at(&msg, "/target/kind");
+                if kinds.contains(&"custom-build") {
                     continue;
                 }
-                let files: Vec<&str> = msg["filenames"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
-                if files.iter().any(|f| [".rmeta", ".rlib", ".so"].iter().any(|e| f.ends_with(e))) {
+                let files = strs_at(&msg, "/filenames");
+                if files
+                    .iter()
+                    .any(|f| [".rmeta", ".rlib", ".so"].iter().any(|e| f.ends_with(e)))
+                {
                     continue;
                 }
-                let file = files.iter().find(|f| f.ends_with(".json")).map(PathBuf::from).unwrap_or_else(|| {
-                    let target = msg["target"]["name"].as_str().unwrap_or(&key.0);
-                    doc_dir.join(format!("{}.json", target.replace('-', "_")))
-                });
+                let file = files
+                    .iter()
+                    .find(|f| f.ends_with(".json"))
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| {
+                        let target = str_at(&msg, "/target/name").unwrap_or(&key.0);
+                        doc_dir.join(format!("{}.json", target.replace('-', "_")))
+                    });
                 if !documented.iter().any(|(k, _)| *k == key) {
                     documented.push((key, file));
                 }
             }
-            Some("compiler-message") if msg["message"]["level"].as_str() == Some("error") => {
-                let text = msg["message"]["rendered"].as_str().or(msg["message"]["message"].as_str()).unwrap_or("error");
+            Some("compiler-message") if str_at(&msg, "/message/level") == Some("error") => {
+                let text = str_at(&msg, "/message/rendered")
+                    .or(str_at(&msg, "/message/message"))
+                    .unwrap_or("error");
                 let first = text.lines().next().unwrap_or(text).trim().to_string();
                 if !errors.iter().any(|(k, _)| *k == key) {
                     errors.push((key, first));
@@ -311,7 +409,10 @@ pub fn parse_doc_messages(stdout: &str, packages: &[Package], doc_dir: &Path, wa
         if documented.iter().any(|(k, _)| k == key) {
             continue;
         }
-        let why = errors.iter().find(|(k, _)| k == key).map_or(NOTHING_REPORTED.to_string(), |(_, w)| w.clone());
+        let why = errors
+            .iter()
+            .find(|(k, _)| k == key)
+            .map_or(NOTHING_REPORTED.to_string(), |(_, w)| w.clone());
         failed.push((key.clone(), why));
     }
     documented.retain(|(k, _)| wanted.contains(k));
@@ -320,24 +421,38 @@ pub fn parse_doc_messages(stdout: &str, packages: &[Package], doc_dir: &Path, wa
 
 /// The target directory, the workspace root, and the members' lib, proc-macro and bin targets.
 pub fn parse_metadata(json: &Value) -> Result<(PathBuf, PathBuf, Vec<Target>), Error> {
-    let bad = |what: &str| Error::Metadata(format!("no `{what}`"));
-    let target_directory = json["target_directory"].as_str().ok_or_else(|| bad("target_directory"))?;
-    let workspace_root = json["workspace_root"].as_str().ok_or_else(|| bad("workspace_root"))?;
-    let members: Vec<&str> = json["workspace_members"]
-        .as_array()
-        .ok_or_else(|| bad("workspace_members"))?
+    let target_directory =
+        str_at(json, "/target_directory").ok_or(Error::Metadata("target_directory"))?;
+    let workspace_root =
+        str_at(json, "/workspace_root").ok_or(Error::Metadata("workspace_root"))?;
+    let members: Vec<&str> = json
+        .get("workspace_members")
+        .and_then(Value::as_array)
+        .ok_or(Error::Metadata("workspace_members"))?
         .iter()
         .filter_map(Value::as_str)
         .collect();
     let mut targets = Vec::new();
-    for pkg in json["packages"].as_array().ok_or_else(|| bad("packages"))? {
-        if !pkg["id"].as_str().is_some_and(|id| members.contains(&id)) {
+    for pkg in json
+        .get("packages")
+        .and_then(Value::as_array)
+        .ok_or(Error::Metadata("packages"))?
+    {
+        if !str_at(pkg, "/id").is_some_and(|id| members.contains(&id)) {
             continue;
         }
-        let package = pkg["name"].as_str().ok_or_else(|| bad("packages[].name"))?;
-        for t in pkg["targets"].as_array().into_iter().flatten() {
-            let kinds: Vec<&str> = t["kind"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
-            let kind = if kinds.iter().any(|k| ["lib", "rlib", "dylib", "proc-macro"].contains(k)) {
+        let package = str_at(pkg, "/name").ok_or(Error::Metadata("packages[].name"))?;
+        for t in pkg
+            .get("targets")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let kinds = strs_at(t, "/kind");
+            let kind = if kinds
+                .iter()
+                .any(|k| ["lib", "rlib", "dylib", "proc-macro"].contains(k))
+            {
                 TargetKind::Lib
             } else if kinds.contains(&"bin") {
                 TargetKind::Bin
@@ -346,13 +461,21 @@ pub fn parse_metadata(json: &Value) -> Result<(PathBuf, PathBuf, Vec<Target>), E
             };
             targets.push(Target {
                 package: package.to_string(),
-                name: t["name"].as_str().ok_or_else(|| bad("targets[].name"))?.to_string(),
+                name: str_at(t, "/name")
+                    .ok_or(Error::Metadata("targets[].name"))?
+                    .to_string(),
                 kind,
-                src_path: PathBuf::from(t["src_path"].as_str().ok_or_else(|| bad("targets[].src_path"))?),
+                src_path: PathBuf::from(
+                    str_at(t, "/src_path").ok_or(Error::Metadata("targets[].src_path"))?,
+                ),
             });
         }
     }
-    Ok((PathBuf::from(target_directory), PathBuf::from(workspace_root), targets))
+    Ok((
+        PathBuf::from(target_directory),
+        PathBuf::from(workspace_root),
+        targets,
+    ))
 }
 
 #[cfg(test)]
@@ -362,13 +485,19 @@ mod tests {
     // Pins that a stable repo is documented through `+nightly`, since rustdoc JSON needs one.
     #[test]
     fn stable_repo_uses_nightly() {
-        assert_eq!(toolchain_from("rustc 1.90.0\nrelease: 1.90.0\n"), Toolchain::Nightly);
+        assert_eq!(
+            toolchain_from("rustc 1.90.0\nrelease: 1.90.0\n"),
+            Toolchain::Nightly
+        );
     }
 
     // Pins that a repo already on a nightly keeps its own toolchain and target directory.
     #[test]
     fn nightly_repo_keeps_its_toolchain() {
-        assert_eq!(toolchain_from("rustc 1.97.0-nightly\nrelease: 1.97.0-nightly\n"), Toolchain::Repo);
+        assert_eq!(
+            toolchain_from("rustc 1.97.0-nightly\nrelease: 1.97.0-nightly\n"),
+            Toolchain::Repo
+        );
     }
 
     // Pins that examples and tests are not documented, only libs and bins of members.
@@ -393,14 +522,27 @@ mod tests {
     }
 
     fn pk(id: &str, name: &str, version: &str) -> Package {
-        Package { id: id.into(), name: name.into(), version: version.into() }
+        Package {
+            id: id.into(),
+            name: name.into(),
+            version: version.into(),
+        }
     }
 
     // Pins how cargo's JSON becomes per-package results: both artifact shapes document, an rmeta never does, an error is attributed, and silence is a failure.
     #[test]
     fn doc_messages_are_attributed_per_package() {
-        let packages = [pk("a1", "a", "1.0.0"), pk("b1", "b-x", "2.0.0"), pk("c1", "c", "3.0.0"), pk("d1", "d", "4.0.0"), pk("e1", "e", "5.0.0")];
-        let wanted: Vec<Wanted> = packages.iter().map(|p| (p.name.clone(), p.version.clone())).collect();
+        let packages = [
+            pk("a1", "a", "1.0.0"),
+            pk("b1", "b-x", "2.0.0"),
+            pk("c1", "c", "3.0.0"),
+            pk("d1", "d", "4.0.0"),
+            pk("e1", "e", "5.0.0"),
+        ];
+        let wanted: Vec<Wanted> = packages
+            .iter()
+            .map(|p| (p.name.clone(), p.version.clone()))
+            .collect();
         let stdout = [
             r#"{"reason":"compiler-artifact","package_id":"a1","target":{"name":"build-script-build","kind":["custom-build"]},"filenames":[]}"#,
             r#"{"reason":"compiler-artifact","package_id":"a1","target":{"name":"a","kind":["lib"]},"filenames":[]}"#,
@@ -413,9 +555,26 @@ mod tests {
         let docs = parse_doc_messages(&stdout, &packages, Path::new("/t/doc"), &wanted);
         assert_eq!(
             docs.documented,
-            [(("a".into(), "1.0.0".into()), PathBuf::from("/t/doc/a.json")), (("b-x".into(), "2.0.0".into()), PathBuf::from("/t/doc/b_x.json"))]
+            [
+                (("a".into(), "1.0.0".into()), PathBuf::from("/t/doc/a.json")),
+                (
+                    ("b-x".into(), "2.0.0".into()),
+                    PathBuf::from("/t/doc/b_x.json")
+                )
+            ]
         );
-        let failed: Vec<(&str, &str)> = docs.failed.iter().map(|((n, _), w)| (n.as_str(), w.as_str())).collect();
-        assert_eq!(failed, [("c", "error: boom"), ("d", NOTHING_REPORTED), ("e", NOTHING_REPORTED)]);
+        let failed: Vec<(&str, &str)> = docs
+            .failed
+            .iter()
+            .map(|((n, _), w)| (n.as_str(), w.as_str()))
+            .collect();
+        assert_eq!(
+            failed,
+            [
+                ("c", "error: boom"),
+                ("d", NOTHING_REPORTED),
+                ("e", NOTHING_REPORTED)
+            ]
+        );
     }
 }

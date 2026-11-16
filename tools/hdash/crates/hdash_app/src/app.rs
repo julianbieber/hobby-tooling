@@ -53,8 +53,6 @@ pub fn run() -> ExitCode {
     if !(io::stdin().is_terminal() && io::stdout().is_terminal()) {
         return relaunch();
     }
-    // SAFETY: no other thread runs yet, so nothing reads the environment concurrently.
-    unsafe { std::env::remove_var(SPAWNED_ENV) };
     let quit = Arc::new(AtomicBool::new(false));
     if let Err(e) = signal_hook::flag::register(signal_hook::consts::SIGTERM, quit.clone()) {
         warn!("cannot watch SIGTERM: {e}");
@@ -302,7 +300,7 @@ impl App {
             area.x,
             area.y,
             KEY_HINT,
-            area.width as usize,
+            usize::from(area.width),
             Style::default().fg(Color::DarkGray),
         );
         let body = Rect {

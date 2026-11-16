@@ -411,11 +411,11 @@ impl Document {
     pub fn type_def(&self, name: &str) -> Option<&TypeDef> {
         let mut defs = self.data.iter().filter(|t| t.name.value == name);
         let first = defs.next()?;
-        if self.lines[first.line].gutter.on_head() {
+        let on_head = |t: &TypeDef| self.lines.get(t.line).is_some_and(|l| l.gutter.on_head());
+        if on_head(first) {
             return Some(first);
         }
-        defs.find(|t| self.lines[t.line].gutter.on_head())
-            .or(Some(first))
+        defs.find(|t| on_head(t)).or(Some(first))
     }
 
     pub fn module(&self, name: &str) -> Option<&Module> {

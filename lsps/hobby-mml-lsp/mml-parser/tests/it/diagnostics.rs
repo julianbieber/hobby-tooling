@@ -384,10 +384,13 @@ fn tilde_lines_reconstruct_both_versions() {
     assert_eq!(t.old, "spawn enemies from the table");
     assert_eq!(t.new, "spawn enemies from the wave table");
     assert_eq!(line.text, t.new);
-    assert_eq!(&src[t.old_clause.start..t.old_clause.end], "from the table");
     assert_eq!(
-        &src[t.new_clause.start..t.new_clause.end],
-        "from the wave table"
+        src.get(t.old_clause.start..t.old_clause.end),
+        Some("from the table")
+    );
+    assert_eq!(
+        src.get(t.new_clause.start..t.new_clause.end),
+        Some("from the wave table")
     );
     assert_eq!(line.ann.anchor.as_ref().unwrap().value, "start");
 }
@@ -431,10 +434,8 @@ fn tilde_test_and_field_lines() {
     assert_eq!(doc.tests[0].description, "it goes");
     let f = &doc.data[0].fields[0];
     assert_eq!(f.ty.as_ref().unwrap().value, "Vec<String>");
-    assert_eq!(
-        &src[f.ty.as_ref().unwrap().span.start..f.ty.as_ref().unwrap().span.end],
-        "Vec<String>"
-    );
+    let ty = f.ty.as_ref().unwrap().span;
+    assert_eq!(src.get(ty.start..ty.end), Some("Vec<String>"));
 }
 
 #[test]
@@ -566,7 +567,7 @@ fn tilde_on_a_return_type_keeps_the_signature() {
     let old = "fn lease(contract_id: Uuid) -> Proxy";
     let cut = shared_prefix(old, "Option<Proxy>");
     assert_eq!(
-        format!("{}{}", &old[..cut], "Option<Proxy>"),
+        format!("{}{}", old.get(..cut).unwrap(), "Option<Proxy>"),
         "fn lease(contract_id: Uuid) -> Option<Proxy>"
     );
 }

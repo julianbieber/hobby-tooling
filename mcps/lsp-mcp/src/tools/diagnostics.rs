@@ -1,6 +1,8 @@
+//! Parameters and results of the diagnostics and code action tools.
+
+use super::navigation::{Position, Range};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use super::navigation::{Position, Range};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetDiagnosticsParams {
@@ -132,9 +134,10 @@ pub fn extract_edits_from_code_action(action: &lsp_types::CodeAction) -> Vec<Tex
                         lsp_types::OneOf::Left(text_edit) => {
                             (text_edit.range, text_edit.new_text.clone())
                         }
-                        lsp_types::OneOf::Right(annotated) => {
-                            (annotated.text_edit.range, annotated.text_edit.new_text.clone())
-                        }
+                        lsp_types::OneOf::Right(annotated) => (
+                            annotated.text_edit.range,
+                            annotated.text_edit.new_text.clone(),
+                        ),
                     };
                     edits.push(TextEdit {
                         uri: doc_edit.text_document.uri.to_string(),

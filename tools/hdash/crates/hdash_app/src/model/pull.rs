@@ -40,21 +40,33 @@ impl PullOutcome {
     }
 }
 
+/// Why a pull did not complete.
+#[derive(Debug, thiserror::Error)]
+pub enum PullError {
+    #[error("git not runnable: {0}")]
+    GitNotRunnable(#[source] std::io::Error),
+    /// Git ran and refused: no upstream, diverged history, local changes in the way, a refused
+    /// credential prompt. `reason` is git's own, shrunk to one line.
+    #[error("{reason}")]
+    Refused { reason: String },
+    /// The job running the pull ended without answering, so whether the checkout moved is
+    /// unknown.
+    #[error("the pull job stopped before it finished")]
+    JobStopped,
+}
+
 /// A pull result for one project, delivered from the async job over a channel. Mirrors
 /// [`super::task::GitMsg`].
 pub struct PullMsg {
     /// Project name the result belongs to.
     pub project: String,
-    /// `Ok(outcome)` or `Err(one-line reason)`.
-    pub result: Result<PullOutcome, String>,
+    pub result: Result<PullOutcome, PullError>,
 }
 
 /// Fast-forward a checkout to its upstream. Blocking; call off the main thread.
 ///
-/// Every failure — no upstream, no remote, diverged history, local changes in the way, a
-/// credential prompt refused — comes back as `Err(reason)` for the project's status line.
 /// Nothing here can abort the app.
-pub fn pull(path: &Path) -> Result<PullOutcome, String> {
+pub fn pull(path: &Path) -> Result<PullOutcome, PullError> {
     let before = git_capture(path, &["rev-parse", "HEAD"]);
 
     let out = Command::new("git")
@@ -64,9 +76,11 @@ pub fn pull(path: &Path) -> Result<PullOutcome, String> {
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")
         .output()
-        .map_err(|e| format!("git not runnable: {e}"))?;
+        .map_err(PullError::GitNotRunnable)?;
     if !out.status.success() {
-        return Err(first_stderr_line(&String::from_utf8_lossy(&out.stderr)));
+        return Err(PullError::Refused {
+            reason: first_stderr_line(&String::from_utf8_lossy(&out.stderr)),
+        });
     }
 
     let after = git_capture(path, &["rev-parse", "HEAD"]);
@@ -142,20 +156,27 @@ mod tests {
         );
 
         // Nothing new upstream yet.
-        assert_eq!(pull(&clone), Ok(PullOutcome::UpToDate));
+        assert_eq!(pull(&clone).unwrap(), PullOutcome::UpToDate);
 
         // Two new commits upstream arrive as a fast-forward, counted.
         commit(&origin, "two");
         commit(&origin, "three");
-        assert_eq!(pull(&clone), Ok(PullOutcome::Advanced(2)));
+        assert_eq!(pull(&clone).unwrap(), PullOutcome::Advanced(2));
         assert!(clone.join("three").exists(), "the working tree moved too");
-        assert_eq!(pull(&clone), Ok(PullOutcome::UpToDate), "and stays put");
+        assert_eq!(
+            pull(&clone).unwrap(),
+            PullOutcome::UpToDate,
+            "and stays put"
+        );
 
         // Diverged: a local commit here, another one upstream. `--ff-only` is what keeps this
         // from silently becoming a merge commit in a repo nobody is looking at.
         commit(&clone, "local");
         commit(&origin, "four");
         let err = pull(&clone).expect_err("a diverged checkout must not be merged");
+        let PullError::Refused { reason: err } = err else {
+            panic!("git ran, so it refused: {err}");
+        };
         assert!(
             err.contains("fast-forward"),
             "git's own reason, one line: {err}"

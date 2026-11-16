@@ -2,11 +2,14 @@
 //! directory, whatever the screen was made of.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::{Command, ExitCode, ExitStatus};
+
+use crate::output::Output;
 
 const MAX_TEXT_LINES: usize = 400;
 
 /// Where the pixels of a screen come from.
+#[derive(Debug)]
 pub enum Source {
     /// A visible X11 window, found by a substring of its title.
     Window(String),
@@ -24,28 +27,91 @@ pub enum Source {
 /// A name that matches more than one visible window is refused rather than guessed at.
 /// A text source needs ImageMagick's `convert`, and only the first 400 lines of the text
 /// are drawn.
-pub fn run(notes_dir: &Path, scenario: &str, source: Source) -> ExitCode {
-    match capture(notes_dir, scenario, source) {
-        Ok(relative) => {
-            println!("{relative}");
-            ExitCode::SUCCESS
-        }
-        Err(e) => {
-            eprintln!("hcoord capture: {e}");
-            ExitCode::from(1)
-        }
-    }
+pub fn run(notes_dir: &Path, scenario: &str, source: Source) -> Result<Output, CaptureError> {
+    capture(notes_dir, scenario, source).map(|relative| Output::line(&relative, ExitCode::SUCCESS))
 }
 
-fn capture(notes_dir: &Path, scenario: &str, source: Source) -> Result<String, String> {
+/// A screen that could not be captured; no file is left behind.
+#[derive(Debug, thiserror::Error)]
+pub enum CaptureError {
+    #[error("scenario id {0:?} is not a file name: use letters, digits, `.`, `_` and `-`")]
+    NotAFileName(String),
+    #[error("cannot create {}: {source}", path.display())]
+    CreateDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(transparent)]
+    Text(#[from] ReadTextError),
+    #[error("looking for a window named {name:?}: {source}")]
+    Search {
+        name: String,
+        #[source]
+        source: ToolError,
+    },
+    #[error("window named {name:?}: {source}")]
+    Window {
+        name: String,
+        #[source]
+        source: WindowError,
+    },
+    #[error(transparent)]
+    Tool(#[from] ToolError),
+}
+
+/// The text to render could not be read.
+#[derive(Debug, thiserror::Error)]
+pub enum ReadTextError {
+    #[error("cannot read standard input: {0}")]
+    Stdin(#[source] std::io::Error),
+    #[error("cannot read {}: {source}", path.display())]
+    File {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+}
+
+/// A window search that did not come back with exactly one window.
+#[derive(Debug, thiserror::Error)]
+pub enum WindowError {
+    #[error("no visible window matches that name")]
+    None,
+    #[error("{} visible windows match that name ({}); give a more specific one", .0.len(), .0.join(", "))]
+    Several(Vec<String>),
+}
+
+/// An external program the capture runs could not be started or did not succeed.
+#[derive(Debug, thiserror::Error)]
+pub enum ToolError {
+    #[error("cannot run {program}: {source}")]
+    Spawn {
+        program: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{program} failed ({status}): {first_line}")]
+    Failed {
+        program: String,
+        status: ExitStatus,
+        first_line: String,
+    },
+}
+
+fn capture(notes_dir: &Path, scenario: &str, source: Source) -> Result<String, CaptureError> {
     let out = screen_path(notes_dir, scenario)?;
     if let Some(parent) = out.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|source| CaptureError::CreateDir {
+            path: parent.to_path_buf(),
+            source,
+        })?;
     }
     let result = match source {
         Source::Window(name) => capture_window(&name, &out),
-        Source::Text(path) => read_text(&path).and_then(|text| render_text(&text, &out)),
+        Source::Text(path) => read_text(&path)
+            .map_err(CaptureError::from)
+            .and_then(|text| render_text(&text, &out).map_err(CaptureError::from)),
     };
     if let Err(e) = result {
         let _ = std::fs::remove_file(&out);
@@ -54,16 +120,14 @@ fn capture(notes_dir: &Path, scenario: &str, source: Source) -> Result<String, S
     Ok(format!("screens/{scenario}.png"))
 }
 
-fn screen_path(notes_dir: &Path, scenario: &str) -> Result<PathBuf, String> {
+fn screen_path(notes_dir: &Path, scenario: &str) -> Result<PathBuf, CaptureError> {
     let shaped = !scenario.is_empty()
         && !scenario.starts_with('.')
         && scenario
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
     if !shaped {
-        return Err(format!(
-            "scenario id {scenario:?} is not a file name: use letters, digits, `.`, `_` and `-`"
-        ));
+        return Err(CaptureError::NotAFileName(scenario.to_owned()));
     }
     Ok(notes_dir.join("screens").join(format!("{scenario}.png")))
 }
@@ -79,15 +143,13 @@ fn clamp(text: &str, max_lines: usize) -> String {
     kept.join("\n")
 }
 
-fn pick_window(stdout: &str) -> Result<String, String> {
+fn pick_window(stdout: &str) -> Result<String, WindowError> {
     let ids: Vec<&str> = stdout.split_whitespace().collect();
     match ids.as_slice() {
-        [] => Err("no visible window matches that name".to_owned()),
+        [] => Err(WindowError::None),
         [id] => Ok((*id).to_owned()),
-        many => Err(format!(
-            "{} visible windows match that name ({}); give a more specific one",
-            many.len(),
-            many.join(", ")
+        many => Err(WindowError::Several(
+            many.iter().map(|id| (*id).to_owned()).collect(),
         )),
     }
 }
@@ -106,20 +168,26 @@ fn on_path(program: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn run_tool(program: &str, args: &[String]) -> Result<String, String> {
+fn run_tool(program: &str, args: &[String]) -> Result<String, ToolError> {
     let output = Command::new(program)
         .args(args)
         .output()
-        .map_err(|e| format!("cannot run {program}: {e}"))?;
+        .map_err(|source| ToolError::Spawn {
+            program: program.to_owned(),
+            source,
+        })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let first = stderr.lines().next().unwrap_or("").trim();
-        return Err(format!("{program} failed ({}): {first}", output.status));
+        return Err(ToolError::Failed {
+            program: program.to_owned(),
+            status: output.status,
+            first_line: stderr.lines().next().unwrap_or("").trim().to_owned(),
+        });
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-fn capture_window(name: &str, out: &Path) -> Result<(), String> {
+fn capture_window(name: &str, out: &Path) -> Result<(), CaptureError> {
     let found = run_tool(
         "xdotool",
         &[
@@ -129,26 +197,36 @@ fn capture_window(name: &str, out: &Path) -> Result<(), String> {
             name.to_owned(),
         ],
     )
-    .map_err(|e| format!("looking for a window named {name:?}: {e}"))?;
-    let id = pick_window(&found).map_err(|e| format!("window named {name:?}: {e}"))?;
+    .map_err(|source| CaptureError::Search {
+        name: name.to_owned(),
+        source,
+    })?;
+    let id = pick_window(&found).map_err(|source| CaptureError::Window {
+        name: name.to_owned(),
+        source,
+    })?;
     let (program, mut args) = imagemagick("import");
     args.extend(["-window".to_owned(), id, out.to_string_lossy().into_owned()]);
-    run_tool(&program, &args).map(|_| ())
+    run_tool(&program, &args)?;
+    Ok(())
 }
 
 /// The text of the file at `path`, or of standard input, read to its end, when `path`
-/// is `-`. `Err` is a message naming what could not be read.
-pub(crate) fn read_text(path: &Path) -> Result<String, String> {
+/// is `-`.
+pub(crate) fn read_text(path: &Path) -> Result<String, ReadTextError> {
     if path == Path::new("-") {
         let mut text = String::new();
         std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)
-            .map_err(|e| format!("cannot read standard input: {e}"))?;
+            .map_err(ReadTextError::Stdin)?;
         return Ok(text);
     }
-    std::fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))
+    std::fs::read_to_string(path).map_err(|source| ReadTextError::File {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
-fn render_text(text: &str, out: &Path) -> Result<(), String> {
+fn render_text(text: &str, out: &Path) -> Result<(), ToolError> {
     let clamped = clamp(text, MAX_TEXT_LINES);
     let label = if clamped.trim().is_empty() {
         "(empty)".to_owned()
@@ -195,7 +273,12 @@ mod tests {
         assert!(screen_path(notes, "a/b").is_err());
         assert!(screen_path(notes, ".S6").is_err());
         assert!(screen_path(notes, "").is_err());
-        assert!(screen_path(notes, "S 6").unwrap_err().contains("\"S 6\""));
+        assert!(
+            screen_path(notes, "S 6")
+                .unwrap_err()
+                .to_string()
+                .contains("\"S 6\"")
+        );
     }
 
     // A whole log rendered at one pixel row per line is an image nobody can look at, so
@@ -212,7 +295,7 @@ mod tests {
     fn pick_window_takes_one_id_and_refuses_none_or_several() {
         assert_eq!(pick_window("123\n").unwrap(), "123");
         assert!(pick_window("").is_err());
-        let err = pick_window("1\n2\n").unwrap_err();
+        let err = pick_window("1\n2\n").unwrap_err().to_string();
         assert!(err.contains("1, 2"), "{err}");
     }
 

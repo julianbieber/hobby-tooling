@@ -1,3 +1,5 @@
+//! Positions, ranges and locations as the navigation tools exchange them.
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -46,4 +48,49 @@ pub struct Location {
     pub uri: String,
     #[schemars(description = "The range in the document")]
     pub range: Range,
+}
+
+impl From<Position> for lsp_types::Position {
+    fn from(p: Position) -> Self {
+        lsp_types::Position {
+            line: p.line,
+            character: p.character,
+        }
+    }
+}
+
+impl From<lsp_types::Position> for Position {
+    fn from(p: lsp_types::Position) -> Self {
+        Position {
+            line: p.line,
+            character: p.character,
+        }
+    }
+}
+
+impl From<Range> for lsp_types::Range {
+    fn from(r: Range) -> Self {
+        lsp_types::Range {
+            start: r.start.into(),
+            end: r.end.into(),
+        }
+    }
+}
+
+impl From<lsp_types::Range> for Range {
+    fn from(r: lsp_types::Range) -> Self {
+        Range {
+            start: r.start.into(),
+            end: r.end.into(),
+        }
+    }
+}
+
+impl From<lsp_types::Location> for Location {
+    fn from(loc: lsp_types::Location) -> Self {
+        Location {
+            uri: loc.uri.to_string(),
+            range: loc.range.into(),
+        }
+    }
 }

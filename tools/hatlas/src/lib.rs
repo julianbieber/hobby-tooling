@@ -13,8 +13,8 @@ pub mod source;
 pub mod systems;
 pub mod types;
 
-use std::fmt;
 use std::path::PathBuf;
+use std::process::ExitStatus;
 
 /// What a run was asked to do.
 pub struct Options {
@@ -45,48 +45,55 @@ pub struct Summary {
 
 /// Every way a run fails. Each variant names the input that drifted, so the message
 /// says what to look at without a second run.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
-    Cargo { step: String, status: String },
-    Metadata(String),
-    Scip(String),
-    UnsupportedFormat { file: PathBuf, found: u32, supported: Vec<u32> },
-    MissingField { file: PathBuf, version: Option<u32>, field: String },
+    #[error("could not start `{step}`")]
+    Spawn {
+        step: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("`{step}` failed ({status})")]
+    Cargo { step: String, status: ExitStatus },
+    #[error("cargo metadata is not JSON")]
+    MetadataJson(#[source] serde_json::Error),
+    #[error("cargo metadata has no `{0}`")]
+    Metadata(&'static str),
+    #[error("{}: not rustdoc JSON", path.display())]
+    RustdocJson {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("{}: not a SCIP index", path.display())]
+    Scip {
+        path: PathBuf,
+        #[source]
+        source: protobuf::Error,
+    },
+    #[error("{}: rustdoc JSON format_version {found} is not supported (supported: {supported:?})", file.display())]
+    UnsupportedFormat {
+        file: PathBuf,
+        found: u64,
+        supported: Vec<u64>,
+    },
+    #[error("{}: rustdoc JSON (format_version {}) has no `{field}`", file.display(), version.map_or_else(|| "unknown".to_string(), |v| v.to_string()))]
+    MissingField {
+        file: PathBuf,
+        version: Option<u64>,
+        field: String,
+    },
+    #[error("{} links to `{link}`, which the site does not contain", page.display())]
     DanglingLink { page: PathBuf, link: String },
+    #[error("{} exists and is not a hatlas site (no {} marker); refusing to replace it", .0.display(), site::swap::MARKER)]
     NotASite(PathBuf),
-    Io { path: PathBuf, source: std::io::Error },
+    #[error("{}", path.display())]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 }
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Error::Cargo { step, status } => write!(f, "`{step}` failed ({status})"),
-            Error::Metadata(why) => write!(f, "cargo metadata: {why}"),
-            Error::Scip(why) => write!(f, "SCIP index: {why}"),
-            Error::UnsupportedFormat { file, found, supported } => write!(
-                f,
-                "{}: rustdoc JSON format_version {found} is not supported (supported: {supported:?})",
-                file.display()
-            ),
-            Error::MissingField { file, version, field } => {
-                let v = version.map_or("unknown".to_string(), |v| v.to_string());
-                write!(f, "{}: rustdoc JSON (format_version {v}) has no `{field}`", file.display())
-            }
-            Error::DanglingLink { page, link } => {
-                write!(f, "{} links to `{link}`, which the site does not contain", page.display())
-            }
-            Error::NotASite(path) => write!(
-                f,
-                "{} exists and is not a hatlas site (no {} marker); refusing to replace it",
-                path.display(),
-                site::swap::MARKER
-            ),
-            Error::Io { path, source } => write!(f, "{}: {source}", path.display()),
-        }
-    }
-}
-
-impl std::error::Error for Error {}
 
 /// Documents the workspace, renders the site, checks every link, and replaces the
 /// previous site only once the new one has passed.
@@ -117,7 +124,11 @@ pub fn run(options: &Options) -> Result<Summary, Error> {
             name = format!("{name}_bin");
         }
         names.push(name.clone());
-        crates.push(atlas::CrateAtlas::build(&doc, name, target.package.clone())?);
+        crates.push(atlas::CrateAtlas::build(
+            &doc,
+            name,
+            target.package.clone(),
+        )?);
         docs.push(doc);
     }
     let mut atlas = atlas::Atlas { crates };

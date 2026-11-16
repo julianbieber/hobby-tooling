@@ -1,9 +1,40 @@
+//! Running a recipe: turning named arguments into just's positional ones,
+//! assembling the command line (optionally under `mise exec`), and executing
+//! it with a timeout.
+
+use crate::dump::{JustError, introspect};
 use crate::models::{DumpRecipe, RunResult};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 use tokio::io::AsyncReadExt;
-use tokio::process::Command;
+use tokio::process::{Child, ChildStderr, ChildStdout, Command};
+
+/// Named arguments that cannot be mapped onto the recipe's parameters.
+#[derive(Debug, thiserror::Error)]
+pub enum ArgsError {
+    #[error("unsupported argument value: {0}")]
+    UnsupportedValue(serde_json::Value),
+    #[error(
+        "cannot set '{0}': an earlier optional parameter was omitted, and just arguments are positional"
+    )]
+    AfterOmittedOptional(String),
+    #[error("missing required parameter '{0}'")]
+    MissingRequired(String),
+}
+
+/// The recipe process could not be run to completion.
+#[derive(Debug, thiserror::Error)]
+pub enum RunError {
+    #[error("failed to spawn `{program}`")]
+    Spawn {
+        program: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("error waiting for recipe")]
+    Wait(#[source] std::io::Error),
+}
 
 /// mise config filenames that trigger `mise exec` wrapping when found.
 const MISE_MARKERS: &[&str] = &[
@@ -35,13 +66,13 @@ fn find_mise_dir(start: &Path) -> Option<PathBuf> {
 
 /// Convert a single JSON scalar into an argument string. Strings pass through
 /// verbatim; numbers and booleans use their literal form.
-fn scalar_to_string(value: &serde_json::Value) -> Result<String, String> {
+fn scalar_to_string(value: &serde_json::Value) -> Result<String, ArgsError> {
     match value {
         serde_json::Value::String(s) => Ok(s.clone()),
         serde_json::Value::Number(n) => Ok(n.to_string()),
         serde_json::Value::Bool(b) => Ok(b.to_string()),
         serde_json::Value::Null => Ok(String::new()),
-        other => Err(format!("unsupported argument value: {other}")),
+        other => Err(ArgsError::UnsupportedValue(other.clone())),
     }
 }
 
@@ -52,7 +83,7 @@ fn scalar_to_string(value: &serde_json::Value) -> Result<String, String> {
 pub fn positional_from_map(
     recipe: &DumpRecipe,
     map: &serde_json::Map<String, serde_json::Value>,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, ArgsError> {
     let mut result = Vec::new();
     let mut stopped = false;
 
@@ -60,11 +91,7 @@ pub fn positional_from_map(
         match map.get(&param.name) {
             Some(value) => {
                 if stopped {
-                    return Err(format!(
-                        "cannot set '{}': an earlier optional parameter was omitted, \
-                         and just arguments are positional",
-                        param.name
-                    ));
+                    return Err(ArgsError::AfterOmittedOptional(param.name.clone()));
                 }
                 if param.is_variadic() {
                     match value {
@@ -81,7 +108,7 @@ pub fn positional_from_map(
             }
             None => {
                 if param.is_required() {
-                    return Err(format!("missing required parameter '{}'", param.name));
+                    return Err(ArgsError::MissingRequired(param.name.clone()));
                 }
                 stopped = true;
             }
@@ -90,7 +117,20 @@ pub fn positional_from_map(
     Ok(result)
 }
 
-/// Assemble the full argv for a recipe invocation.
+struct Invocation {
+    program: String,
+    args: Vec<String>,
+    mise_wrapped: bool,
+}
+
+impl Invocation {
+    fn argv(&self) -> Vec<String> {
+        std::iter::once(self.program.clone())
+            .chain(self.args.iter().cloned())
+            .collect()
+    }
+}
+
 fn build_command(
     justfile: &Path,
     dir: &Path,
@@ -98,7 +138,7 @@ fn build_command(
     args: &[String],
     dry_run: bool,
     use_mise: bool,
-) -> (Vec<String>, bool) {
+) -> Invocation {
     let mut just_args: Vec<String> =
         vec!["--justfile".into(), justfile.to_string_lossy().into_owned()];
     if dry_run {
@@ -111,23 +151,37 @@ fn build_command(
 
     match mise_dir {
         Some(md) => {
-            let mut argv = vec![
-                "mise".into(),
+            let mut args = vec![
                 "exec".into(),
                 "--cd".into(),
                 md.to_string_lossy().into_owned(),
                 "--".into(),
                 "just".into(),
             ];
-            argv.extend(just_args);
-            (argv, true)
+            args.extend(just_args);
+            Invocation {
+                program: "mise".into(),
+                args,
+                mise_wrapped: true,
+            }
         }
-        None => {
-            let mut argv = vec!["just".into()];
-            argv.extend(just_args);
-            (argv, false)
-        }
+        None => Invocation {
+            program: "just".into(),
+            args: just_args,
+            mise_wrapped: false,
+        },
     }
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "stdout and stderr are set to piped on the command just before spawning"
+)]
+fn spawn_piped(cmd: &mut Command) -> std::io::Result<(Child, ChildStdout, ChildStderr)> {
+    let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let stdout = child.stdout.take().expect("stdout is piped");
+    let stderr = child.stderr.take().expect("stderr is piped");
+    Ok((child, stdout, stderr))
 }
 
 /// Execute a recipe and capture its output, killing it after `timeout`.
@@ -139,23 +193,21 @@ pub async fn run_recipe(
     dry_run: bool,
     use_mise: bool,
     timeout: Duration,
-) -> Result<RunResult, String> {
-    let (argv, mise_wrapped) = build_command(justfile, dir, recipe, args, dry_run, use_mise);
+) -> Result<RunResult, RunError> {
+    let invocation = build_command(justfile, dir, recipe, args, dry_run, use_mise);
 
-    let mut cmd = Command::new(&argv[0]);
-    cmd.args(&argv[1..])
+    let mut cmd = Command::new(&invocation.program);
+    cmd.args(&invocation.args)
         .current_dir(dir)
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .kill_on_drop(true);
 
     let started = Instant::now();
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("failed to spawn `{}`: {e}", argv[0]))?;
-
-    let mut stdout_pipe = child.stdout.take().expect("piped stdout");
-    let mut stderr_pipe = child.stderr.take().expect("piped stderr");
+    let (mut child, mut stdout_pipe, mut stderr_pipe) =
+        spawn_piped(&mut cmd).map_err(|source| RunError::Spawn {
+            program: invocation.program.clone(),
+            source,
+        })?;
 
     // Drain pipes concurrently so large output cannot deadlock the child.
     let stdout_task = tokio::spawn(async move {
@@ -171,7 +223,7 @@ pub async fn run_recipe(
 
     let (exit_code, timed_out) = match tokio::time::timeout(timeout, child.wait()).await {
         Ok(Ok(status)) => (status.code(), false),
-        Ok(Err(e)) => return Err(format!("error waiting for recipe: {e}")),
+        Ok(Err(e)) => return Err(RunError::Wait(e)),
         Err(_) => {
             let _ = child.start_kill();
             let _ = child.wait().await;
@@ -185,10 +237,10 @@ pub async fn run_recipe(
     Ok(RunResult {
         justfile: justfile.to_string_lossy().into_owned(),
         recipe: recipe.to_string(),
-        command: argv,
+        command: invocation.argv(),
         cwd: dir.to_string_lossy().into_owned(),
         dry_run,
-        mise_wrapped,
+        mise_wrapped: invocation.mise_wrapped,
         exit_code,
         timed_out,
         duration_ms: started.elapsed().as_millis(),
@@ -198,21 +250,7 @@ pub async fn run_recipe(
 }
 
 /// Fetch the source of a single recipe via `just --show`.
-pub async fn show_recipe(justfile: &Path, recipe: &str) -> Result<String, String> {
-    let output = Command::new("just")
-        .arg("--justfile")
-        .arg(justfile)
-        .arg("--show")
-        .arg(recipe)
-        .output()
-        .await
-        .map_err(|e| format!("failed to invoke `just`: {e}"))?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "`just --show {recipe}` failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+pub async fn show_recipe(justfile: &Path, recipe: &str) -> Result<String, JustError> {
+    let stdout = introspect(justfile, &["--show", recipe], &format!("--show {recipe}")).await?;
+    Ok(String::from_utf8_lossy(&stdout).into_owned())
 }

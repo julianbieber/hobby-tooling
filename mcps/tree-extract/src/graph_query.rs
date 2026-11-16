@@ -7,10 +7,11 @@
 //! always knows whether it is seeing a subset, without re-reading raw files.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::str::FromStr;
 
 use serde::Serialize;
 
-use crate::graph::{CodeGraph, EdgeKind, Node, NodeKind};
+use crate::graph::{CodeGraph, EdgeKind, Node, NodeKind, UnknownKind};
 
 // Result-size discipline (see module docs).
 const SEARCH_DEFAULT: usize = 30;
@@ -26,8 +27,56 @@ const IMPACT_MAX_DEPTH: usize = 10;
 const DOCSTRING_CLAMP: usize = 280;
 const SAMPLE_PER_FILE: usize = 5;
 
+/// Which edges of a node [`LoadedGraph::neighbors`] follows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Direction {
+    #[default]
+    Out,
+    In,
+    Both,
+}
+
+impl Direction {
+    fn label(self) -> &'static str {
+        match self {
+            Direction::Out => "out",
+            Direction::In => "in",
+            Direction::Both => "both",
+        }
+    }
+}
+
+/// Case-insensitive `out`, `in` or `both`.
+impl FromStr for Direction {
+    type Err = UnknownKind;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "out" => Ok(Direction::Out),
+            "in" => Ok(Direction::In),
+            "both" => Ok(Direction::Both),
+            _ => Err(UnknownKind {
+                what: "direction",
+                value: s.to_string(),
+                expected: "out, in, both",
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+struct NodeIdx(usize);
+
+#[expect(
+    clippy::indexing_slicing,
+    reason = "a NodeIdx is minted only inside LoadedGraph, from a position in its node list, and every per-node table holds one slot per node"
+)]
+fn at<T>(table: &[T], idx: NodeIdx) -> &T {
+    &table[idx.0]
+}
+
 struct Adj {
-    node: usize,
+    node: NodeIdx,
     kind: EdgeKind,
     ambiguous: bool,
     count: u32,
@@ -36,31 +85,36 @@ struct Adj {
 /// A `CodeGraph` with adjacency indexes built for traversal.
 pub struct LoadedGraph {
     graph: CodeGraph,
-    id_to_idx: HashMap<String, usize>,
+    id_to_idx: HashMap<String, NodeIdx>,
     out_adj: Vec<Vec<Adj>>,
     in_adj: Vec<Vec<Adj>>,
 }
 
 impl LoadedGraph {
     pub fn build(graph: CodeGraph) -> Self {
-        let id_to_idx: HashMap<String, usize> = graph
+        let id_to_idx: HashMap<String, NodeIdx> = graph
             .nodes
             .iter()
             .enumerate()
-            .map(|(i, n)| (n.id.clone(), i))
+            .map(|(i, n)| (n.id.clone(), NodeIdx(i)))
             .collect();
         let n = graph.nodes.len();
         let mut out_adj: Vec<Vec<Adj>> = (0..n).map(|_| Vec::new()).collect();
         let mut in_adj: Vec<Vec<Adj>> = (0..n).map(|_| Vec::new()).collect();
         for e in &graph.edges {
-            if let (Some(&f), Some(&t)) = (id_to_idx.get(&e.from), id_to_idx.get(&e.to)) {
-                out_adj[f].push(Adj {
+            let (Some(&f), Some(&t)) = (id_to_idx.get(&e.from), id_to_idx.get(&e.to)) else {
+                continue;
+            };
+            if let Some(out) = out_adj.get_mut(f.0) {
+                out.push(Adj {
                     node: t,
                     kind: e.kind,
                     ambiguous: e.ambiguous,
                     count: e.count,
                 });
-                in_adj[t].push(Adj {
+            }
+            if let Some(inc) = in_adj.get_mut(t.0) {
+                inc.push(Adj {
                     node: f,
                     kind: e.kind,
                     ambiguous: e.ambiguous,
@@ -80,20 +134,33 @@ impl LoadedGraph {
         &self.graph.stats
     }
 
-    fn node(&self, idx: usize) -> &Node {
-        &self.graph.nodes[idx]
+    fn node(&self, idx: NodeIdx) -> &Node {
+        at(&self.graph.nodes, idx)
     }
 
-    /// Resolve a string that is either a node id (`relpath:Lstart`) or an exact
-    /// symbol name. Returns all matching node indices.
-    fn resolve(&self, s: &str) -> Vec<usize> {
-        if let Some(&i) = self.id_to_idx.get(s) {
-            return vec![i];
-        }
+    fn out_edges(&self, idx: NodeIdx) -> &[Adj] {
+        at(&self.out_adj, idx)
+    }
+
+    fn in_edges(&self, idx: NodeIdx) -> &[Adj] {
+        at(&self.in_adj, idx)
+    }
+
+    fn indexed_nodes(&self) -> impl Iterator<Item = (NodeIdx, &Node)> {
         self.graph
             .nodes
             .iter()
             .enumerate()
+            .map(|(i, n)| (NodeIdx(i), n))
+    }
+
+    /// Resolve a string that is either a node id (`relpath:Lstart`) or an exact
+    /// symbol name. Returns all matching node indices.
+    fn resolve(&self, s: &str) -> Vec<NodeIdx> {
+        if let Some(&i) = self.id_to_idx.get(s) {
+            return vec![i];
+        }
+        self.indexed_nodes()
             .filter(|(_, n)| n.name == s)
             .map(|(i, _)| i)
             .collect()
@@ -104,24 +171,20 @@ impl LoadedGraph {
     pub fn search(
         &self,
         query: &str,
-        kind: Option<&str>,
+        kind: Option<NodeKind>,
         language: Option<&str>,
         limit: Option<usize>,
     ) -> Envelope<SymbolHit> {
         let limit = clamp(limit, SEARCH_DEFAULT, SEARCH_MAX);
-        let kind_filter = kind.and_then(node_kind_from_str);
 
-        let candidates: Vec<usize> = self
-            .graph
-            .nodes
-            .iter()
-            .enumerate()
-            .filter(|(_, n)| kind_filter.is_none_or(|k| n.kind == k))
+        let candidates: Vec<NodeIdx> = self
+            .indexed_nodes()
+            .filter(|(_, n)| kind.is_none_or(|k| n.kind == k))
             .filter(|(_, n)| language.is_none_or(|l| n.language.as_deref() == Some(l)))
             .map(|(i, _)| i)
             .collect();
 
-        let mut scored: Vec<(usize, Option<u32>)> = if query.trim().is_empty() {
+        let mut scored: Vec<(NodeIdx, Option<u32>)> = if query.trim().is_empty() {
             candidates.into_iter().map(|i| (i, None)).collect()
         } else {
             use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
@@ -132,7 +195,7 @@ impl LoadedGraph {
             candidates
                 .into_iter()
                 .filter_map(|i| {
-                    let hay = Utf32Str::new(&self.graph.nodes[i].name, &mut buf);
+                    let hay = Utf32Str::new(&self.node(i).name, &mut buf);
                     pat.score(hay, &mut matcher).map(|s| (i, Some(s)))
                 })
                 .collect()
@@ -171,7 +234,7 @@ impl LoadedGraph {
         }
     }
 
-    fn hit(&self, idx: usize, score: Option<u32>) -> SymbolHit {
+    fn hit(&self, idx: NodeIdx, score: Option<u32>) -> SymbolHit {
         let n = self.node(idx);
         SymbolHit {
             id: n.id.clone(),
@@ -204,7 +267,7 @@ impl LoadedGraph {
         }
     }
 
-    fn detail(&self, idx: usize) -> SymbolDetail {
+    fn detail(&self, idx: NodeIdx) -> SymbolDetail {
         let n = self.node(idx);
         SymbolDetail {
             ok: true,
@@ -216,8 +279,8 @@ impl LoadedGraph {
             line: n.line,
             language: n.language.clone(),
             docstring: n.docstring.as_deref().map(clamp_doc),
-            out_edges: EdgeCounts::tally(&self.out_adj[idx]),
-            in_edges: EdgeCounts::tally(&self.in_adj[idx]),
+            out_edges: EdgeCounts::tally(self.out_edges(idx)),
+            in_edges: EdgeCounts::tally(self.in_edges(idx)),
             candidates: vec![],
             summary: format!(
                 "{} `{}` at {}{}",
@@ -234,42 +297,34 @@ impl LoadedGraph {
     pub fn neighbors(
         &self,
         id: &str,
-        direction: Option<&str>,
-        edge_kind: Option<&str>,
+        direction: Direction,
+        edge_kind: Option<EdgeKind>,
         limit: Option<usize>,
     ) -> Envelope<NeighborHit> {
         let limit = clamp(limit, NEIGHBORS_DEFAULT, NEIGHBORS_MAX);
-        let dir = direction.unwrap_or("out");
-        let kind_filter = edge_kind.and_then(edge_kind_from_str);
-
-        let Some(&start) = self.id_to_idx.get(id) else {
-            // allow name resolution to a single node
-            let r = self.resolve(id);
-            if r.len() != 1 {
-                return Envelope::empty(format!("no unique node for {id:?}"));
-            }
-            return self.neighbors_from(r[0], dir, kind_filter, limit);
-        };
-        self.neighbors_from(start, dir, kind_filter, limit)
+        match self.resolve(id).as_slice() {
+            [start] => self.neighbors_from(*start, direction, edge_kind, limit),
+            _ => Envelope::empty(format!("no unique node for {id:?}")),
+        }
     }
 
     fn neighbors_from(
         &self,
-        start: usize,
-        dir: &str,
+        start: NodeIdx,
+        dir: Direction,
         kind_filter: Option<EdgeKind>,
         limit: usize,
     ) -> Envelope<NeighborHit> {
         let mut hits: Vec<NeighborHit> = Vec::new();
-        if dir == "out" || dir == "both" {
-            for a in &self.out_adj[start] {
+        if matches!(dir, Direction::Out | Direction::Both) {
+            for a in self.out_edges(start) {
                 if kind_filter.is_none_or(|k| a.kind == k) {
                     hits.push(self.neighbor_hit(a, "out"));
                 }
             }
         }
-        if dir == "in" || dir == "both" {
-            for a in &self.in_adj[start] {
+        if matches!(dir, Direction::In | Direction::Both) {
+            for a in self.in_edges(start) {
                 if kind_filter.is_none_or(|k| a.kind == k) {
                     hits.push(self.neighbor_hit(a, "in"));
                 }
@@ -282,10 +337,11 @@ impl LoadedGraph {
         Envelope {
             ok: true,
             summary: format!(
-                "{} neighbor{} of {} ({dir})",
+                "{} neighbor{} of {} ({})",
                 total,
                 if total == 1 { "" } else { "s" },
-                self.node(start).id
+                self.node(start).id,
+                dir.label()
             ),
             returned: hits.len(),
             total,
@@ -315,43 +371,41 @@ impl LoadedGraph {
         &self,
         from: &str,
         to: &str,
-        edge_kinds: Option<&[String]>,
+        edge_kinds: Option<&[EdgeKind]>,
         max_depth: Option<usize>,
     ) -> PathResult {
-        let kinds = parse_edge_kinds(edge_kinds, &[EdgeKind::Calls]);
+        let kinds = edge_kinds_or(edge_kinds, &[EdgeKind::Calls]);
         let max_depth = max_depth.unwrap_or(PATH_DEFAULT_DEPTH).min(PATH_MAX_DEPTH);
         let sources = self.resolve(from);
-        let targets: HashSet<usize> = self.resolve(to).into_iter().collect();
+        let targets: HashSet<NodeIdx> = self.resolve(to).into_iter().collect();
         if sources.is_empty() || targets.is_empty() {
             return PathResult::none(format!("unresolved endpoint(s) {from:?} → {to:?}"));
         }
 
         // Multi-source BFS with parent pointers.
-        let mut parent: HashMap<usize, usize> = HashMap::new();
-        let mut depth: HashMap<usize, usize> = HashMap::new();
-        let mut queue: VecDeque<usize> = VecDeque::new();
+        let mut parent: HashMap<NodeIdx, NodeIdx> = HashMap::new();
+        let mut seen: HashSet<NodeIdx> = HashSet::new();
+        let mut queue: VecDeque<(NodeIdx, usize)> = VecDeque::new();
         for &s in &sources {
-            depth.insert(s, 0);
-            queue.push_back(s);
+            seen.insert(s);
+            queue.push_back((s, 0));
             if targets.contains(&s) {
                 return self.build_path(s, &parent);
             }
         }
-        while let Some(cur) = queue.pop_front() {
-            let d = depth[&cur];
+        while let Some((cur, d)) = queue.pop_front() {
             if d >= max_depth {
                 continue;
             }
-            for a in &self.out_adj[cur] {
-                if !kinds.contains(&a.kind) || depth.contains_key(&a.node) {
+            for a in self.out_edges(cur) {
+                if !kinds.contains(&a.kind) || !seen.insert(a.node) {
                     continue;
                 }
                 parent.insert(a.node, cur);
-                depth.insert(a.node, d + 1);
                 if targets.contains(&a.node) {
                     return self.build_path(a.node, &parent);
                 }
-                queue.push_back(a.node);
+                queue.push_back((a.node, d + 1));
             }
         }
         PathResult::none(format!(
@@ -359,7 +413,7 @@ impl LoadedGraph {
         ))
     }
 
-    fn build_path(&self, end: usize, parent: &HashMap<usize, usize>) -> PathResult {
+    fn build_path(&self, end: NodeIdx, parent: &HashMap<NodeIdx, NodeIdx>) -> PathResult {
         let mut chain = vec![end];
         let mut cur = end;
         while let Some(&p) = parent.get(&cur) {
@@ -377,7 +431,7 @@ impl LoadedGraph {
         }
     }
 
-    fn path_node(&self, idx: usize) -> PathNode {
+    fn path_node(&self, idx: NodeIdx) -> PathNode {
         let n = self.node(idx);
         PathNode {
             id: n.id.clone(),
@@ -392,12 +446,12 @@ impl LoadedGraph {
     pub fn impact(
         &self,
         id: &str,
-        edge_kinds: Option<&[String]>,
+        edge_kinds: Option<&[EdgeKind]>,
         max_depth: Option<usize>,
         limit: Option<usize>,
         group_by_file: Option<bool>,
     ) -> ImpactResult {
-        let kinds = parse_edge_kinds(edge_kinds, &[EdgeKind::Calls, EdgeKind::Imports]);
+        let kinds = edge_kinds_or(edge_kinds, &[EdgeKind::Calls, EdgeKind::Imports]);
         let max_depth = max_depth
             .unwrap_or(IMPACT_DEFAULT_DEPTH)
             .min(IMPACT_MAX_DEPTH);
@@ -405,12 +459,12 @@ impl LoadedGraph {
         let group = group_by_file.unwrap_or(true);
 
         // Seeds: the node itself, or (for a file) the file node + its symbols.
-        let seeds: Vec<usize> = match self.id_to_idx.get(id) {
+        let seeds: Vec<NodeIdx> = match self.id_to_idx.get(id) {
             Some(&i) if self.node(i).kind == NodeKind::File => {
-                let file = self.node(i).file.clone();
+                let file = &self.node(i).file;
                 let mut s = vec![i];
-                for (j, n) in self.graph.nodes.iter().enumerate() {
-                    if j != i && n.file == file && n.kind != NodeKind::File {
+                for (j, n) in self.indexed_nodes() {
+                    if j != i && n.file == *file && n.kind != NodeKind::File {
                         s.push(j);
                     }
                 }
@@ -424,29 +478,28 @@ impl LoadedGraph {
         }
 
         // Reverse BFS, tracking minimum depth per dependent.
-        let seed_set: HashSet<usize> = seeds.iter().copied().collect();
-        let mut depth: HashMap<usize, usize> = HashMap::new();
-        let mut queue: VecDeque<usize> = VecDeque::new();
+        let seed_set: HashSet<NodeIdx> = seeds.iter().copied().collect();
+        let mut depth: HashMap<NodeIdx, usize> = HashMap::new();
+        let mut queue: VecDeque<(NodeIdx, usize)> = VecDeque::new();
         for &s in &seeds {
             depth.insert(s, 0);
-            queue.push_back(s);
+            queue.push_back((s, 0));
         }
-        while let Some(cur) = queue.pop_front() {
-            let d = depth[&cur];
+        while let Some((cur, d)) = queue.pop_front() {
             if d >= max_depth {
                 continue;
             }
-            for a in &self.in_adj[cur] {
+            for a in self.in_edges(cur) {
                 if !kinds.contains(&a.kind) || depth.contains_key(&a.node) {
                     continue;
                 }
                 depth.insert(a.node, d + 1);
-                queue.push_back(a.node);
+                queue.push_back((a.node, d + 1));
             }
         }
 
         // Dependents = reached nodes minus the seeds.
-        let mut deps: Vec<(usize, usize)> = depth
+        let mut deps: Vec<(NodeIdx, usize)> = depth
             .iter()
             .filter(|(idx, _)| !seed_set.contains(idx))
             .map(|(&idx, &d)| (idx, d))
@@ -524,7 +577,7 @@ impl LoadedGraph {
         }
     }
 
-    fn impact_node(&self, idx: usize, depth: usize) -> ImpactNode {
+    fn impact_node(&self, idx: NodeIdx, depth: usize) -> ImpactNode {
         let n = self.node(idx);
         ImpactNode {
             id: n.id.clone(),
@@ -586,18 +639,20 @@ impl LoadedGraph {
         modules.sort_by(|a, b| b.symbol_count.cmp(&a.symbol_count).then(a.dir.cmp(&b.dir)));
 
         // Hotspots: call fan-in/out per symbol node.
-        let mut hotspots: Vec<Hotspot> = (0..self.graph.nodes.len())
-            .filter(|&i| self.node(i).kind != NodeKind::File)
-            .map(|i| {
-                let fan_in = self.in_adj[i]
+        let mut hotspots: Vec<Hotspot> = self
+            .indexed_nodes()
+            .filter(|(_, n)| n.kind != NodeKind::File)
+            .map(|(i, n)| {
+                let fan_in = self
+                    .in_edges(i)
                     .iter()
                     .filter(|a| a.kind == EdgeKind::Calls)
                     .count();
-                let fan_out = self.out_adj[i]
+                let fan_out = self
+                    .out_edges(i)
                     .iter()
                     .filter(|a| a.kind == EdgeKind::Calls)
                     .count();
-                let n = self.node(i);
                 Hotspot {
                     id: n.id.clone(),
                     name: n.name.clone(),
@@ -635,23 +690,23 @@ impl LoadedGraph {
     fn cycles(&self) -> Vec<Cycle> {
         use petgraph::graph::{DiGraph, NodeIndex};
         let mut g: DiGraph<(), ()> = DiGraph::new();
-        let idx: Vec<NodeIndex> = (0..self.graph.nodes.len())
-            .map(|_| g.add_node(()))
-            .collect();
+        let idx: Vec<NodeIndex> = self.graph.nodes.iter().map(|_| g.add_node(())).collect();
         for e in &self.graph.edges {
             if !matches!(e.kind, EdgeKind::Calls | EdgeKind::Imports) {
                 continue;
             }
             if let (Some(&f), Some(&t)) = (self.id_to_idx.get(&e.from), self.id_to_idx.get(&e.to)) {
-                g.add_edge(idx[f], idx[t], ());
+                g.add_edge(*at(&idx, f), *at(&idx, t), ());
             }
         }
         let mut cycles: Vec<Cycle> = petgraph::algo::tarjan_scc(&g)
             .into_iter()
             .filter(|scc| scc.len() > 1)
             .map(|scc| {
-                let mut members: Vec<PathNode> =
-                    scc.iter().map(|ni| self.path_node(ni.index())).collect();
+                let mut members: Vec<PathNode> = scc
+                    .iter()
+                    .map(|ni| self.path_node(NodeIdx(ni.index())))
+                    .collect();
                 members.sort_by(|a, b| a.id.cmp(&b.id));
                 Cycle {
                     size: members.len(),
@@ -662,7 +717,7 @@ impl LoadedGraph {
         cycles.sort_by(|a, b| {
             b.size
                 .cmp(&a.size)
-                .then(a.members[0].id.cmp(&b.members[0].id))
+                .then_with(|| a.first_member_id().cmp(&b.first_member_id()))
         });
         cycles
     }
@@ -894,6 +949,12 @@ pub struct Cycle {
     pub members: Vec<PathNode>,
 }
 
+impl Cycle {
+    fn first_member_id(&self) -> Option<&str> {
+        self.members.first().map(|m| m.id.as_str())
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct ModulesResult {
     pub ok: bool,
@@ -934,21 +995,6 @@ fn dir_of(rel: &str) -> &str {
     }
 }
 
-fn node_kind_from_str(s: &str) -> Option<NodeKind> {
-    Some(match s.to_ascii_lowercase().as_str() {
-        "file" => NodeKind::File,
-        "class" => NodeKind::Class,
-        "struct" => NodeKind::Struct,
-        "interface" => NodeKind::Interface,
-        "enum" => NodeKind::Enum,
-        "trait" => NodeKind::Trait,
-        "type" => NodeKind::Type,
-        "function" | "fn" => NodeKind::Function,
-        "method" => NodeKind::Method,
-        _ => return None,
-    })
-}
-
 fn kind_label(k: NodeKind) -> &'static str {
     match k {
         NodeKind::File => "file",
@@ -963,26 +1009,9 @@ fn kind_label(k: NodeKind) -> &'static str {
     }
 }
 
-fn edge_kind_from_str(s: &str) -> Option<EdgeKind> {
-    Some(match s.to_ascii_lowercase().as_str() {
-        "calls" | "call" => EdgeKind::Calls,
-        "imports" | "import" => EdgeKind::Imports,
-        "implements" | "implement" => EdgeKind::Implements,
-        "contains" | "contain" => EdgeKind::Contains,
-        _ => return None,
-    })
-}
-
-fn parse_edge_kinds(opt: Option<&[String]>, default: &[EdgeKind]) -> Vec<EdgeKind> {
-    match opt {
-        Some(list) if !list.is_empty() => {
-            let parsed: Vec<EdgeKind> = list.iter().filter_map(|s| edge_kind_from_str(s)).collect();
-            if parsed.is_empty() {
-                default.to_vec()
-            } else {
-                parsed
-            }
-        }
+fn edge_kinds_or(requested: Option<&[EdgeKind]>, default: &[EdgeKind]) -> Vec<EdgeKind> {
+    match requested {
+        Some(kinds) if !kinds.is_empty() => kinds.to_vec(),
         _ => default.to_vec(),
     }
 }

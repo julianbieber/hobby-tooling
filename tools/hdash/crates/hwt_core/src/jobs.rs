@@ -3,8 +3,10 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 use std::thread;
+
+use parking_lot::Mutex;
 
 type Job = Box<dyn FnOnce() + Send + 'static>;
 
@@ -15,31 +17,27 @@ type Job = Box<dyn FnOnce() + Send + 'static>;
 /// including the sending end of a channel it was to answer on — is dropped, so a caller waiting
 /// on that channel sees it close. The panic message goes through the process's panic hook.
 pub fn spawn_job(job: impl FnOnce() + Send + 'static) {
-    let _ = pool().lock().map(|tx| tx.send(Box::new(job)));
+    let _ = pool().send(Box::new(job));
 }
 
-fn pool() -> &'static Mutex<Sender<Job>> {
-    static POOL: OnceLock<Mutex<Sender<Job>>> = OnceLock::new();
+fn pool() -> &'static Sender<Job> {
+    static POOL: OnceLock<Sender<Job>> = OnceLock::new();
     POOL.get_or_init(|| {
         let (tx, rx) = channel::<Job>();
-        let rx = std::sync::Arc::new(Mutex::new(rx));
+        let rx = Arc::new(Mutex::new(rx));
         for i in 0..pool_size() {
             let rx = rx.clone();
             let _ = thread::Builder::new()
                 .name(format!("hdash-job-{i}"))
                 .spawn(move || worker(&rx));
         }
-        Mutex::new(tx)
+        tx
     })
 }
 
 fn worker(rx: &Mutex<Receiver<Job>>) {
     loop {
-        let job = match rx.lock() {
-            Ok(rx) => rx.recv(),
-            Err(_) => return,
-        };
-        let Ok(job) = job else { return };
+        let Ok(job) = rx.lock().recv() else { return };
         let _ = catch_unwind(AssertUnwindSafe(job));
     }
 }

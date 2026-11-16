@@ -3,7 +3,7 @@ use std::process::Command;
 use mml_parser::analyze;
 use mml_parser::ast::{EcsRole, Side, Trigger, UnitStatus};
 
-const FIXTURE: &str = include_str!("fixtures/delta-wave-bounties.hmml");
+const FIXTURE: &str = include_str!("../fixtures/delta-wave-bounties.hmml");
 const FIXTURE_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/delta-wave-bounties.hmml"

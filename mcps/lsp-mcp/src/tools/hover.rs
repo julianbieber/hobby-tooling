@@ -1,6 +1,8 @@
+//! Parameters and results of the hover tool.
+
+use super::navigation::Position;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use super::navigation::Position;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct HoverParams {

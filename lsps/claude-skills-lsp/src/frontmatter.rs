@@ -78,15 +78,10 @@ fn clean_scalar(raw: &str) -> Option<String> {
 }
 
 fn strip_quotes(v: &str) -> &str {
-    let bytes = v.as_bytes();
-    if bytes.len() >= 2 {
-        let first = bytes[0];
-        let last = bytes[bytes.len() - 1];
-        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
-            return &v[1..v.len() - 1];
-        }
-    }
-    v
+    ['"', '\'']
+        .into_iter()
+        .find_map(|q| v.strip_prefix(q)?.strip_suffix(q))
+        .unwrap_or(v)
 }
 
 #[cfg(test)]

@@ -52,8 +52,11 @@ fn node(entry: &IndexEntry) -> DocumentSymbol {
     } else {
         entry.range
     };
-    #[allow(deprecated)]
-    DocumentSymbol {
+    #[expect(
+        deprecated,
+        reason = "the protocol's deprecated field still has to be set"
+    )]
+    let symbol = DocumentSymbol {
         name: entry.name.clone(),
         detail: None,
         kind: entry.kind,
@@ -62,7 +65,8 @@ fn node(entry: &IndexEntry) -> DocumentSymbol {
         range: entry.range,
         selection_range,
         children: None,
-    }
+    };
+    symbol
 }
 
 fn within(outer: &Range, inner: &Range) -> bool {
@@ -79,8 +83,14 @@ mod tests {
 
     fn range(start: (u32, u32), end: (u32, u32)) -> Range {
         Range {
-            start: Position { line: start.0, character: start.1 },
-            end: Position { line: end.0, character: end.1 },
+            start: Position {
+                line: start.0,
+                character: start.1,
+            },
+            end: Position {
+                line: end.0,
+                character: end.1,
+            },
         }
     }
 

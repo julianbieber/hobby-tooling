@@ -13,11 +13,12 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use hwt_core::{clean, days_from_civil, git_capture, parse_ymd, projects_root};
+use hwt_core::{Roots, clean, days_from_civil, git_capture, parse_ymd};
 use log::warn;
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 pub use hwt_core::{notes_root, worktrees_root};
@@ -482,7 +483,8 @@ impl Task {
         };
         let today = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|s| (s.as_secs() / 86_400) as i64)
+            .ok()
+            .and_then(|s| i64::try_from(s.as_secs() / 86_400).ok())
             .unwrap_or(0);
         today >= days_from_civil(y, m, d)
     }
@@ -571,9 +573,9 @@ fn write_pr_cache_at(path: &Path, cache: &std::collections::HashMap<String, Cach
 
 /// Resolve a task's notes location: either `notes/PROJECT/TOPIC/TASK/` (dir) or
 /// `notes/PROJECT/TOPIC/TASK.md`.
-pub fn notes_path(id: &TaskId) -> Option<PathBuf> {
-    let base = notes_root().join(&id.project).join(&id.topic);
-    let dir = notes_root().join(id.rel());
+pub fn notes_path(roots: &Roots, id: &TaskId) -> Option<PathBuf> {
+    let base = roots.notes.join(&id.project).join(&id.topic);
+    let dir = roots.notes.join(id.rel());
     if dir.is_dir() {
         return Some(dir);
     }
@@ -646,10 +648,10 @@ fn collect_tasks(
 /// Orphans ride in this vector rather than a second field on the model so that every consumer —
 /// the sort, the async git-status fetches, the card — treats them as tasks with
 /// nothing special done for them. `adopted` is the only thing that tells them apart.
-pub fn scan_tasks() -> Vec<Task> {
+pub fn scan_tasks(roots: &Roots) -> Vec<Task> {
     let mut by_group: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
     collect_tasks(
-        &notes_root(),
+        &roots.notes,
         |p| p.join("task.json").exists(),
         &mut by_group,
     );
@@ -662,14 +664,14 @@ pub fn scan_tasks() -> Vec<Task> {
                 topic: topic_name.clone(),
                 name: task_name,
             };
-            let meta = read_meta(&id);
-            let mut task = build_task(id, true, meta.done, meta.blocked);
+            let meta = read_meta(roots, &id);
+            let mut task = build_task(roots, id, true, meta.done, meta.blocked);
             task.backlog = meta.backlog;
             tasks.push(task);
         }
     }
-    mark_unstarted(&mut tasks);
-    tasks.extend(scan_orphan_worktrees());
+    mark_unstarted(&roots.projects, &mut tasks);
+    tasks.extend(scan_orphan_worktrees(roots));
     name_sessions(&mut tasks);
     tasks
 }
@@ -684,9 +686,7 @@ fn name_cache() -> &'static Mutex<HashMap<TaskId, String>> {
 }
 
 fn name_sessions(tasks: &mut [Task]) {
-    let Ok(mut cache) = name_cache().lock() else {
-        return;
-    };
+    let mut cache = name_cache().lock();
     let unknown: Vec<TaskId> = tasks
         .iter()
         .map(|t| t.id.clone())
@@ -734,14 +734,14 @@ fn session_names_from_nu(ids: &[TaskId]) -> Option<Vec<String>> {
     (names.len() == ids.len()).then_some(names)
 }
 
-fn mark_unstarted(tasks: &mut [Task]) {
+fn mark_unstarted(projects_root: &Path, tasks: &mut [Task]) {
     let projects: BTreeSet<String> = tasks
         .iter()
         .filter(|t| !t.present && !t.is_coordinator())
         .map(|t| t.id.project.clone())
         .collect();
     for project in projects {
-        let Some(branches) = branch_names(&projects_root().join(&project)) else {
+        let Some(branches) = branch_names(&projects_root.join(&project)) else {
             continue;
         };
         for task in tasks
@@ -789,9 +789,9 @@ fn parse_branch_refs(refs: &str) -> HashSet<String> {
 ///
 /// The scan surfaces orphans rather than adopting them, because a scan never writes: adopting is
 /// a click on the card, so nothing enters the notes repo without having been asked for.
-pub fn scan_orphan_worktrees() -> Vec<Task> {
+pub fn scan_orphan_worktrees(roots: &Roots) -> Vec<Task> {
     let mut by_group: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
-    collect_tasks(&worktrees_root(), |_| true, &mut by_group);
+    collect_tasks(&roots.worktrees, |_| true, &mut by_group);
 
     let mut orphans = Vec::new();
     for ((project_name, topic_name), task_names) in by_group {
@@ -801,17 +801,18 @@ pub fn scan_orphan_worktrees() -> Vec<Task> {
                 topic: topic_name.clone(),
                 name: task_name,
             };
-            if meta_path(&id).exists() {
+            if meta_path(roots, &id).exists() {
                 continue;
             }
-            orphans.push(build_task(id, false, false, None));
+            orphans.push(build_task(roots, id, false, false, None));
         }
     }
     orphans
 }
 
-fn build_task(id: TaskId, adopted: bool, done: bool, block: Option<Block>) -> Task {
-    let dir = worktrees_root()
+fn build_task(roots: &Roots, id: TaskId, adopted: bool, done: bool, block: Option<Block>) -> Task {
+    let dir = roots
+        .worktrees
         .join(&id.project)
         .join(&id.topic)
         .join(&id.name);
@@ -820,21 +821,21 @@ fn build_task(id: TaskId, adopted: bool, done: bool, block: Option<Block>) -> Ta
         path: dir.clone(),
         git: GitInfo::default(),
     }];
-    let prs = read_prs(&id);
+    let prs = read_prs(roots, &id);
     let BuildState {
         phase,
         todo,
         waiting_on,
-    } = read_build_state(&id);
-    let aspects = read_aspects(&notes_root().join(id.rel()).join("aspects"));
-    let last_active =
-        notes_path(&id).and_then(|p| std::fs::metadata(&p).ok().and_then(|m| m.modified().ok()));
-    let title = std::fs::read_to_string(issue_path(&id))
+    } = read_build_state(roots, &id);
+    let aspects = read_aspects(&roots.notes.join(id.rel()).join("aspects"));
+    let last_active = notes_path(roots, &id)
+        .and_then(|p| std::fs::metadata(&p).ok().and_then(|m| m.modified().ok()));
+    let title = std::fs::read_to_string(issue_path(roots, &id))
         .ok()
         .and_then(|text| frontmatter_title(&text))
         .map(|t| clean(&t));
     let coordinator = (id.topic == COORDINATOR_TOPIC)
-        .then(|| std::fs::read_to_string(coordinator_tasks_path(&id)).ok())
+        .then(|| std::fs::read_to_string(coordinator_tasks_path(roots, &id)).ok())
         .flatten()
         .and_then(|text| CoordinatorCounts::parse(&text));
 
@@ -861,8 +862,8 @@ fn build_task(id: TaskId, adopted: bool, done: bool, block: Option<Block>) -> Ta
 }
 
 /// Path to a task's `build-task.json` in the notes tree, the `/task:build` and `/task:auto` state.
-pub fn build_state_path(id: &TaskId) -> PathBuf {
-    notes_root().join(id.rel()).join("build-task.json")
+pub fn build_state_path(roots: &Roots, id: &TaskId) -> PathBuf {
+    roots.notes.join(id.rel()).join("build-task.json")
 }
 
 /// One step of a session's live plan, as `/task:build` and `/task:auto` record it.
@@ -922,8 +923,8 @@ struct BuildState {
     waiting_on: Option<String>,
 }
 
-fn read_build_state(id: &TaskId) -> BuildState {
-    read_build_state_at(&build_state_path(id))
+fn read_build_state(roots: &Roots, id: &TaskId) -> BuildState {
+    read_build_state_at(&build_state_path(roots, id))
 }
 
 fn read_build_state_at(path: &Path) -> BuildState {
@@ -963,8 +964,8 @@ fn parse_build_state(text: &str) -> BuildState {
 }
 
 /// Path to a task's `issue.md` in the notes tree: `notes/PROJECT/TOPIC/TASK/issue.md`.
-pub fn issue_path(id: &TaskId) -> PathBuf {
-    notes_root().join(id.rel()).join("issue.md")
+pub fn issue_path(roots: &Roots, id: &TaskId) -> PathBuf {
+    roots.notes.join(id.rel()).join("issue.md")
 }
 
 fn frontmatter_title(text: &str) -> Option<String> {
@@ -984,8 +985,8 @@ fn frontmatter_title(text: &str) -> Option<String> {
 }
 
 /// Path to a coordinator's `tasks.json`: `notes/PROJECT/coordinator/BLURB/tasks.json`.
-pub fn coordinator_tasks_path(id: &TaskId) -> PathBuf {
-    notes_root().join(id.rel()).join("tasks.json")
+pub fn coordinator_tasks_path(roots: &Roots, id: &TaskId) -> PathBuf {
+    roots.notes.join(id.rel()).join("tasks.json")
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -999,12 +1000,12 @@ struct TaskMeta {
 }
 
 /// Path to a task's `task.json` in the notes tree: `notes/PROJECT/TOPIC/TASK/task.json`.
-pub fn meta_path(id: &TaskId) -> PathBuf {
-    notes_root().join(id.rel()).join("task.json")
+pub fn meta_path(roots: &Roots, id: &TaskId) -> PathBuf {
+    roots.notes.join(id.rel()).join("task.json")
 }
 
-fn read_meta(id: &TaskId) -> TaskMeta {
-    read_meta_at(&meta_path(id))
+fn read_meta(roots: &Roots, id: &TaskId) -> TaskMeta {
+    read_meta_at(&meta_path(roots, id))
 }
 
 fn read_meta_at(path: &Path) -> TaskMeta {
@@ -1033,12 +1034,12 @@ fn write_meta_at(path: &Path, meta: &TaskMeta) -> std::io::Result<()> {
 }
 
 /// Path to a task's `prs.json` in the notes tree: `notes/PROJECT/TOPIC/TASK/prs.json`.
-pub fn prs_path(id: &TaskId) -> PathBuf {
-    notes_root().join(id.rel()).join("prs.json")
+pub fn prs_path(roots: &Roots, id: &TaskId) -> PathBuf {
+    roots.notes.join(id.rel()).join("prs.json")
 }
 
-fn read_prs(id: &TaskId) -> Vec<Pr> {
-    let path = prs_path(id);
+fn read_prs(roots: &Roots, id: &TaskId) -> Vec<Pr> {
+    let path = prs_path(roots, id);
     let Ok(content) = std::fs::read_to_string(&path) else {
         return Vec::new(); // missing or unreadable → no PRs
     };
@@ -1197,14 +1198,14 @@ pub fn read_pr_status(url: &str) -> (PrStatus, Option<u64>, Option<String>) {
 
 /// Toggle the `done` flag in a task's `task.json`, preserving its other fields. Returns the new
 /// done state. Creates the file (and notes dir) if absent.
-pub fn toggle_done(id: &TaskId) -> std::io::Result<bool> {
-    toggle_done_at(&meta_path(id))
+pub fn toggle_done(roots: &Roots, id: &TaskId) -> std::io::Result<bool> {
+    toggle_done_at(&meta_path(roots, id))
 }
 
 /// Record `backlog` in a task's `task.json`, leaving `done` and `blocked` as they are. Creates
 /// the file (and notes dir) if absent.
-pub fn set_backlog(id: &TaskId, backlog: bool) -> std::io::Result<()> {
-    set_backlog_at(&meta_path(id), backlog)
+pub fn set_backlog(roots: &Roots, id: &TaskId, backlog: bool) -> std::io::Result<()> {
+    set_backlog_at(&meta_path(roots, id), backlog)
 }
 
 /// Record an orphan worktree as a task by writing the `task.json` it is missing:
@@ -1213,19 +1214,20 @@ pub fn set_backlog(id: &TaskId, backlog: bool) -> std::io::Result<()> {
 /// Writing the file here rather than shelling out to `hwt` keeps the dashboard's one write to the
 /// same fields `hwt new` produces, with no dependency on `hwt` being on `PATH` and no
 /// subprocess to fail behind a button.
-pub fn adopt(id: &TaskId) -> std::io::Result<()> {
-    write_meta_at(&meta_path(id), &TaskMeta::default())
+pub fn adopt(roots: &Roots, id: &TaskId) -> std::io::Result<()> {
+    write_meta_at(&meta_path(roots, id), &TaskMeta::default())
 }
 
 /// Record what a PR's state has become on a task's block, leaving the rest of `task.json` as it
 /// is. Returns the block as now recorded, or `None` when `status` says nothing about the state,
 /// or the task no longer waits on `url`, or the recorded state already matches.
 pub fn record_block_pr_state(
+    roots: &Roots,
     id: &TaskId,
     url: &str,
     status: PrStatus,
 ) -> std::io::Result<Option<Block>> {
-    record_block_pr_state_at(&meta_path(id), url, status)
+    record_block_pr_state_at(&meta_path(roots, id), url, status)
 }
 
 fn record_block_pr_state_at(
@@ -1272,6 +1274,7 @@ mod tests {
     #[test]
     fn a_merged_pr_lifts_the_block_and_a_closed_one_holds_it() {
         let mut t = build_task(
+            &Roots::under(&std::env::temp_dir().join("hdash_pr_block_fixture")),
             TaskId {
                 project: "p".into(),
                 topic: "t".into(),
@@ -1468,10 +1471,7 @@ mod tests {
     fn scan_unions_across_projects() {
         let home = std::env::temp_dir().join("hdash_scan_fixture");
         let _ = std::fs::remove_dir_all(&home);
-        // SAFETY: single-threaded test setup; no other test in this crate reads HOME.
-        unsafe {
-            std::env::set_var("HOME", &home);
-        }
+        let roots = Roots::under(&home);
 
         let notes_root = home.join("fun_repos/hobby-mimisbrunnr/notes");
         let wt_root = home.join("fun_worktrees");
@@ -1510,7 +1510,7 @@ mod tests {
         std::fs::create_dir_all(notes_root.join("projA/bugs/just-notes")).unwrap();
         std::fs::write(notes_root.join("projA/bugs/just-notes/report.md"), "x").unwrap();
 
-        let tasks = scan_tasks();
+        let tasks = scan_tasks(&roots);
         let find = |project: &str, name: &str| {
             tasks
                 .iter()
@@ -1540,8 +1540,8 @@ mod tests {
         );
 
         // Adopting writes the task.json, and the next scan sees an ordinary task.
-        adopt(&orphan.id).unwrap();
-        let rescanned = scan_tasks();
+        adopt(&roots, &orphan.id).unwrap();
+        let rescanned = scan_tasks(&roots);
         assert_eq!(rescanned.len(), 4);
         assert!(
             rescanned

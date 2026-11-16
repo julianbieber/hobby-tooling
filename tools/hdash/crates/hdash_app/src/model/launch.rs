@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use hwt_core::{spawn_detached, spawn_detached_with};
+use hwt_core::{Roots, spawn_detached, spawn_detached_with};
 
 use super::task::{Task, TaskId, notes_path, worktrees_root};
 
@@ -162,7 +162,7 @@ pub fn launch_terminal(dir: &Path, title: &str) {
 
 /// Open a terminal in the task's notes directory (falls back to the task directory).
 pub fn open_notes(task: &Task) {
-    let dir = notes_path(&task.id)
+    let dir = notes_path(&Roots::of_user(), &task.id)
         .map(|p| {
             if p.is_dir() {
                 p

@@ -1,7 +1,31 @@
-use std::io::Write;
+//! Handing a request to the Claude Code session in a Zellij pane, by writing it
+//! to a file and typing a pointer to that file into the pane.
+
+use std::path::PathBuf;
+use std::time::Duration;
+
 use tokio::process::Command;
 
 use crate::actions::ClaudeRequest;
+
+const ZELLIJ_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A request that did not reach the Claude pane.
+#[derive(Debug, thiserror::Error)]
+pub enum BridgeError {
+    #[error("cannot write the prompt file {}", path.display())]
+    PromptFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("cannot run zellij")]
+    Spawn(#[source] std::io::Error),
+    #[error("zellij action {action} failed: {stderr}")]
+    Action { action: String, stderr: String },
+    #[error("zellij action {action} did not finish within {}s", ZELLIJ_TIMEOUT.as_secs())]
+    Timeout { action: String },
+}
 
 /// Sends requests to a Claude Code session running in a Zellij pane.
 pub struct ZellijBridge {
@@ -10,7 +34,9 @@ pub struct ZellijBridge {
 }
 
 impl ZellijBridge {
-    pub fn new() -> Self {
+    /// Targets the session named by `CLAUDE_ZELLIJ_SESSION`, or the current
+    /// session when it is unset.
+    pub fn from_env() -> Self {
         Self {
             session: std::env::var("CLAUDE_ZELLIJ_SESSION").ok(),
         }
@@ -30,64 +56,43 @@ impl ZellijBridge {
     }
 
     /// Write the prompt to a temp file and return the path.
-    fn write_prompt_file(prompt: &str) -> anyhow::Result<std::path::PathBuf> {
+    async fn write_prompt_file(prompt: &str) -> Result<PathBuf, BridgeError> {
         let dir = std::env::temp_dir().join("claude-lsp");
-        std::fs::create_dir_all(&dir)?;
-
+        tokio::fs::create_dir_all(&dir)
+            .await
+            .map_err(|source| BridgeError::PromptFile {
+                path: dir.clone(),
+                source,
+            })?;
         let path = dir.join("request.md");
-        let mut f = std::fs::File::create(&path)?;
-        f.write_all(prompt.as_bytes())?;
-
+        tokio::fs::write(&path, prompt)
+            .await
+            .map_err(|source| BridgeError::PromptFile {
+                path: path.clone(),
+                source,
+            })?;
         Ok(path)
     }
 
-    /// Build a zellij command with session targeting if configured.
-    fn zellij_cmd(&self) -> Command {
+    async fn zellij_action(&self, args: &[&str]) -> Result<(), BridgeError> {
         let mut cmd = Command::new("zellij");
         if let Some(session) = &self.session {
             cmd.arg("--session").arg(session);
         }
-        cmd
-    }
+        cmd.arg("action").args(args).kill_on_drop(true);
 
-    /// Run a zellij action (no pane targeting).
-    async fn zellij_action(&self, args: &[&str]) -> anyhow::Result<()> {
-        let mut cmd = self.zellij_cmd();
-        cmd.arg("action");
-        for arg in args {
-            cmd.arg(arg);
-        }
-        let output = cmd.output().await?;
+        let action = args.join(" ");
+        let output = tokio::time::timeout(ZELLIJ_TIMEOUT, cmd.output())
+            .await
+            .map_err(|_| BridgeError::Timeout {
+                action: action.clone(),
+            })?
+            .map_err(BridgeError::Spawn)?;
         if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("zellij action {args:?} failed: {stderr}");
-        }
-        Ok(())
-    }
-
-    /// Write chars to the focused pane.
-    async fn write_chars(&self, text: &str) -> anyhow::Result<()> {
-        let mut cmd = self.zellij_cmd();
-        cmd.arg("action").arg("write-chars").arg(text);
-
-        let output = cmd.output().await?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("zellij write-chars failed: {stderr}");
-        }
-        Ok(())
-    }
-
-    /// Send Enter to the focused pane.
-    async fn send_enter(&self) -> anyhow::Result<()> {
-        // Send carriage return (13) — this is what Enter produces in a terminal
-        let mut cmd = self.zellij_cmd();
-        cmd.arg("action").arg("write").arg("13");
-
-        let output = cmd.output().await?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("zellij write (enter) failed: {stderr}");
+            return Err(BridgeError::Action {
+                action,
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            });
         }
         Ok(())
     }
@@ -97,28 +102,27 @@ impl ZellijBridge {
     /// Layout: editor (left) | claude (top-right) | notes (bottom-right)
     /// Strategy: go left to reach the editor column, then right+up to
     /// reliably land on the top-right (Claude) pane.
-    async fn focus_claude_pane(&self) -> anyhow::Result<()> {
+    async fn focus_claude_pane(&self) -> Result<(), BridgeError> {
         self.zellij_action(&["move-focus", "left"]).await?;
         self.zellij_action(&["move-focus", "right"]).await?;
         self.zellij_action(&["move-focus", "up"]).await?;
         Ok(())
     }
 
-    /// Send a request to the Claude Code Zellij pane.
-    pub async fn send(&self, request: &ClaudeRequest) -> anyhow::Result<()> {
+    /// Send a request to the Claude Code Zellij pane, leaving focus on the
+    /// editor pane.
+    pub async fn send(&self, request: &ClaudeRequest) -> Result<(), BridgeError> {
         let prompt = Self::format_prompt(request);
-        let prompt_file = Self::write_prompt_file(&prompt)?;
+        let prompt_file = Self::write_prompt_file(&prompt).await?;
 
         let message = format!(
             "Read {} and follow the editing instructions inside.",
             prompt_file.display()
         );
 
-        // Navigate to the Claude pane from any starting pane, write the
-        // message, then return focus to the editor (left) pane.
         self.focus_claude_pane().await?;
-        self.write_chars(&message).await?;
-        self.send_enter().await?;
+        self.zellij_action(&["write-chars", &message]).await?;
+        self.zellij_action(&["write", "13"]).await?;
         self.zellij_action(&["move-focus", "left"]).await?;
 
         tracing::info!(

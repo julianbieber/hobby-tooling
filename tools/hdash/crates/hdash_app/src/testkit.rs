@@ -27,7 +27,7 @@ pub fn find(buf: &Buffer, needle: &str, on_row_of: Option<&str>, min_x: u16) -> 
             .map(|x| buf[(x, y)].symbol().to_owned())
             .collect();
         for x in min_x..buf.area.width {
-            if cells[x as usize..].concat().starts_with(needle) {
+            if cells[usize::from(x)..].concat().starts_with(needle) {
                 return (x, y);
             }
         }

@@ -1,34 +1,68 @@
 //! Turning `hresearch symbols` output into the workspace symbols an editor lists.
 
-use std::path::Path;
-use std::process::{Command, Stdio};
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::time::Duration;
 
 use serde::Deserialize;
+use tokio::process::Command;
 use tower_lsp::lsp_types::{Location, Position, Range, SymbolInformation, SymbolKind, Url};
+
+const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Deserialize)]
 struct Entry {
     name: String,
-    kind: String,
-    path: String,
+    kind: Kind,
+    path: PathBuf,
     line: u32,
     container: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Kind {
+    File,
+    Struct,
+    Enum,
+    Interface,
+    Function,
+    Package,
+    #[serde(other)]
+    Other,
+}
+
+impl From<Kind> for SymbolKind {
+    fn from(kind: Kind) -> Self {
+        match kind {
+            Kind::File => SymbolKind::FILE,
+            Kind::Struct => SymbolKind::STRUCT,
+            Kind::Enum => SymbolKind::ENUM,
+            Kind::Interface => SymbolKind::INTERFACE,
+            Kind::Function => SymbolKind::FUNCTION,
+            Kind::Package => SymbolKind::PACKAGE,
+            Kind::Other => SymbolKind::CONSTANT,
+        }
+    }
+}
+
 /// The research-card symbols matching `query`, as `hresearch symbols` lists
 /// them when run from `root`. Empty when `hresearch` is missing from `PATH`,
-/// exits non-zero or prints anything but its JSON array; never an error.
-pub fn query(root: Option<&Path>, query: &str) -> Vec<SymbolInformation> {
+/// exits non-zero, prints anything but its JSON array, or takes longer than
+/// five seconds; never an error.
+pub async fn query(root: Option<&Path>, query: &str) -> Vec<SymbolInformation> {
     let mut command = Command::new("hresearch");
     command
         .args(["symbols", query])
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
     if let Some(root) = root {
         command.current_dir(root);
     }
-    match command.output() {
-        Ok(out) if out.status.success() => parse(&String::from_utf8_lossy(&out.stdout)),
+    match tokio::time::timeout(QUERY_TIMEOUT, command.output()).await {
+        Ok(Ok(out)) if out.status.success() => parse(&String::from_utf8_lossy(&out.stdout)),
         _ => Vec::new(),
     }
 }
@@ -42,12 +76,15 @@ pub fn parse(json: &str) -> Vec<SymbolInformation> {
     entries.into_iter().filter_map(symbol).collect()
 }
 
-#[allow(deprecated)]
+#[expect(
+    deprecated,
+    reason = "SymbolInformation can only be built with its deprecated field spelled out"
+)]
 fn symbol(entry: Entry) -> Option<SymbolInformation> {
     let position = Position::new(entry.line, 0);
     Some(SymbolInformation {
         name: entry.name,
-        kind: kind(&entry.kind),
+        kind: entry.kind.into(),
         tags: None,
         deprecated: None,
         location: Location::new(
@@ -56,18 +93,6 @@ fn symbol(entry: Entry) -> Option<SymbolInformation> {
         ),
         container_name: Some(entry.container),
     })
-}
-
-fn kind(name: &str) -> SymbolKind {
-    match name {
-        "file" => SymbolKind::FILE,
-        "struct" => SymbolKind::STRUCT,
-        "enum" => SymbolKind::ENUM,
-        "interface" => SymbolKind::INTERFACE,
-        "function" => SymbolKind::FUNCTION,
-        "package" => SymbolKind::PACKAGE,
-        _ => SymbolKind::CONSTANT,
-    }
 }
 
 #[cfg(test)]

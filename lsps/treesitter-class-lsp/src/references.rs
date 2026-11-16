@@ -3,8 +3,10 @@
 
 use std::path::PathBuf;
 
-use tower_lsp::lsp_types::{Position, Range};
+use tower_lsp::lsp_types::Range;
 use tree_sitter::{Node, Tree};
+
+use crate::indexer::range_from_ts_node;
 
 /// The most locations one references answer holds.
 pub const REFERENCE_LIMIT: usize = 1000;
@@ -33,7 +35,7 @@ pub fn occurrences_in(tree: &Tree, source: &[u8], name: &str) -> Vec<Range> {
     loop {
         let node = cursor.node();
         if is_occurrence(node, source, name) {
-            found.push(range_of(node));
+            found.push(range_from_ts_node(node));
         }
         if cursor.goto_first_child() {
             continue;
@@ -53,7 +55,11 @@ pub fn without_declarations(
     declarations: &[(PathBuf, Range)],
 ) -> Vec<Reference> {
     refs.into_iter()
-        .filter(|r| !declarations.iter().any(|(file, range)| *file == r.file && *range == r.range))
+        .filter(|r| {
+            !declarations
+                .iter()
+                .any(|(file, range)| *file == r.file && *range == r.range)
+        })
         .collect()
 }
 
@@ -87,26 +93,13 @@ fn is_occurrence(node: Node, source: &[u8], name: &str) -> bool {
     if kind.contains("comment") || kind.contains("string") {
         return false;
     }
-    &source[node.start_byte()..node.end_byte()] == name.as_bytes()
-}
-
-fn range_of(node: Node) -> Range {
-    let start = node.start_position();
-    let end = node.end_position();
-    Range {
-        start: Position {
-            line: start.row as u32,
-            character: start.column as u32,
-        },
-        end: Position {
-            line: end.row as u32,
-            character: end.column as u32,
-        },
-    }
+    source.get(node.byte_range()) == Some(name.as_bytes())
 }
 
 #[cfg(test)]
 mod tests {
+    use tower_lsp::lsp_types::Position;
+
     use super::*;
 
     fn at(line: u32, character: u32) -> Range {
@@ -156,16 +149,31 @@ mod tests {
         );
         let places: Vec<_> = ordered
             .iter()
-            .map(|r| (r.file.to_str().unwrap(), r.range.start.line, r.range.start.character))
+            .map(|r| {
+                (
+                    r.file.to_str().unwrap(),
+                    r.range.start.line,
+                    r.range.start.character,
+                )
+            })
             .collect();
-        assert_eq!(places, [("a.py", 3, 8), ("a.py", 9, 2), ("a.py", 9, 4), ("b.py", 1, 0)]);
+        assert_eq!(
+            places,
+            [
+                ("a.py", 3, 8),
+                ("a.py", 9, 2),
+                ("a.py", 9, 4),
+                ("b.py", 1, 0)
+            ]
+        );
     }
 
     // Pins that the cap cuts after ordering, so a reference in the buffer's language
     // survives however many other-language ones sort before it by file name.
     #[test]
     fn order_applies_the_limit_after_the_ordering() {
-        let mut refs: Vec<Reference> = (0..REFERENCE_LIMIT as u32)
+        let mut refs: Vec<Reference> = (0u32..)
+            .take(REFERENCE_LIMIT)
             .map(|line| reference("protobuf", "a.proto", line, 0))
             .collect();
         refs.push(reference("python", "z.py", 0, 0));

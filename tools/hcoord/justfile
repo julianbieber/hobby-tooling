@@ -6,16 +6,16 @@ default:
 
 # Build
 build:
-    cargo build
+    cargo build --locked
 
 # Install the `hcoord` binary to ~/.cargo/bin
 install:
-    cargo install --path .
+    cargo install --locked --path .
 
 # Lint with clippy
 lint:
-    cargo clippy --all-targets
+    cargo clippy --all-targets --locked -- -D warnings
 
 # Run the tests
 test:
-    cargo test
+    cargo test --locked

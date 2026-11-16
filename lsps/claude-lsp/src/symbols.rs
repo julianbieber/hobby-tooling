@@ -1,3 +1,5 @@
+//! Listing `claude:` comments as document and workspace symbols.
+
 use std::path::Path;
 
 use ignore::WalkBuilder;
@@ -16,10 +18,7 @@ pub fn document_symbols(lines: &[&str], path: &str) -> Vec<DocumentSymbol> {
     actions::find_all_claude_comments(lines, path)
         .into_iter()
         .map(|(line_idx, text)| {
-            let line_len = lines
-                .get(line_idx as usize)
-                .map(|l| l.len() as u32)
-                .unwrap_or(0);
+            let line_len = actions::line_len(lines, line_idx);
             let range = Range {
                 start: Position {
                     line: line_idx,
@@ -30,8 +29,11 @@ pub fn document_symbols(lines: &[&str], path: &str) -> Vec<DocumentSymbol> {
                     character: line_len,
                 },
             };
-            #[allow(deprecated)]
-            DocumentSymbol {
+            #[expect(
+                deprecated,
+                reason = "the protocol's deprecated field still has to be set"
+            )]
+            let symbol = DocumentSymbol {
                 name: text,
                 detail: Some("claude".to_string()),
                 kind: SymbolKind::STRING,
@@ -40,7 +42,8 @@ pub fn document_symbols(lines: &[&str], path: &str) -> Vec<DocumentSymbol> {
                 range,
                 selection_range: range,
                 children: None,
-            }
+            };
+            symbol
         })
         .collect()
 }
@@ -79,12 +82,12 @@ pub fn workspace_symbols(root: &Path, query: &str) -> Vec<SymbolInformation> {
             let Ok(uri) = Url::from_file_path(path) else {
                 continue;
             };
-            let line_len = lines
-                .get(line_idx as usize)
-                .map(|l| l.len() as u32)
-                .unwrap_or(0);
-            #[allow(deprecated)]
-            out.push(SymbolInformation {
+            let line_len = actions::line_len(&lines, line_idx);
+            #[expect(
+                deprecated,
+                reason = "the protocol's deprecated field still has to be set"
+            )]
+            let symbol = SymbolInformation {
                 name: text,
                 kind: SymbolKind::STRING,
                 tags: None,
@@ -103,7 +106,8 @@ pub fn workspace_symbols(root: &Path, query: &str) -> Vec<SymbolInformation> {
                     },
                 },
                 container_name: None,
-            });
+            };
+            out.push(symbol);
             if out.len() >= WORKSPACE_SYMBOL_LIMIT {
                 break;
             }

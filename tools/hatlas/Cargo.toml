@@ -2,18 +2,50 @@
 name = "hatlas"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.100"
 license = "MIT OR Apache-2.0"
 description = "A Bevy workspace's plugins, components and resources as linked local HTML pages, built from rustdoc JSON."
 exclude = ["fixture"]
+
+[lib]
+doctest = false
 
 [[bin]]
 name = "hatlas"
 path = "src/main.rs"
 
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+indexing_slicing = "deny"
+string_slice = "deny"
+exit = "deny"
+as_conversions = "deny"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+dbg_macro = "deny"
+disallowed_methods = "deny"
+disallowed_types = "deny"
+await_holding_lock = "deny"
+
 [dependencies]
-proc-macro2 = { version = "1", features = ["span-locations"] }
-protobuf = "3"
+proc-macro2 = { version = "1", default-features = false, features = ["span-locations"] }
+protobuf = { version = "3", default-features = false }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
-scip = "0.10"
-serde_json = "1"
-syn = { version = "2", features = ["full", "visit"] }
+scip = { version = "0.10", default-features = false }
+serde_json = { version = "1", default-features = false, features = ["std"] }
+syn = { version = "2", default-features = false, features = ["full", "visit", "parsing", "printing"] }
+thiserror = { version = "2", default-features = false, features = ["std"] }
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt"] }
+
+[profile.release]
+panic = "abort"
+debug = "line-tables-only"

@@ -1,48 +1,62 @@
+//! Locating and reading Helix's `languages.toml`.
+
 use super::types::LanguagesConfig;
-use crate::error::{LspMcpError, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
+
+/// The Helix language configuration could not be loaded.
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    #[error("HOME environment variable is not set; cannot locate Helix config")]
+    NoHome,
+    #[error("Helix config not found at: {}", .path.display())]
+    NotFound { path: PathBuf },
+    #[error("cannot read Helix config {}", .path.display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("invalid Helix config {}", .path.display())]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: toml::de::Error,
+    },
+}
 
 /// Load Helix languages configuration from `$HOME/.config/helix/languages.toml`.
 ///
 /// Override with the `LSP_MCP_HELIX_CONFIG` environment variable if your Helix
 /// config lives elsewhere.
-pub fn load_helix_config() -> Result<LanguagesConfig> {
-    let config_path = helix_config_path()?;
-
-    if config_path.exists() {
-        load_config_from_file(&config_path)
-    } else {
-        Err(LspMcpError::ConfigError(format!(
-            "Helix config not found at: {}",
-            config_path.display()
-        )))
-    }
+pub fn load_helix_config() -> Result<LanguagesConfig, ConfigError> {
+    load_config_from_file(helix_config_path()?)
 }
 
 /// Resolve the Helix `languages.toml` path, honoring `LSP_MCP_HELIX_CONFIG`.
-pub fn helix_config_path() -> Result<PathBuf> {
-    if let Ok(override_path) = std::env::var("LSP_MCP_HELIX_CONFIG") {
+pub fn helix_config_path() -> Result<PathBuf, ConfigError> {
+    if let Some(override_path) = std::env::var_os("LSP_MCP_HELIX_CONFIG") {
         return Ok(PathBuf::from(override_path));
     }
-    let home = std::env::var("HOME").map_err(|_| {
-        LspMcpError::ConfigError(
-            "HOME environment variable is not set; cannot locate Helix config".to_string(),
-        )
-    })?;
+    let home = std::env::var_os("HOME").ok_or(ConfigError::NoHome)?;
     Ok(PathBuf::from(home).join(".config/helix/languages.toml"))
 }
 
-/// Load configuration from a specific file path
-pub fn load_config_from_file<P: AsRef<Path>>(path: P) -> Result<LanguagesConfig> {
-    let content = fs::read_to_string(path.as_ref()).map_err(|e| LspMcpError::IoError(e))?;
-
-    parse_config(&content)
+/// Load configuration from a specific file path.
+pub fn load_config_from_file<P: AsRef<Path>>(path: P) -> Result<LanguagesConfig, ConfigError> {
+    let path = path.as_ref().to_path_buf();
+    let content = match fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(ConfigError::NotFound { path });
+        }
+        Err(source) => return Err(ConfigError::Read { path, source }),
+    };
+    parse_config(&content).map_err(|source| ConfigError::Parse { path, source })
 }
 
-/// Parse TOML content into LanguagesConfig
-pub fn parse_config(content: &str) -> Result<LanguagesConfig> {
-    toml::from_str(content).map_err(|e| LspMcpError::TomlError(e))
+pub fn parse_config(content: &str) -> Result<LanguagesConfig, toml::de::Error> {
+    toml::from_str(content)
 }
 
 #[cfg(test)]

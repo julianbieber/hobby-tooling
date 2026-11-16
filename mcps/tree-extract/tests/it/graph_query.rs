@@ -2,7 +2,7 @@
 //! plus one end-to-end test through the cache + real extraction.
 
 use hobby_tree_extract::graph::{CodeGraph, Edge, EdgeKind, GraphStats, Node, NodeKind};
-use hobby_tree_extract::graph_query::LoadedGraph;
+use hobby_tree_extract::graph_query::{Direction, LoadedGraph};
 
 fn node(id: &str, kind: NodeKind, name: &str, file: &str, line: Option<u32>) -> Node {
     Node {
@@ -64,7 +64,7 @@ fn search_matches_and_limits() {
     assert!(!names.contains(&"foo"));
 
     // limit truncates and flags
-    let r = g.search("", Some("function"), None, Some(2));
+    let r = g.search("", Some(NodeKind::Function), None, Some(2));
     assert_eq!(r.returned, 2);
     assert!(r.truncated);
     assert_eq!(r.total, 3);
@@ -87,11 +87,11 @@ fn get_symbol_reports_edge_counts() {
 #[test]
 fn neighbors_directional() {
     let g = fixture();
-    let out = g.neighbors("a.rs:L1", Some("out"), Some("calls"), None);
+    let out = g.neighbors("a.rs:L1", Direction::Out, Some(EdgeKind::Calls), None);
     assert_eq!(out.results.len(), 1);
     assert_eq!(out.results[0].name, "bar");
 
-    let inc = g.neighbors("a.rs:L1", Some("in"), Some("calls"), None);
+    let inc = g.neighbors("a.rs:L1", Direction::In, Some(EdgeKind::Calls), None);
     assert_eq!(inc.results.len(), 1);
     assert_eq!(inc.results[0].name, "baz");
 }
@@ -166,15 +166,16 @@ fn end_to_end_through_cache() {
     )
     .unwrap();
 
-    let handle = hobby_tree_extract::graph_cache::get_or_load(dir.path().to_str().unwrap())
-        .expect("load graph");
+    let handle = hobby_tree_extract::graph_cache::get_or_load(dir.path()).expect("load graph");
     assert!(handle.lazily_built, "graph should be built on first query");
 
     // run() calls helper() — there should be a resolved Calls edge, deduped to count 2.
-    let neighbors =
-        handle
-            .graph
-            .neighbors(&find_id(&handle, "run"), Some("out"), Some("calls"), None);
+    let neighbors = handle.graph.neighbors(
+        &find_id(&handle, "run"),
+        Direction::Out,
+        Some(EdgeKind::Calls),
+        None,
+    );
     assert!(
         neighbors
             .results
@@ -185,8 +186,7 @@ fn end_to_end_through_cache() {
     );
 
     // The graph file was written and is reused on the next load (not rebuilt).
-    let handle2 = hobby_tree_extract::graph_cache::get_or_load(dir.path().to_str().unwrap())
-        .expect("reload graph");
+    let handle2 = hobby_tree_extract::graph_cache::get_or_load(dir.path()).expect("reload graph");
     assert!(
         !handle2.lazily_built,
         "second load should hit the cache/disk"

@@ -16,8 +16,14 @@ impl BevyNames {
     pub const READERS: &'static [&'static str] = &["EventReader", "MessageReader"];
     pub const WRITERS: &'static [&'static str] = &["EventWriter", "MessageWriter"];
     pub const OBSERVER_PARAMS: &'static [&'static str] = &["On", "Trigger"];
-    pub const PRODUCING_CALLS: &'static [&'static str] =
-        &["trigger", "trigger_targets", "write_message", "send_event", "send", "write"];
+    pub const PRODUCING_CALLS: &'static [&'static str] = &[
+        "trigger",
+        "trigger_targets",
+        "write_message",
+        "send_event",
+        "send",
+        "write",
+    ];
     /// The producing calls whose names are Bevy's alone; `send` and `write` also name channel and IO calls.
     pub const UNAMBIGUOUS_PRODUCING: &'static [&'static str] =
         &["trigger", "trigger_targets", "write_message", "send_event"];

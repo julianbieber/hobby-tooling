@@ -1,16 +1,25 @@
 [package]
 name = "hobby-mml-lsp"
-version = "3.0.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/lib.rs"
+doctest = false
 
 [[bin]]
 name = "hobby-mml-lsp"
 path = "src/main.rs"
 
 [dependencies]
-mml-parser = { path = "../mml-parser", package = "hobby-mml-parser" }
-tower-lsp = "0.20"
-tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros"] }
+mml-parser.workspace = true
+parking_lot.workspace = true
+tokio.workspace = true
+tower-lsp.workspace = true
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true

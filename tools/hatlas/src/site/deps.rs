@@ -15,7 +15,9 @@ fn crate_dir(krate: &DepCrate) -> String {
 fn kind_label(kind: &str) -> String {
     let spaced = kind.replace('_', " ");
     let mut chars = spaced.chars();
-    chars.next().map_or(String::new(), |c| c.to_uppercase().chain(chars).collect())
+    chars
+        .next()
+        .map_or(String::new(), |c| c.to_uppercase().chain(chars).collect())
 }
 
 fn full_path(krate: &DepCrate, item: &DependencyUse) -> Vec<String> {
@@ -29,14 +31,16 @@ impl Site<'_> {
     pub(super) fn register_deps(&mut self, names: &mut PageNames) {
         for (ci, krate) in self.deps.crates.iter().enumerate() {
             let dir = crate_dir(krate);
-            self.dep_crate_pages.push(names.module(&["deps".to_string(), dir.clone()]));
+            self.dep_crate_pages
+                .push(names.module(&["deps".to_string(), dir.clone()]));
             for (ii, item) in krate.items.iter().enumerate() {
                 let mut module = vec!["deps".to_string(), dir.clone()];
                 module.extend(item.module.iter().cloned());
                 let page = names.item(&module, &item.kind, &item.name.replace("::", "."));
                 self.dep_item_pages.insert((ci, ii), page);
                 if !item.name.contains("::") {
-                    self.dep_lookup.insert((krate.crate_name.clone(), full_path(krate, item)), (ci, ii));
+                    self.dep_lookup
+                        .insert((krate.crate_name.clone(), full_path(krate, item)), (ci, ii));
                 }
             }
         }
@@ -46,10 +50,10 @@ impl Site<'_> {
         let mut body = String::new();
         if !self.deps.crates.is_empty() {
             body.push_str("<h2>Dependencies</h2>\n<ul>\n");
-            for (ci, krate) in self.deps.crates.iter().enumerate() {
+            for (krate, page) in self.deps.crates.iter().zip(&self.dep_crate_pages) {
                 body.push_str(&format!(
                     "<li><a href=\"{}\">{}@{}</a> <span class=\"where\">{} items used</span></li>\n",
-                    escape(&relative(from, &self.dep_crate_pages[ci])),
+                    escape(&relative(from, page)),
                     escape(&krate.name),
                     escape(&krate.version),
                     krate.items.len()
@@ -82,8 +86,16 @@ impl Site<'_> {
             }
         }
         if !self.deps.std.is_empty() {
-            let names: Vec<String> = self.deps.std.iter().map(|n| format!("<code>{}</code>", escape(n))).collect();
-            body.push_str(&format!("<p class=\"where\">Not documented, plain text: {}</p>\n", names.join(", ")));
+            let names: Vec<String> = self
+                .deps
+                .std
+                .iter()
+                .map(|n| format!("<code>{}</code>", escape(n)))
+                .collect();
+            body.push_str(&format!(
+                "<p class=\"where\">Not documented, plain text: {}</p>\n",
+                names.join(", ")
+            ));
         }
         body
     }
@@ -102,7 +114,9 @@ impl Site<'_> {
     }
 
     fn write_dep_crate(&self, root: &Path, ci: usize, krate: &DepCrate) -> Result<(), Error> {
-        let from = self.dep_crate_pages[ci].as_str();
+        let Some(from) = self.dep_crate_pages.get(ci).map(String::as_str) else {
+            return Ok(());
+        };
         let mut body = format!(
             "<p class=\"crumbs\"><a href=\"{}\">Atlas</a> :: dependencies :: {}</p>\n<h1>Crate {}</h1>\n<p class=\"crumbs\">{}@{}</p>\n",
             escape(&relative(from, "index.html")),
@@ -117,12 +131,15 @@ impl Site<'_> {
         } else {
             body.push_str("<ul>\n");
             for (ii, item) in krate.items.iter().enumerate() {
+                let Some(item_page) = self.dep_item_pages.get(&(ci, ii)) else {
+                    continue;
+                };
                 let sites: usize = item.uses.values().map(Vec::len).sum();
                 let module: Vec<&str> = item.module.iter().map(String::as_str).collect();
                 body.push_str(&format!(
                     "<li>{} <a href=\"{}\">{}</a> <span class=\"where\">{}</span> <span class=\"where\">{} files, {} sites</span> <span class=\"summary\">{}</span></li>\n",
                     escape(&item.kind.replace('_', " ")),
-                    escape(&relative(from, &self.dep_item_pages[&(ci, ii)])),
+                    escape(&relative(from, item_page)),
                     escape(&item.name),
                     escape(&module.join("::")),
                     item.uses.len(),
@@ -133,38 +150,87 @@ impl Site<'_> {
             body.push_str("</ul>");
         }
         if !krate.unmapped.is_empty() {
-            body.push_str(&format!("\n<h2>Unmapped symbols</h2>\n{}", unmapped_html(krate)));
+            body.push_str(&format!(
+                "\n<h2>Unmapped symbols</h2>\n{}",
+                unmapped_html(krate)
+            ));
         }
-        write(root, from, &page(&format!("Crate {}", krate.crate_name), &body))
+        write(
+            root,
+            from,
+            &page(&format!("Crate {}", krate.crate_name), &body),
+        )
     }
 
-    fn write_dep_item(&self, root: &Path, ci: usize, ii: usize, krate: &DepCrate, item: &DependencyUse) -> Result<(), Error> {
-        let from = self.dep_item_pages[&(ci, ii)].as_str();
+    fn write_dep_item(
+        &self,
+        root: &Path,
+        ci: usize,
+        ii: usize,
+        krate: &DepCrate,
+        item: &DependencyUse,
+    ) -> Result<(), Error> {
+        let Some(from) = self.dep_item_pages.get(&(ci, ii)).map(String::as_str) else {
+            return Ok(());
+        };
         let mut path = vec![krate.crate_name.clone()];
         path.extend(item.module.iter().cloned());
         let mut crumbs = vec![
-            format!("<a href=\"{}\">Atlas</a>", escape(&relative(from, "index.html"))),
-            format!("<a href=\"{}\">{}</a>", escape(&relative(from, &self.dep_crate_pages[ci])), escape(&krate.crate_name)),
+            format!(
+                "<a href=\"{}\">Atlas</a>",
+                escape(&relative(from, "index.html"))
+            ),
+            match self.dep_crate_pages.get(ci) {
+                Some(crate_page) => format!(
+                    "<a href=\"{}\">{}</a>",
+                    escape(&relative(from, crate_page)),
+                    escape(&krate.crate_name)
+                ),
+                None => escape(&krate.crate_name),
+            },
         ];
         crumbs.extend(path.iter().skip(1).map(|s| escape(s)));
         let mut body = format!("<p class=\"crumbs\">{}</p>\n", crumbs.join(" :: "));
-        body.push_str(&format!("<h1>{} {}</h1>\n", escape(&kind_label(&item.kind)), escape(&item.name)));
-        body.push_str(&format!("<p class=\"crumbs\">{}@{}</p>\n", escape(&krate.name), escape(&krate.version)));
+        body.push_str(&format!(
+            "<h1>{} {}</h1>\n",
+            escape(&kind_label(&item.kind)),
+            escape(&item.name)
+        ));
+        body.push_str(&format!(
+            "<p class=\"crumbs\">{}@{}</p>\n",
+            escape(&krate.name),
+            escape(&krate.version)
+        ));
         body.push_str(&self.dep_docs_html(from, item));
         body.push_str("\n<h2>Used in</h2>\n");
         for (file, sites) in &item.uses {
-            let label = match self.atlas.module_of_file(file) {
-                Some(m) => format!("<a href=\"{}\">{}</a>", escape(&relative(from, &self.module_pages[&m.path])), escape(file)),
+            let label = match self
+                .atlas
+                .module_of_file(file)
+                .and_then(|m| self.module_pages.get(&m.path))
+            {
+                Some(module_page) => format!(
+                    "<a href=\"{}\">{}</a>",
+                    escape(&relative(from, module_page)),
+                    escape(file)
+                ),
                 None => escape(file),
             };
             body.push_str(&format!("<h3>{label}</h3>\n<ul>\n"));
             for site in sites {
-                let member = site.member.as_ref().map_or(String::new(), |m| format!(" · <code>{}</code>", escape(m)));
+                let member = site
+                    .member
+                    .as_ref()
+                    .map_or(String::new(), |m| format!(" · <code>{}</code>", escape(m)));
                 body.push_str(&format!("<li>line {}{member}</li>\n", site.line));
             }
             body.push_str("</ul>\n");
         }
-        write(root, from, &page(&format!("{} {}", kind_label(&item.kind), item.name), &body))
+        write(
+            root,
+            from,
+            &page(&format!("{} {}", kind_label(&item.kind), item.name), &body),
+        )
     }
 
     fn dep_docs_html(&self, from: &str, item: &DependencyUse) -> String {
@@ -172,10 +238,16 @@ impl Site<'_> {
             Some(d) if !d.trim().is_empty() => {
                 let resolve = |key: &str| {
                     let target = item.links.iter().find(|(k, _)| k == key)?.1.as_ref()?;
-                    let (ci, ii) = self.dep_lookup.get(&(target.0.clone(), target.1.clone()))?;
-                    Some(relative(from, &self.dep_item_pages[&(*ci, *ii)]))
+                    let page = self
+                        .dep_lookup
+                        .get(target)
+                        .and_then(|key| self.dep_item_pages.get(key))?;
+                    Some(relative(from, page))
                 };
-                format!("<section class=\"docs\">{}</section>", render_docs(d, &resolve))
+                format!(
+                    "<section class=\"docs\">{}</section>",
+                    render_docs(d, &resolve)
+                )
             }
             _ => "<p class=\"no-docs\">no rustdoc</p>".to_string(),
         }

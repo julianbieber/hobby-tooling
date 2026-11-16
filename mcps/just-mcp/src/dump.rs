@@ -1,29 +1,72 @@
+//! Introspecting a justfile through `just` itself, and flattening what it
+//! reports into the shapes the tools return.
+
 use crate::models::{AliasInfo, DumpFile, DumpParam, DumpRecipe, ParamInfo, RecipeInfo};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tokio::process::Command;
 
-/// Run `just --justfile <path> --dump --dump-format json` and parse the result.
-pub async fn dump(justfile: &Path) -> Result<DumpFile, String> {
+const INTROSPECTION_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// `just` could not be asked about a justfile, or its answer was unusable.
+#[derive(Debug, thiserror::Error)]
+pub enum JustError {
+    #[error("failed to invoke `just` (is it installed?)")]
+    Spawn(#[source] std::io::Error),
+    #[error("`just {action}` for {} did not finish within {}s", .justfile.display(), INTROSPECTION_TIMEOUT.as_secs())]
+    TimedOut { action: String, justfile: PathBuf },
+    #[error("`just {action}` failed for {}: {stderr}", .justfile.display())]
+    Failed {
+        action: String,
+        justfile: PathBuf,
+        stderr: String,
+    },
+    #[error("could not parse `just` JSON dump of {}", .justfile.display())]
+    Parse {
+        justfile: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+}
+
+/// Run `just --justfile <justfile> <args…>` and return its stdout, with
+/// `action` naming the invocation in errors.
+pub(crate) async fn introspect(
+    justfile: &Path,
+    args: &[&str],
+    action: &str,
+) -> Result<Vec<u8>, JustError> {
     let output = Command::new("just")
         .arg("--justfile")
         .arg(justfile)
-        .arg("--dump")
-        .arg("--dump-format")
-        .arg("json")
-        .output()
+        .args(args)
+        .kill_on_drop(true)
+        .output();
+    let output = tokio::time::timeout(INTROSPECTION_TIMEOUT, output)
         .await
-        .map_err(|e| format!("failed to invoke `just` (is it installed?): {e}"))?;
+        .map_err(|_| JustError::TimedOut {
+            action: action.to_string(),
+            justfile: justfile.to_path_buf(),
+        })?
+        .map_err(JustError::Spawn)?;
 
     if !output.status.success() {
-        return Err(format!(
-            "`just --dump` failed for {}: {}",
-            justfile.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
+        return Err(JustError::Failed {
+            action: action.to_string(),
+            justfile: justfile.to_path_buf(),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        });
     }
+    Ok(output.stdout)
+}
 
-    serde_json::from_slice(&output.stdout)
-        .map_err(|e| format!("could not parse `just` JSON dump: {e}"))
+/// Run `just --justfile <path> --dump --dump-format json` and parse the result.
+pub async fn dump(justfile: &Path) -> Result<DumpFile, JustError> {
+    let stdout = introspect(justfile, &["--dump", "--dump-format", "json"], "--dump").await?;
+    serde_json::from_slice(&stdout).map_err(|source| JustError::Parse {
+        justfile: justfile.to_path_buf(),
+        source,
+    })
 }
 
 /// Best-effort extraction of a group name from a recipe's attributes.

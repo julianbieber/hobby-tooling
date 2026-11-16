@@ -1,3 +1,6 @@
+//! Finding `claude:` comments in a file's lines and turning one into a request
+//! with the code around it.
+
 use serde::{Deserialize, Serialize};
 use tower_lsp::lsp_types::Range;
 
@@ -41,35 +44,46 @@ pub fn claude_prefixes_for_path(path: &str) -> &'static [&'static str] {
 
 /// The primary prefix to use when *inserting* a new claude comment for a file.
 pub fn comment_prefix_for_file(path: &str) -> &'static str {
-    match claude_prefixes_for_path(path)[0] {
-        "# claude:" => "# claude: ",
-        "-- claude:" => "-- claude: ",
+    match claude_prefixes_for_path(path) {
+        ["# claude:", ..] => "# claude: ",
+        ["-- claude:", ..] => "-- claude: ",
         _ => "// claude: ",
     }
 }
 
+/// The claude instructions on the lines of `range`.
 ///
 /// Checks the selection itself plus a few lines above it, since the typical
 /// pattern is writing a comment above the code you want edited.
 pub fn find_claude_comments(lines: &[&str], range: &Range, path: &str) -> Vec<ClaudeInstruction> {
-    let mut instructions = Vec::new();
     let prefixes = claude_prefixes_for_path(path);
-
-    // Search from a few lines above the selection start to the selection end
-    let scan_start = range.start.line.saturating_sub(3) as usize;
-    let scan_end = (range.end.line as usize + 1).min(lines.len());
-
-    for (offset, raw) in lines[scan_start..scan_end].iter().enumerate() {
-        let line = raw.trim();
-        if let Some(text) = extract_claude_comment(line, prefixes) {
-            instructions.push(ClaudeInstruction {
+    numbered(lines, range.start.line.saturating_sub(3), range.end.line)
+        .filter_map(|(line, raw)| {
+            extract_claude_comment(raw.trim(), prefixes).map(|text| ClaudeInstruction {
                 text: text.to_string(),
-                line: (scan_start + offset) as u32,
-            });
-        }
-    }
+                line,
+            })
+        })
+        .collect()
+}
 
-    instructions
+fn numbered<'a>(
+    lines: &'a [&'a str],
+    first: u32,
+    last: u32,
+) -> impl Iterator<Item = (u32, &'a str)> {
+    (0u32..)
+        .zip(lines.iter().copied())
+        .skip_while(move |(i, _)| *i < first)
+        .take_while(move |(i, _)| *i <= last)
+}
+
+/// Length in bytes of line `line` of `lines`, 0 past the end.
+pub fn line_len(lines: &[&str], line: u32) -> u32 {
+    usize::try_from(line)
+        .ok()
+        .and_then(|i| lines.get(i))
+        .map_or(0, |l| u32::try_from(l.len()).unwrap_or(u32::MAX))
 }
 
 /// Extract the instruction text from a claude comment, if the line matches one of `prefixes`.
@@ -87,12 +101,10 @@ fn extract_claude_comment<'a>(line: &'a str, prefixes: &[&str]) -> Option<&'a st
 
 /// Case-insensitive prefix match, returns the remainder after the prefix.
 fn line_after_prefix_ci<'a>(line: &'a str, prefix: &str) -> Option<&'a str> {
-    if line.len() >= prefix.len() && line[..prefix.len()].eq_ignore_ascii_case(prefix) {
-        Some(&line[prefix.len()..])
-    } else {
-        None
-    }
+    let (head, rest) = line.split_at_checked(prefix.len())?;
+    head.eq_ignore_ascii_case(prefix).then_some(rest)
 }
+
 /// Build a structured request from the detected instruction and code context.
 pub fn build_request(
     file_path: &str,
@@ -100,15 +112,13 @@ pub fn build_request(
     range: &Range,
     instruction: &ClaudeInstruction,
 ) -> ClaudeRequest {
-    // Include some surrounding context beyond the selection
-    let context_start = range.start.line.saturating_sub(5) as usize;
-    let context_end = ((range.end.line as usize) + 6).min(lines.len());
-
-    let context_lines: Vec<String> = lines[context_start..context_end]
-        .iter()
-        .enumerate()
-        .map(|(i, line)| format!("{:>4} | {}", context_start + i + 1, line))
-        .collect();
+    let context_lines: Vec<String> = numbered(
+        lines,
+        range.start.line.saturating_sub(5),
+        range.end.line.saturating_add(5),
+    )
+    .map(|(i, line)| format!("{:>4} | {}", u64::from(i) + 1, line))
+    .collect();
 
     ClaudeRequest {
         file: file_path.to_string(),
@@ -123,11 +133,10 @@ pub fn build_request(
 /// Returns `(line_index_0_based, instruction_text)` pairs.
 pub fn find_all_claude_comments(lines: &[&str], path: &str) -> Vec<(u32, String)> {
     let prefixes = claude_prefixes_for_path(path);
-    lines
-        .iter()
-        .enumerate()
+    (0u32..)
+        .zip(lines)
         .filter_map(|(i, line)| {
-            extract_claude_comment(line.trim(), prefixes).map(|t| (i as u32, t.to_string()))
+            extract_claude_comment(line.trim(), prefixes).map(|t| (i, t.to_string()))
         })
         .collect()
 }
@@ -135,19 +144,20 @@ pub fn find_all_claude_comments(lines: &[&str], path: &str) -> Vec<(u32, String)
 /// Find all claude-comment line indices.
 pub fn find_all_claude_comment_lines(lines: &[&str], path: &str) -> Vec<u32> {
     let prefixes = claude_prefixes_for_path(path);
-    lines
-        .iter()
-        .enumerate()
-        .filter_map(|(i, line)| extract_claude_comment(line.trim(), prefixes).map(|_| i as u32))
+    (0u32..)
+        .zip(lines)
+        .filter_map(|(i, line)| extract_claude_comment(line.trim(), prefixes).map(|_| i))
         .collect()
 }
 
-/// Truncate a string to max_len, appending "..." if truncated.
+/// Truncate a string to `max_len` characters, the last three of them "..." if
+/// truncated.
 pub fn truncate(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
+    if s.chars().count() <= max_len {
         s.to_string()
     } else {
-        format!("{}...", &s[..max_len.saturating_sub(3)])
+        let kept: String = s.chars().take(max_len.saturating_sub(3)).collect();
+        format!("{kept}...")
     }
 }
 

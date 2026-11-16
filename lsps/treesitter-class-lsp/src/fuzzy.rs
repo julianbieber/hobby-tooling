@@ -1,3 +1,5 @@
+//! Ranking index entries by how well their names match a typed pattern.
+
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 

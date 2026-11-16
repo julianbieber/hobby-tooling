@@ -12,6 +12,15 @@ pub fn ensure_entry(repo: &Path, path: &Path) -> std::io::Result<()> {
     }
 }
 
+/// As [`ensure_entry`], logging a failure as a warning rather than returning
+/// it: an artifact that is written but not excluded is still usable.
+pub fn ensure_entry_or_warn(repo: &Path, path: &Path) {
+    if let Err(e) = ensure_entry(repo, path) {
+        let error: &dyn std::error::Error = &e;
+        tracing::warn!(error, path = %path.display(), "cannot add to the git excludes");
+    }
+}
+
 /// As [`ensure_entry`], but takes the repo-relative path string directly.
 pub fn ensure_entry_rel(repo: &Path, rel: &str) -> std::io::Result<()> {
     let exclude_path = repo.join(".git/info/exclude");

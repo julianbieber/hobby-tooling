@@ -3,13 +3,13 @@
 //! skill references.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock, RwLock};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use parking_lot::{Mutex, RwLock};
+use tower_lsp::LanguageServer;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
-use tower_lsp::{Client, LanguageServer};
 
 use crate::index::{Entry, Index, Kind, fuzzy_rank};
 use crate::words::{RefToken, ref_at};
@@ -24,11 +24,8 @@ struct CachedIndex {
 }
 
 pub struct Backend {
-    #[allow(dead_code)]
-    client: Client,
-    /// The Claude config directory — `$CLAUDE_CONFIG_DIR`, else `$HOME/.claude` —
-    /// captured at construction. Anchors the user and plugin tiers.
-    config_dir: OnceLock<PathBuf>,
+    /// The Claude config directory backing the user and plugin tiers.
+    config_dir: Option<PathBuf>,
     /// Workspace roots announced at `initialize` — the project tier.
     workspace_roots: RwLock<Vec<PathBuf>>,
     documents: Mutex<HashMap<Url, String>>,
@@ -36,22 +33,11 @@ pub struct Backend {
 }
 
 impl Backend {
-    pub fn new(client: Client) -> Self {
-        // The one place the account is chosen. `hcdev` exports CLAUDE_CONFIG_DIR
-        // before launching zellij, so a Helix pane in a hobby session — and this
-        // server under it — indexes ~/.claude-hobby; a plain work session gets
-        // ~/.claude. See `resolve_config_dir`.
-        let config_dir = OnceLock::new();
-        if let Some(h) = std::env::var_os("HOME") {
-            let resolved = crate::index::resolve_config_dir(
-                Path::new(&h),
-                std::env::var_os("CLAUDE_CONFIG_DIR").as_deref(),
-            );
-            tracing::debug!(dir = ?resolved, "claude config directory");
-            let _ = config_dir.set(resolved);
-        }
+    /// A backend indexing `config_dir` (`$CLAUDE_CONFIG_DIR`, else `$HOME/.claude`,
+    /// as [`crate::index::resolve_config_dir`] picks it) as the user and plugin
+    /// tiers; `None` indexes the project tier only.
+    pub fn new(config_dir: Option<PathBuf>) -> Self {
         Self {
-            client,
             config_dir,
             workspace_roots: RwLock::new(Vec::new()),
             documents: Mutex::new(HashMap::new()),
@@ -59,36 +45,36 @@ impl Backend {
         }
     }
 
-    fn config_dir(&self) -> Option<&Path> {
-        self.config_dir.get().map(PathBuf::as_path)
+    fn build_index(&self) -> CachedIndex {
+        let roots = self.workspace_roots.read().clone();
+        let index = Index::build(self.config_dir.as_deref(), &roots);
+        tracing::debug!(entries = index.len(), "rebuilt index");
+        CachedIndex {
+            index,
+            built_at: Instant::now(),
+        }
     }
 
     /// Rebuild the index from scratch and store it in the cache.
     fn rebuild(&self) {
-        let roots = self.workspace_roots.read().unwrap().clone();
-        let index = Index::build(self.config_dir(), &roots);
-        tracing::debug!(entries = index.len(), "rebuilt index");
-        *self.cache.write().unwrap() = Some(CachedIndex {
-            index,
-            built_at: Instant::now(),
-        });
+        let fresh = self.build_index();
+        *self.cache.write() = Some(fresh);
     }
 
     /// Run `f` against a fresh-enough index, rebuilding first if the cache is
     /// empty or older than [`INDEX_TTL`].
     fn with_index<T>(&self, f: impl FnOnce(&Index) -> T) -> T {
-        let stale = {
-            let guard = self.cache.read().unwrap();
-            match guard.as_ref() {
-                Some(c) => c.built_at.elapsed() > INDEX_TTL,
-                None => true,
+        {
+            let guard = self.cache.read();
+            if let Some(cached) = guard.as_ref()
+                && cached.built_at.elapsed() <= INDEX_TTL
+            {
+                return f(&cached.index);
             }
-        };
-        if stale {
-            self.rebuild();
         }
-        let guard = self.cache.read().unwrap();
-        f(&guard.as_ref().expect("cache populated above").index)
+        let fresh = self.build_index();
+        let mut guard = self.cache.write();
+        f(&guard.insert(fresh).index)
     }
 
     /// A document is in scope iff it is the Ctrl+G prompt buffer
@@ -110,7 +96,7 @@ impl Backend {
     }
 
     fn doc_text(&self, uri: &Url) -> Option<String> {
-        self.documents.lock().unwrap().get(uri).cloned()
+        self.documents.lock().get(uri).cloned()
     }
 
     /// The reference token under the cursor, read from the in-memory document
@@ -186,13 +172,12 @@ impl LanguageServer for Backend {
                 }
             }
         }
-        if roots.is_empty() {
-            #[allow(deprecated)]
-            if let Some(root) = params.root_uri.as_ref().and_then(|u| u.to_file_path().ok()) {
-                roots.push(root);
-            }
+        if roots.is_empty()
+            && let Some(root) = params.root_uri.as_ref().and_then(|u| u.to_file_path().ok())
+        {
+            roots.push(root);
         }
-        *self.workspace_roots.write().unwrap() = roots;
+        *self.workspace_roots.write() = roots;
 
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
@@ -226,7 +211,6 @@ impl LanguageServer for Backend {
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         self.documents
             .lock()
-            .unwrap()
             .insert(params.text_document.uri, params.text_document.text);
     }
 
@@ -234,7 +218,6 @@ impl LanguageServer for Backend {
         if let Some(change) = params.content_changes.into_iter().next_back() {
             self.documents
                 .lock()
-                .unwrap()
                 .insert(params.text_document.uri, change.text);
         }
     }
@@ -256,10 +239,7 @@ impl LanguageServer for Backend {
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
-        self.documents
-            .lock()
-            .unwrap()
-            .remove(&params.text_document.uri);
+        self.documents.lock().remove(&params.text_document.uri);
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -301,7 +281,7 @@ impl LanguageServer for Backend {
 
         // Only resolve a token that matches a known name — this is what keeps a
         // unix path like `/home` from being treated as a `/home` reference.
-        let locations = self.with_index(|index| {
+        let mut locations = self.with_index(|index| {
             index
                 .locations(&token.query)
                 .into_iter()
@@ -314,13 +294,10 @@ impl LanguageServer for Backend {
                 .collect::<Vec<_>>()
         });
 
-        match locations.len() {
-            0 => Ok(None),
-            1 => Ok(Some(GotoDefinitionResponse::Scalar(
-                locations.into_iter().next().unwrap(),
-            ))),
-            _ => Ok(Some(GotoDefinitionResponse::Array(locations))),
+        if locations.len() > 1 {
+            return Ok(Some(GotoDefinitionResponse::Array(locations)));
         }
+        Ok(locations.pop().map(GotoDefinitionResponse::Scalar))
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {

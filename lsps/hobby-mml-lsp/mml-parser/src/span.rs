@@ -75,19 +75,22 @@ impl LineIndex {
     /// of the text clamps to the end.
     pub fn position(&self, offset: usize) -> Position {
         let offset = offset.min(self.text.len());
-        // Largest line whose start is <= offset.
-        let line = match self.line_starts.binary_search(&offset) {
-            Ok(exact) => exact,
-            Err(next) => next - 1,
-        };
-        let line_start = self.line_starts[line];
-        let character = self.text[line_start..offset]
-            .chars()
-            .map(char::len_utf16)
+        let line = self
+            .line_starts
+            .partition_point(|&s| s <= offset)
+            .saturating_sub(1);
+        let line_start = self.line_starts.get(line).copied().unwrap_or(0);
+        let character = self
+            .text
+            .get(line_start..)
+            .unwrap_or_default()
+            .char_indices()
+            .take_while(|&(i, _)| line_start + i < offset)
+            .map(|(_, c)| c.len_utf16())
             .sum::<usize>();
         Position {
-            line: line as u32,
-            character: character as u32,
+            line: u32::try_from(line).unwrap_or(u32::MAX),
+            character: u32::try_from(character).unwrap_or(u32::MAX),
         }
     }
 }

@@ -9,131 +9,122 @@
 //! `includeDeclaration: false`. The server binary is `$TSLSP_BIN`, default
 //! `target/debug/treesitter-class-lsp`.
 
-use std::io::{BufRead, BufReader, Write};
-use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::time::{Duration, Instant};
+mod cli;
+mod lsp_session;
 
-use anyhow::{Context, bail};
+use std::io;
+use std::num::ParseIntError;
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+
 use serde_json::{Value, json};
 
-const INDEX_DEADLINE: Duration = Duration::from_secs(60);
+use cli::{init_logging, report};
+use lsp_session::{Session, SessionError};
 
-struct Session {
-    child: Child,
-    stdin: ChildStdin,
-    messages: Receiver<Value>,
-    next_id: u64,
+const USAGE: &str = "usage: references <root> <file> <line> <col> [--no-declaration]";
+
+#[derive(Debug, thiserror::Error)]
+enum ReferencesError {
+    #[error("{USAGE}")]
+    Usage,
+    #[error("{name} is not a number")]
+    NotANumber {
+        name: &'static str,
+        #[source]
+        source: ParseIntError,
+    },
+    #[error("unexpected argument {0}")]
+    UnexpectedArgument(String),
+    #[error("cannot resolve the root {}", path.display())]
+    Root {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("cannot read {}", path.display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error(transparent)]
+    Session(#[from] SessionError),
 }
 
-impl Session {
-    fn start(binary: &str) -> anyhow::Result<Self> {
-        let mut child = Command::new(binary)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .with_context(|| format!("spawning {binary}"))?;
-        let stdin = child.stdin.take().unwrap();
-        let mut reader = BufReader::new(child.stdout.take().unwrap());
-        let (tx, messages) = mpsc::channel();
-        std::thread::spawn(move || {
-            while let Ok(msg) = recv(&mut reader) {
-                if tx.send(msg).is_err() {
-                    break;
-                }
-            }
-        });
+struct Args {
+    root: PathBuf,
+    file: String,
+    line: u32,
+    col: u32,
+    include_declaration: bool,
+}
+
+impl Args {
+    fn parse(mut args: impl Iterator<Item = String>) -> Result<Self, ReferencesError> {
+        let (Some(root), Some(file), Some(line), Some(col)) =
+            (args.next(), args.next(), args.next(), args.next())
+        else {
+            return Err(ReferencesError::Usage);
+        };
+        let line = line.parse().map_err(|source| ReferencesError::NotANumber {
+            name: "<line>",
+            source,
+        })?;
+        let col = col.parse().map_err(|source| ReferencesError::NotANumber {
+            name: "<col>",
+            source,
+        })?;
+        let include_declaration = match args.next().as_deref() {
+            Some("--no-declaration") => false,
+            Some(other) => return Err(ReferencesError::UnexpectedArgument(other.to_string())),
+            None => true,
+        };
         Ok(Self {
-            child,
-            stdin,
-            messages,
-            next_id: 1,
+            root: PathBuf::from(root),
+            file,
+            line,
+            col,
+            include_declaration,
         })
     }
+}
 
-    fn notify(&mut self, method: &str, params: Value) -> anyhow::Result<()> {
-        send(&mut self.stdin, &json!({"jsonrpc": "2.0", "method": method, "params": params}))
-    }
-
-    fn request(&mut self, method: &str, params: Value) -> anyhow::Result<Value> {
-        let id = self.next_id;
-        self.next_id += 1;
-        send(
-            &mut self.stdin,
-            &json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}),
-        )?;
-        loop {
-            let msg = self.messages.recv().context("server closed its stdout")?;
-            if msg.get("id") == Some(&json!(id)) {
-                return Ok(msg["result"].clone());
-            }
-        }
-    }
-
-    fn wait_until_indexed(&self) -> anyhow::Result<()> {
-        let deadline = Instant::now() + INDEX_DEADLINE;
-        loop {
-            let left = deadline.saturating_duration_since(Instant::now());
-            match self.messages.recv_timeout(left) {
-                Ok(msg) => {
-                    let text = msg["params"]["message"].as_str().unwrap_or("");
-                    if msg["method"] == "window/logMessage"
-                        && text.contains("treesitter-class-lsp: indexed")
-                    {
-                        return Ok(());
-                    }
-                }
-                Err(RecvTimeoutError::Timeout) => {
-                    bail!("index not complete after {}s", INDEX_DEADLINE.as_secs())
-                }
-                Err(RecvTimeoutError::Disconnected) => bail!("server closed its stdout"),
-            }
-        }
-    }
-
-    fn finish(mut self) -> anyhow::Result<()> {
-        self.request("shutdown", Value::Null)?;
-        self.notify("exit", Value::Null)?;
-        drop(self.stdin);
-        self.child.wait()?;
-        Ok(())
+fn main() -> ExitCode {
+    init_logging("info");
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => report(&e),
     }
 }
 
-fn main() -> anyhow::Result<()> {
-    let mut args = std::env::args().skip(1);
-    let (Some(root), Some(file), Some(line), Some(col)) =
-        (args.next(), args.next(), args.next(), args.next())
-    else {
-        bail!("usage: references <root> <file> <line> <col> [--no-declaration]");
-    };
-    let line: u32 = line.parse().context("<line> is not a number")?;
-    let col: u32 = col.parse().context("<col> is not a number")?;
-    let include_declaration = match args.next().as_deref() {
-        Some("--no-declaration") => false,
-        Some(other) => bail!("unexpected argument {other}"),
-        None => true,
-    };
-
-    let root = std::fs::canonicalize(&root).with_context(|| format!("root {root}"))?;
-    let path = root.join(&file);
+fn run() -> Result<(), ReferencesError> {
+    let args = Args::parse(std::env::args().skip(1))?;
+    let root = std::fs::canonicalize(&args.root).map_err(|source| ReferencesError::Root {
+        path: args.root.clone(),
+        source,
+    })?;
+    let path = root.join(&args.file);
     let uri = format!("file://{}", path.display());
-    let binary = std::env::var("TSLSP_BIN").unwrap_or_else(|_| "target/debug/treesitter-class-lsp".into());
+    let binary =
+        std::env::var("TSLSP_BIN").unwrap_or_else(|_| "target/debug/treesitter-class-lsp".into());
 
     let mut session = Session::start(&binary)?;
     let initialized = session.request(
         "initialize",
         json!({"processId": null, "rootUri": format!("file://{}", root.display()), "capabilities": {}}),
     )?;
-    let advertised = !initialized["capabilities"]["referencesProvider"].is_null()
-        && initialized["capabilities"]["referencesProvider"] != json!(false);
+    let advertised = initialized
+        .pointer("/capabilities/referencesProvider")
+        .is_some_and(|provider| !provider.is_null() && provider != &json!(false));
     println!("referencesProvider: {advertised}");
     session.notify("initialized", json!({}))?;
     session.wait_until_indexed()?;
 
-    let disk = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let disk = std::fs::read_to_string(&path).map_err(|source| ReferencesError::Read {
+        path: path.clone(),
+        source,
+    })?;
     session.notify(
         "textDocument/didOpen",
         json!({"textDocument": {"uri": uri, "languageId": "plain", "version": 1, "text": disk}}),
@@ -142,12 +133,12 @@ fn main() -> anyhow::Result<()> {
         "textDocument/references",
         json!({
             "textDocument": {"uri": uri},
-            "position": {"line": line.saturating_sub(1), "character": col.saturating_sub(1)},
-            "context": {"includeDeclaration": include_declaration},
+            "position": {"line": args.line.saturating_sub(1), "character": args.col.saturating_sub(1)},
+            "context": {"includeDeclaration": args.include_declaration},
         }),
     )?;
     println!("{}", describe(&root, &answer));
-    session.finish()
+    Ok(session.finish()?)
 }
 
 fn describe(root: &Path, answer: &Value) -> String {
@@ -157,15 +148,15 @@ fn describe(root: &Path, answer: &Value) -> String {
         .unwrap_or(&[])
         .iter()
         .filter_map(|loc| {
-            let uri = loc["uri"].as_str()?;
-            let start = &loc["range"]["start"];
+            let uri = loc.get("uri")?.as_str()?;
+            let start = loc.pointer("/range/start")?;
             let path = PathBuf::from(uri.strip_prefix("file://")?);
             let shown = path.strip_prefix(root).unwrap_or(&path);
             Some(format!(
                 "{}:{}:{}",
                 shown.display(),
-                start["line"].as_u64()? + 1,
-                start["character"].as_u64()? + 1
+                start.get("line")?.as_u64()? + 1,
+                start.get("character")?.as_u64()? + 1
             ))
         })
         .collect();
@@ -174,31 +165,4 @@ fn describe(root: &Path, answer: &Value) -> String {
     } else {
         lines.join("\n")
     }
-}
-
-fn send<W: Write>(w: &mut W, msg: &Value) -> anyhow::Result<()> {
-    let body = msg.to_string();
-    write!(w, "Content-Length: {}\r\n\r\n{}", body.len(), body)?;
-    w.flush()?;
-    Ok(())
-}
-
-fn recv<R: BufRead>(r: &mut R) -> anyhow::Result<Value> {
-    let mut len = 0usize;
-    let mut header = String::new();
-    loop {
-        header.clear();
-        if r.read_line(&mut header)? == 0 {
-            bail!("eof");
-        }
-        if header == "\r\n" {
-            break;
-        }
-        if let Some(rest) = header.strip_prefix("Content-Length:") {
-            len = rest.trim().parse()?;
-        }
-    }
-    let mut body = vec![0u8; len];
-    r.read_exact(&mut body)?;
-    Ok(serde_json::from_slice(&body)?)
 }

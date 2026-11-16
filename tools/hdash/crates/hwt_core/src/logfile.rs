@@ -4,9 +4,9 @@
 use std::fs::{DirBuilder, File, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
-use std::sync::Mutex;
 
 use log::{Level, LevelFilter, Log, Metadata, Record};
+use parking_lot::Mutex;
 
 const MAX_BYTES: u64 = 1024 * 1024;
 
@@ -21,6 +21,10 @@ impl Log for FileLog {
         if !self.enabled(record.metadata()) {
             return;
         }
+        #[expect(
+            clippy::disallowed_types,
+            reason = "the log is read by a person, who reads their own local time"
+        )]
         let line = format!(
             "{} {} {}: {}",
             chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
@@ -32,15 +36,11 @@ impl Log for FileLog {
             .chars()
             .map(|c| if c.is_control() { ' ' } else { c })
             .collect();
-        if let Ok(mut file) = self.0.lock() {
-            let _ = writeln!(file, "{line}");
-        }
+        let _ = writeln!(self.0.lock(), "{line}");
     }
 
     fn flush(&self) {
-        if let Ok(mut file) = self.0.lock() {
-            let _ = file.flush();
-        }
+        let _ = self.0.lock().flush();
     }
 }
 

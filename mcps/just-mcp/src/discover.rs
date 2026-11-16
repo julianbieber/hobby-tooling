@@ -1,6 +1,26 @@
+//! Finding justfiles: walking a project tree for them and resolving a
+//! user-supplied path or root to a concrete one.
+
 use ignore::WalkBuilder;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+
+/// A path the caller supplied does not lead to a justfile or a usable root.
+#[derive(Debug, thiserror::Error)]
+pub enum ResolveError {
+    #[error("no justfile found in directory {}", .dir.display())]
+    NoJustfileInDir { dir: PathBuf },
+    #[error("path does not exist: {}", .path.display())]
+    NotFound { path: PathBuf },
+    #[error("cannot resolve {}", .path.display())]
+    Canonicalize {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("cannot read current dir")]
+    CurrentDir(#[source] std::io::Error),
+}
 
 /// True if a filename is one just recognises as a justfile.
 fn is_justfile_name(name: &str) -> bool {
@@ -51,7 +71,7 @@ pub fn discover(root: &Path, ignore_dirs: &[String], max_depth: usize) -> Vec<Pa
 
 /// Resolve a user-supplied path to a concrete justfile. Accepts either a path
 /// to a justfile directly, or a directory containing one.
-pub fn resolve_justfile(path: &Path) -> Result<PathBuf, String> {
+pub fn resolve_justfile(path: &Path) -> Result<PathBuf, ResolveError> {
     if path.is_file() {
         return canonicalize(path);
     }
@@ -62,14 +82,21 @@ pub fn resolve_justfile(path: &Path) -> Result<PathBuf, String> {
                 return canonicalize(&p);
             }
         }
-        return Err(format!("no justfile found in directory {}", path.display()));
+        return Err(ResolveError::NoJustfileInDir {
+            dir: path.to_path_buf(),
+        });
     }
-    Err(format!("path does not exist: {}", path.display()))
+    Err(ResolveError::NotFound {
+        path: path.to_path_buf(),
+    })
 }
 
-fn canonicalize(path: &Path) -> Result<PathBuf, String> {
+fn canonicalize(path: &Path) -> Result<PathBuf, ResolveError> {
     path.canonicalize()
-        .map_err(|e| format!("cannot resolve {}: {e}", path.display()))
+        .map_err(|source| ResolveError::Canonicalize {
+            path: path.to_path_buf(),
+            source,
+        })
 }
 
 /// Determine the discovery root: an explicit override, else the first
@@ -77,14 +104,13 @@ fn canonicalize(path: &Path) -> Result<PathBuf, String> {
 pub fn resolve_root(
     override_root: Option<&str>,
     configured: &[PathBuf],
-) -> Result<PathBuf, String> {
+) -> Result<PathBuf, ResolveError> {
     let base = match override_root {
         Some(r) => PathBuf::from(r),
         None => match configured.first() {
             Some(r) => r.clone(),
-            None => std::env::current_dir().map_err(|e| format!("cannot read current dir: {e}"))?,
+            None => std::env::current_dir().map_err(ResolveError::CurrentDir)?,
         },
     };
-    base.canonicalize()
-        .map_err(|e| format!("cannot resolve root {}: {e}", base.display()))
+    canonicalize(&base)
 }

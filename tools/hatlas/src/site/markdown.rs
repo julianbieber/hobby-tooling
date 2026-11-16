@@ -43,17 +43,33 @@ pub fn render_docs(docs: &str, resolve: &dyn Fn(&str) -> Option<String>) -> Stri
     let mut dropped: Vec<bool> = Vec::new();
     let events: Vec<Event> = parser
         .filter_map(|event| match event {
-            Event::Start(Tag::Link { link_type, dest_url, title, id }) => {
+            Event::Start(Tag::Link {
+                link_type,
+                dest_url,
+                title,
+                id,
+            }) => {
                 let href = if dest_url.starts_with("http://") || dest_url.starts_with("https://") {
                     Some(dest_url.to_string())
                 } else {
                     resolve(&dest_url)
                 };
                 dropped.push(href.is_none());
-                href.map(|h| Event::Start(Tag::Link { link_type, dest_url: CowStr::from(h), title, id }))
+                href.map(|h| {
+                    Event::Start(Tag::Link {
+                        link_type,
+                        dest_url: CowStr::from(h),
+                        title,
+                        id,
+                    })
+                })
             }
             Event::End(TagEnd::Link) => {
-                if dropped.pop().unwrap_or(true) { None } else { Some(Event::End(TagEnd::Link)) }
+                if dropped.pop().unwrap_or(true) {
+                    None
+                } else {
+                    Some(Event::End(TagEnd::Link))
+                }
             }
             Event::Start(Tag::Image { .. }) | Event::End(TagEnd::Image) => None,
             Event::Html(t) | Event::InlineHtml(t) => Some(Event::Text(t)),
@@ -76,7 +92,10 @@ mod tests {
     // Pins that every character that can open markup is escaped, since all JSON strings are untrusted.
     #[test]
     fn escape_covers_the_five_characters() {
-        assert_eq!(escape("<a href=\"x\">&'"), "&lt;a href=&quot;x&quot;&gt;&amp;&#39;");
+        assert_eq!(
+            escape("<a href=\"x\">&'"),
+            "&lt;a href=&quot;x&quot;&gt;&amp;&#39;"
+        );
     }
 
     // Pins that a doc comment cannot inject a script element.

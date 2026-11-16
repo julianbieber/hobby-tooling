@@ -69,8 +69,8 @@ impl DashView {
             KeyCode::Char('/') => self.field_focused = true,
             KeyCode::Up | KeyCode::Char('ü') => self.move_selection(&ids, -1),
             KeyCode::Down | KeyCode::Char('ä') => self.move_selection(&ids, 1),
-            KeyCode::PageUp => self.move_selection(&ids, -(self.cards_per_screen as isize)),
-            KeyCode::PageDown => self.move_selection(&ids, self.cards_per_screen as isize),
+            KeyCode::PageUp => self.move_selection(&ids, -self.page()),
+            KeyCode::PageDown => self.move_selection(&ids, self.page()),
             KeyCode::Left | KeyCode::Char('ö') => self.move_focus(-1),
             KeyCode::Right | KeyCode::Char('#') => self.move_focus(1),
             KeyCode::Enter | KeyCode::Char(' ') => {
@@ -251,7 +251,9 @@ impl DashView {
             }
             None => {
                 let pos = self.sel_pos.min(ids.len() - 1);
-                self.select(ids[pos].clone(), pos);
+                if let Some(id) = ids.get(pos) {
+                    self.select(id.clone(), pos);
+                }
             }
         }
         if let Some(id) = self.selected.clone() {
@@ -269,13 +271,19 @@ impl DashView {
         self.scroll_to_selected = true;
     }
 
+    fn page(&self) -> isize {
+        isize::try_from(self.cards_per_screen).unwrap_or(isize::MAX)
+    }
+
     fn move_selection(&mut self, ids: &[TaskId], by: isize) {
         if ids.is_empty() {
             return;
         }
-        let pos = (self.sel_pos as isize + by).clamp(0, ids.len() as isize - 1) as usize;
-        if self.selected.as_ref() != Some(&ids[pos]) {
-            self.select(ids[pos].clone(), pos);
+        let pos = stepped(self.sel_pos, by, ids.len());
+        if let Some(id) = ids.get(pos)
+            && self.selected.as_ref() != Some(id)
+        {
+            self.select(id.clone(), pos);
         }
     }
 
@@ -291,8 +299,9 @@ impl DashView {
         else {
             return;
         };
-        let next = (at as isize + by).clamp(0, controls.len() as isize - 1) as usize;
-        self.focus = Some(controls[next].clone());
+        if let Some(next) = controls.get(stepped(at, by, controls.len())) {
+            self.focus = Some(next.clone());
+        }
     }
 
     fn card_controls(&self, id: &TaskId) -> Vec<Control> {
@@ -327,4 +336,8 @@ impl DashView {
         }
         out
     }
+}
+
+fn stepped(at: usize, by: isize, len: usize) -> usize {
+    at.saturating_add_signed(by).min(len.saturating_sub(1))
 }
