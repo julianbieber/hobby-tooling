@@ -1,0 +1,103 @@
+//! The pane's reach into the zellij session it runs in: naming its own tab, and opening a file
+//! beside it.
+
+use std::path::Path;
+use std::process::{Command, Stdio};
+
+use log::warn;
+use serde_json::Value;
+
+/// The id of the tab this process's pane is in, when it runs in a zellij pane.
+pub fn own_tab_id() -> Option<u64> {
+    let pane = std::env::var("ZELLIJ_PANE_ID").ok()?.parse::<u64>().ok()?;
+    let out = Command::new("zellij")
+        .args(["action", "list-panes", "-a", "--json"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    tab_of_pane(&String::from_utf8_lossy(&out.stdout), pane)
+}
+
+pub fn rename_tab(tab_id: u64, label: &str) {
+    let status = Command::new("zellij")
+        .args([
+            "action",
+            "rename-tab",
+            "--tab-id",
+            &tab_id.to_string(),
+            label,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    match status {
+        Ok(s) if s.success() => {}
+        Ok(s) => warn!("zellij rename-tab exited {s}"),
+        Err(e) => warn!("cannot run zellij rename-tab: {e}"),
+    }
+}
+
+/// Open `path` in Helix in a floating pane of this session that closes with the editor; outside
+/// zellij, with `xdg-open`.
+pub fn open_file(path: &Path) {
+    if std::env::var_os("ZELLIJ").is_none() {
+        hwt_core::spawn_detached(&["-f", "xdg-open", &path.to_string_lossy()]);
+        return;
+    }
+    let dir = path.parent().unwrap_or(path);
+    let spawned = Command::new("zellij")
+        .args(["action", "new-pane", "--floating", "--close-on-exit"])
+        .arg("--width")
+        .arg("90%")
+        .arg("--height")
+        .arg("90%")
+        .arg("--x")
+        .arg("5%")
+        .arg("--y")
+        .arg("5%")
+        .arg("--cwd")
+        .arg(dir)
+        .arg("--")
+        .arg("hx")
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    if let Err(e) = spawned {
+        warn!("cannot open {} in a floating pane: {e}", path.display());
+    }
+}
+
+fn tab_of_pane(list_panes_json: &str, pane: u64) -> Option<u64> {
+    let panes: Value = serde_json::from_str(list_panes_json).ok()?;
+    panes.as_array()?.iter().find_map(|p| {
+        let is_plugin = p.get("is_plugin").and_then(Value::as_bool).unwrap_or(false);
+        let id = p.get("id").and_then(Value::as_u64)?;
+        (!is_plugin && id == pane)
+            .then(|| p.get("tab_id").and_then(Value::as_u64))
+            .flatten()
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_tab_is_found_by_terminal_pane_id_not_plugin_id() {
+        let json = r#"[
+            {"id":1,"is_plugin":true,"tab_id":0},
+            {"id":0,"is_plugin":false,"tab_id":0},
+            {"id":1,"is_plugin":false,"tab_id":3}
+        ]"#;
+        assert_eq!(tab_of_pane(json, 1), Some(3));
+        assert_eq!(tab_of_pane(json, 9), None);
+        assert_eq!(tab_of_pane("not json", 1), None);
+    }
+}

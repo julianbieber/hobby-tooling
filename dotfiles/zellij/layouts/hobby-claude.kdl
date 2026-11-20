@@ -1,0 +1,23 @@
+// Hobby Claude layout: Claude (hobby account) on the left, the `htab` overview of
+// this tab's task or aspect on the right. No editor pane — Alt n opens a shell in
+// the tab's directory when one is needed. cwd is inherited from the launching
+// shell.
+//
+// The Claude pane runs `chobby` for the reason hobby-dev.kdl gives. `htab` runs
+// through a login shell so ~/.cargo/bin is on PATH in a tab opened by
+// `zellij action new-tab`, and it names its own tab `<name> · <phase>`.
+//
+// `hcdev-dev-panes` in hcdev.nu spells the same panes for the layouts it renders,
+// and the two must stay alike; the pane name `overview` is how hcdev tells a
+// running session's mode.
+layout {
+    pane split_direction="vertical" {
+        pane size="70%" command="chobby" name="claude" close_on_exit=false
+        pane size="30%" command="bash" name="overview" close_on_exit=false {
+            args "-lc" "exec htab"
+        }
+    }
+    pane size=1 borderless=true {
+        plugin location="compact-bar"
+    }
+}

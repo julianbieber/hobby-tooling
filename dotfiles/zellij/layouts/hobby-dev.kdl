@@ -11,7 +11,8 @@
 //
 // The compact bar is what shows a task's aspects, each a tab of this
 // session (`hcdev tab`). `hcdev-dev-panes` in hcdev.nu spells the same panes for
-// the layouts it renders, and the two must stay alike.
+// the layouts it renders, and the two must stay alike. hobby-claude.kdl is the
+// other mode, Claude beside the htab overview, chosen per session start.
 layout {
     pane split_direction="vertical" {
         pane size="65%" name="editor"
