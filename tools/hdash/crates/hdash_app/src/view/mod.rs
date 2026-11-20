@@ -42,6 +42,7 @@ pub enum CardButton {
     Notes,
     Hide,
     Main,
+    Claude,
 }
 
 /// Everything in the view that reacts to a click.

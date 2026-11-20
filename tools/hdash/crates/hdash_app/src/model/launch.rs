@@ -44,6 +44,23 @@ impl LaunchSpec {
     }
 }
 
+/// Which panes a new `hcdev` session's tabs get: Helix beside Claude, or Claude beside the
+/// `htab` overview.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    Editor,
+    Claude,
+}
+
+impl Mode {
+    fn script(self, script: &str) -> String {
+        match self {
+            Self::Editor => script.to_owned(),
+            Self::Claude => format!("{script} --claude"),
+        }
+    }
+}
+
 const HCDEV_SCRIPT: &str =
     "hcdev wt $env.HDASH_TASK --project $env.HDASH_PROJECT --topic $env.HDASH_TOPIC";
 
@@ -89,13 +106,13 @@ fn launch_nu_with(dir: &str, title: &str, cmd: &str, envs: &[(&str, &str)]) {
     );
 }
 
-/// Open an `hcdev` session (Zellij hobby-dev layout, Claude on the hobby account) in an
-/// existing worktree.
-pub fn launch_hcdev(dir: &Path, spec: &LaunchSpec) {
+/// Open an `hcdev` session (Claude on the hobby account) in an existing worktree, in `mode`
+/// when it is not already running.
+pub fn launch_hcdev(dir: &Path, spec: &LaunchSpec, mode: Mode) {
     launch_nu(
         &dir.to_string_lossy(),
         &spec.session_title(),
-        HCDEV_SCRIPT,
+        &mode.script(HCDEV_SCRIPT),
         spec,
     );
 }
@@ -104,11 +121,11 @@ pub fn launch_hcdev(dir: &Path, spec: &LaunchSpec) {
 /// the main checkout's HEAD when it has none — and open an `hcdev` session in it, in one
 /// terminal. The task dir does not exist yet, so the terminal opens in the worktrees root;
 /// `hcdev wt` resolves the restored path itself from the three components.
-pub fn launch_restore(spec: &LaunchSpec) {
+pub fn launch_restore(spec: &LaunchSpec, mode: Mode) {
     launch_nu(
         &worktrees_root().to_string_lossy(),
         &spec.session_title(),
-        RESTORE_SCRIPT,
+        &mode.script(RESTORE_SCRIPT),
         spec,
     );
 }
@@ -219,6 +236,16 @@ mod tests {
         assert!(held.starts_with("try { hwt restore 'x' } catch {|e|"));
         assert!(held.contains("print $e.msg"));
         assert!(held.trim_end().ends_with("input }"));
+    }
+
+    #[test]
+    fn claude_mode_ends_the_hcdev_command_with_its_flag() {
+        assert_eq!(Mode::Editor.script(HCDEV_SCRIPT), HCDEV_SCRIPT);
+        assert!(
+            Mode::Claude
+                .script(RESTORE_SCRIPT)
+                .ends_with("hcdev wt $env.HDASH_TASK --project $env.HDASH_PROJECT --topic $env.HDASH_TOPIC --claude")
+        );
     }
 
     #[test]

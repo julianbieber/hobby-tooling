@@ -10,6 +10,7 @@ use ratatui::layout::Rect;
 
 use super::*;
 use crate::app::Action;
+use crate::model::launch::Mode;
 use crate::model::project::Project;
 use crate::model::task::{AspectRef, GitInfo, OpenItem, Pr, PrStatus, Repo, Todo, TodoStatus};
 use crate::session::Session;
@@ -168,10 +169,28 @@ fn clicks_run_the_control_drawn_under_the_pointer() {
 
     let buf = frame(&mut view);
     let open = find(&buf, "[Open hcdev]", Some("task-a"), 0);
-    assert_eq!(click(&mut view, open), Some(Action::Hcdev(a.clone())));
+    assert_eq!(
+        click(&mut view, open),
+        Some(Action::Hcdev(a.clone(), Mode::Editor))
+    );
     let buf = frame(&mut view);
     let restore = find(&buf, "[Restore]", Some("task-b"), 0);
-    assert_eq!(click(&mut view, restore), Some(Action::Restore(b.clone())));
+    assert_eq!(
+        click(&mut view, restore),
+        Some(Action::Restore(b.clone(), Mode::Editor))
+    );
+    let buf = frame(&mut view);
+    let claude = find(&buf, "[Claude mode]", Some("task-b"), 0);
+    assert_eq!(
+        click(&mut view, claude),
+        Some(Action::Restore(b.clone(), Mode::Claude))
+    );
+    let buf = frame(&mut view);
+    let claude = find(&buf, "[Claude mode]", Some("task-a"), 0);
+    assert_eq!(
+        click(&mut view, claude),
+        Some(Action::Hcdev(a.clone(), Mode::Claude))
+    );
 
     let buf = frame(&mut view);
     let hide = find(&buf, "[Hide]", Some("task-a"), 0);
@@ -214,8 +233,12 @@ fn selection_follows_its_task_across_a_resort() {
     frame(&mut view);
     press(&mut view, KeyCode::Char('ä'));
     press(&mut view, KeyCode::Char('ä'));
-    let hcdev =
-        |view: &DashView, name: &str| Some(Action::Hcdev(view.task(&id(name)).unwrap().clone()));
+    let hcdev = |view: &DashView, name: &str| {
+        Some(Action::Hcdev(
+            view.task(&id(name)).unwrap().clone(),
+            Mode::Editor,
+        ))
+    };
 
     view.sessions.tasks.insert(
         id("n3"),
@@ -268,7 +291,10 @@ fn the_primary_button_follows_the_stage() {
     let buf = frame(&mut view);
     find(&buf, "[Adopt]", Some("stray"), 0);
     let start = find(&buf, "[Start task]", Some("fresh"), 0);
-    assert_eq!(click(&mut view, start), Some(Action::Restore(fresh)));
+    assert_eq!(
+        click(&mut view, start),
+        Some(Action::Restore(fresh, Mode::Editor))
+    );
     let buf = frame(&mut view);
     let open = find(&buf, "[Open coordinator]", Some("list"), 0);
     assert_eq!(click(&mut view, open), Some(Action::Coordinator(coord)));

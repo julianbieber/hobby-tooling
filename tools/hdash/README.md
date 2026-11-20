@@ -61,6 +61,12 @@ label comes from a 2-second probe; the click looks the window up again, and a se
 the same task within 5 seconds is ignored. Task, project and topic reach the launched nu as
 `HDASH_TASK`/`HDASH_PROJECT`/`HDASH_TOPIC`, never inside the script text.
 
+**Claude mode** sits beside the primary button whenever that button would start a session —
+*not started*, *removed*, and **Open hcdev** — and starts it with `hcdev wt --claude`: every
+tab is Claude beside `htab`, the overview of that tab's task or aspect, with no editor pane.
+The primary button starts the editor mode. A running session keeps the mode it was started
+in, so **Focus** and **Attach** have no second button.
+
 *Not started* and *removed* run the same command: `hwt restore` re-creates a worktree on
 its existing branch, and creates the branch from the main checkout's `HEAD` when there is
 none. The branch check is one `git for-each-ref` per project with a worktree-less task,
@@ -236,6 +242,34 @@ just test
 just shot           # screenshot the app in an Alacritty window (needs xdotool + imagemagick)
 ```
 
+## htab — the overview pane of a Claude-mode tab
+
+`htab` (`crates/htab`, installed by `just install-dash`) runs in the right pane of every
+Claude-mode tab and shows the task or aspect whose worktree it runs in — never the whole
+task's other aspects. Everything is read from the notes on disk, once a second; nothing asks a
+model or the network.
+
+| Section | Source |
+| --- | --- |
+| header | the name; `aspect.json` `kind` and `state`; `build-task.json` `phase` and how long since `phase_since` |
+| `⏸` line | `build-task.json` `waiting_on` |
+| PR, plan | `aspect.json` `pr` (an aspect) or `prs.json` (a task); `build-task.json` `plan`, else the newest `plan-*.md` |
+| Why / What / Done when / Out of scope | the aspect's `brief.md` sections of those names (`Why the task needs it`, `Goal` or `Question`) |
+| Issue / Brief | a task's `issue.md` without its `## Progress`, else the `build-task.json` brief |
+| To do / Done | `build-task.json` `todo`: open steps first, then done and dropped |
+| Outcome, Open items | `aspect.json` once the aspect has finished |
+
+A click on a PR row opens it in Firefox; on the plan row, opens it in Helix in a floating pane
+of the session. `j`/`k`, the wheel, `space`/`b` and `g`/`G` scroll, `r` reloads, `q` quits.
+
+It also names its own tab `<name> · <phase>` (the aspect's `state` when no pipeline has run),
+renaming it as the phase moves. `hcdev tab` finds a tab by `<name>` or `<name> · …`, and
+tells a running session's mode by a pane named `overview`, so an aspect tab opened into a
+Claude-mode session gets the same panes.
+
+`htab --print <width>` renders once to stdout; `--scope <project>/<topic>/<task>[/<aspect>]`
+names the scope instead of the current directory.
+
 ## Layout
 
 ```
@@ -244,6 +278,7 @@ crates/hwt_core      — paths, detached spawning, the job pool, interval timer,
 crates/hdash_app     — app (terminal shell), view/{mod,draw,input} (the dashboard),
                        model/{task,project,item,launch,pull}, refresh, session, focus,
                        facets, widgets, hits
+crates/htab          — the Claude-mode overview pane: scope, overview, view, zellij
 ```
 
 ## Known Limitations
