@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/hdash_app", "crates/hwt_core"]
+members = ["crates/hdash_app", "crates/htab", "crates/hwt_core"]
 
 [workspace.package]
 edition = "2024"

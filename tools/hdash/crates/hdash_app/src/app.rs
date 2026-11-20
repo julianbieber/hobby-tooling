@@ -25,8 +25,8 @@ use ratatui::style::{Color, Style};
 
 use crate::focus::{Launches, activate, find_window};
 use crate::model::launch::{
-    launch_coordinator, launch_hcdev, launch_restore, launch_tab, launch_terminal, open_notes,
-    open_tab, open_url,
+    Mode, launch_coordinator, launch_hcdev, launch_restore, launch_tab, launch_terminal,
+    open_notes, open_tab, open_url,
 };
 use crate::model::task::Task;
 use crate::session::now_secs;
@@ -39,8 +39,8 @@ const KEY_HINT: &str = "q quit · / filter · ↑↓ ü ä select · ←→ ö #
 #[derive(Clone, PartialEq, Debug)]
 pub enum Action {
     OpenUrl(String),
-    Hcdev(Task),
-    Restore(Task),
+    Hcdev(Task, Mode),
+    Restore(Task, Mode),
     Coordinator(Task),
     Terminal(Task),
     Notes(Task),
@@ -260,11 +260,11 @@ impl App {
     fn run(&mut self, action: Action) {
         match action {
             Action::OpenUrl(url) => open_url(&url),
-            Action::Hcdev(task) | Action::Coordinator(task) | Action::Restore(task)
+            Action::Hcdev(task, _) | Action::Coordinator(task) | Action::Restore(task, _)
                 if self.launches.pending(&task.id) => {}
-            Action::Hcdev(task) => {
+            Action::Hcdev(task, mode) => {
                 if !find_window(&task).is_some_and(activate) {
-                    launch_hcdev(&task.dir, &task_spec(&task));
+                    launch_hcdev(&task.dir, &task_spec(&task), mode);
                     self.launches.record(task.id.clone());
                 }
             }
@@ -274,8 +274,8 @@ impl App {
                     self.launches.record(task.id.clone());
                 }
             }
-            Action::Restore(task) => {
-                launch_restore(&task_spec(&task));
+            Action::Restore(task, mode) => {
+                launch_restore(&task_spec(&task), mode);
                 self.launches.record(task.id.clone());
             }
             Action::Terminal(task) => {

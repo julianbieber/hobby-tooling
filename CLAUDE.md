@@ -40,7 +40,7 @@ scripts/                              # install logic too involved for a justfil
 lsps/hobby-mml-lsp/                   # forked HMML language server + grammar.md
 lsps/{claude,claude-skills,treesitter-class,path}-lsp/   # vendored from the work checkout
 mcps/{just-mcp, lsp-mcp, tree-extract}/   # vendored from the work checkout
-tools/hdash/                          # the work dashboard (ratatui, in the terminal)
+tools/hdash/                          # the work dashboard and htab, the Claude-mode overview pane (ratatui)
 tools/hcoord/                         # the coordinator's task-list pane + `hcoord wait` (ratatui)
 tools/hatlas/                         # a Bevy app's linked HTML atlas, from rustdoc JSON
 ```
@@ -653,6 +653,25 @@ one holds, because nothing will land. `hdash` asks `gh` every five minutes and
 which cannot change. A follow-up filed at GATE S has no PR yet, so its block starts
 as a `--reason` and it is named in the aspect's `blocks`; the aspect's `pr` phase
 turns that into `--pr`.
+
+## Two session modes, chosen each time a session starts
+
+A task's session is one of two shapes, and every tab in it has the same one. **Editor
+mode** (`hobby-dev`) is Helix beside Claude. **Claude mode** (`hobby-claude`, `hcdev wt
+--claude`) is Claude beside `htab`, a ratatui overview of that tab's task or aspect — why it
+was started, what it builds and where it stops, the steps open and done, its PR and plan —
+with no editor pane; Alt n opens a shell when one is needed. The mode is picked at every
+session start, from two buttons on the hdash card, and not remembered (business-context
+`notes/hobby-tooling/llm_workflow/two_dev_modes/business-context.md`, `## mode-choice`,
+`## editor-on-demand`).
+
+`htab` reads only files on disk, so what it can show is what the pipeline records
+(`## aspect-context`); a question it cannot answer is answered by recording more in the
+notes, not by asking a model. It names its own tab `<name> · <phase>`, which is why tab
+lookup in `hcdev` matches a prefix. A running session's mode is read back from the session
+itself — a pane named `overview` — so an aspect tab opened later matches it without a
+record that could go stale. `hcdev auto`, the coordinator and the notes tab keep their
+layouts (`## other-layouts-unchanged`).
 
 ## Opening a session from a dashboard: two things that kill the terminal
 

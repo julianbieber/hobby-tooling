@@ -9,12 +9,14 @@ use ratatui::layout::Position;
 use super::{CardButton, Control, DashView};
 use crate::app::Action;
 use crate::model::item::{Item, Stage, rank_projects};
+use crate::model::launch::Mode;
 use crate::model::task::{Task, TaskId};
 use crate::widgets::{WHEEL_LINES, is_hidden};
 
 /// The buttons a task's card carries, in focus order: Done and Backlog for a recorded task,
-/// Terminal for one with a worktree, then Notes, Hide and the main button.
-pub(super) fn card_buttons(task: &Task) -> Vec<CardButton> {
+/// Terminal for one with a worktree, then Notes, Hide and the main button, and Claude beside it
+/// when the main button would start a session.
+pub(super) fn card_buttons(task: &Task, starts_session: bool) -> Vec<CardButton> {
     let mut out = Vec::new();
     if task.adopted {
         out.extend([CardButton::Done, CardButton::Backlog]);
@@ -23,6 +25,9 @@ pub(super) fn card_buttons(task: &Task) -> Vec<CardButton> {
         out.push(CardButton::Terminal);
     }
     out.extend([CardButton::Notes, CardButton::Hide, CardButton::Main]);
+    if starts_session {
+        out.push(CardButton::Claude);
+    }
     out
 }
 
@@ -215,17 +220,22 @@ impl DashView {
             CardButton::Hide => {
                 self.ui.hidden.insert(id);
             }
-            CardButton::Main => {
+            CardButton::Main | CardButton::Claude => {
+                let mode = if button == CardButton::Claude {
+                    Mode::Claude
+                } else {
+                    Mode::Editor
+                };
                 let stage = Item { task: &task }.stage();
                 return match stage {
                     Stage::Orphan => {
                         self.adopt(&id);
                         None
                     }
-                    Stage::NotStarted | Stage::Removed => Some(Action::Restore(task)),
+                    Stage::NotStarted | Stage::Removed => Some(Action::Restore(task, mode)),
                     Stage::Coordinator => Some(Action::Coordinator(task)),
                     Stage::Done if task.is_coordinator() => Some(Action::Coordinator(task)),
-                    Stage::Active | Stage::Done => Some(Action::Hcdev(task)),
+                    Stage::Active | Stage::Done => Some(Action::Hcdev(task, mode)),
                 };
             }
         }
@@ -308,7 +318,7 @@ impl DashView {
         let Some(task) = self.task(id) else {
             return Vec::new();
         };
-        let mut out: Vec<Control> = card_buttons(task)
+        let mut out: Vec<Control> = card_buttons(task, self.starts_session(task))
             .into_iter()
             .map(|b| Control::Card(id.clone(), b))
             .collect();

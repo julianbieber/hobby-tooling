@@ -251,6 +251,7 @@ install-shell: _root-notice
     @"{{REPO_ROOT}}"/scripts/link-dotfile.sh "{{REPO_ROOT}}/dotfiles/nushell/hcdev.nu" "{{NU_DIR}}/hcdev.nu"
     @"{{REPO_ROOT}}"/scripts/link-dotfile.sh "{{REPO_ROOT}}/dotfiles/zellij/config.kdl" "{{ZJ_DIR}}/config.kdl"
     @"{{REPO_ROOT}}"/scripts/link-dotfile.sh "{{REPO_ROOT}}/dotfiles/zellij/layouts/hobby-dev.kdl" "{{ZJ_LAYOUTS}}/hobby-dev.kdl"
+    @"{{REPO_ROOT}}"/scripts/link-dotfile.sh "{{REPO_ROOT}}/dotfiles/zellij/layouts/hobby-claude.kdl" "{{ZJ_LAYOUTS}}/hobby-claude.kdl"
     @"{{REPO_ROOT}}"/scripts/link-dotfile.sh "{{REPO_ROOT}}/dotfiles/zellij/layouts/hobby-auto.kdl" "{{ZJ_LAYOUTS}}/hobby-auto.kdl"
     @"{{REPO_ROOT}}"/scripts/link-dotfile.sh "{{REPO_ROOT}}/dotfiles/zellij/layouts/notes-task.kdl" "{{ZJ_LAYOUTS}}/notes-task.kdl"
     @"{{REPO_ROOT}}"/scripts/link-dotfile.sh "{{REPO_ROOT}}/bin/zj-notes" "{{BIN_DIR}}/zj-notes"
@@ -312,9 +313,10 @@ install-mcps:
     echo ""
     CLAUDE_CONFIG_DIR="{{CONFIG_DIR}}" claude mcp list
 
-# Build + install the hdash dashboard
+# Build + install the hdash dashboard and htab, the Claude-mode overview pane
 install-dash:
     cd tools/hdash && cargo install --path crates/hdash_app --locked
+    cd tools/hdash && cargo install --path crates/htab --locked
     @echo "Installed hdash. If the retired dashboards are still on PATH:"
     @echo "    cargo uninstall hwt_app issues_app"
 
@@ -427,7 +429,7 @@ test:
 uninstall:
     #!/usr/bin/env bash
     set -euo pipefail
-    rm -f "{{NU_DIR}}/hwt.nu" "{{NU_DIR}}/hcdev.nu" "{{ZJ_LAYOUTS}}/hobby-dev.kdl" "{{ZJ_LAYOUTS}}/hobby-auto.kdl" "{{ZJ_LAYOUTS}}/notes-task.kdl"
+    rm -f "{{NU_DIR}}/hwt.nu" "{{NU_DIR}}/hcdev.nu" "{{ZJ_LAYOUTS}}/hobby-dev.kdl" "{{ZJ_LAYOUTS}}/hobby-claude.kdl" "{{ZJ_LAYOUTS}}/hobby-auto.kdl" "{{ZJ_LAYOUTS}}/notes-task.kdl"
     rm -f "{{BIN_DIR}}/chobby" "{{BIN_DIR}}/hauto" "{{BIN_DIR}}/haspect" "{{BIN_DIR}}/hx-claude" "{{BIN_DIR}}/zj-notes"
     rm -f "$HOME/fun_worktrees/CLAUDE.md"
     rm -f "{{CONFIG_DIR}}/settings.json" "{{CONFIG_DIR}}/CLAUDE.md"

@@ -615,7 +615,10 @@ impl DashView {
             header.push(text("no task.json in the notes repo", Style::default().fg(DIM)).gap(3));
         }
         let main_label = self.main_label(item);
-        for (i, b) in card_buttons(task).into_iter().enumerate() {
+        for (i, b) in card_buttons(task, self.starts_session(task))
+            .into_iter()
+            .enumerate()
+        {
             let label = match b {
                 CardButton::Done if task.done => "Reopen".to_owned(),
                 CardButton::Done => "Done".to_owned(),
@@ -625,6 +628,7 @@ impl DashView {
                 CardButton::Notes => "Notes".to_owned(),
                 CardButton::Hide => "Hide".to_owned(),
                 CardButton::Main => main_label.clone(),
+                CardButton::Claude => "Claude mode".to_owned(),
             };
             let button = button(
                 &label,
@@ -774,6 +778,16 @@ impl DashView {
             }
         }
         lines
+    }
+
+    pub(super) fn starts_session(&self, task: &Task) -> bool {
+        match (Item { task }).stage() {
+            Stage::NotStarted | Stage::Removed => true,
+            Stage::Active | Stage::Done if !task.is_coordinator() => {
+                matches!(self.presences.of(task), Presence::None | Presence::Unknown)
+            }
+            _ => false,
+        }
     }
 
     fn main_label(&self, item: &Item<'_>) -> String {

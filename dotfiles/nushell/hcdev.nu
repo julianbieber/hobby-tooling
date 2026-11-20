@@ -5,7 +5,7 @@
 #
 # Usage:
 #   hcdev new <task> -t <topic>   - create a worktree from the current repo + session
-#   hcdev wt <task>               - session in an existing worktree
+#   hcdev wt <task> [--claude]    - session in an existing worktree (editor or Claude mode)
 #   hcdev here                    - session in the current directory
 #   hcdev auto <task>             - session whose Claude pane starts /task:auto
 #   hcdev coordinator <blurb>     - coordinator session: task list + Claude, from a main checkout
@@ -17,6 +17,7 @@
 #   hcdev claude-pane <task>      - resolve the Claude pane id of a running auto session
 
 const LAYOUT = "hobby-dev"
+const CLAUDE_LAYOUT = "hobby-claude"
 const AUTO_LAYOUT = "hobby-auto"
 const COORDINATOR_TOPIC = "coordinator"
 const WORKTREE_BASE = "~/fun_worktrees" | path expand
@@ -194,21 +195,45 @@ def hcdev-tab-target [parent: record, name: string] {
     { dir: $dir, claude: "haspect" }
 }
 
-def hcdev-dev-panes [claude_cmd: string] {
-    $"pane split_direction=\"vertical\" {
+def hcdev-dev-panes [claude_cmd: string, mode: string] {
+    let main = if $mode == "claude" {
+        $"pane split_direction=\"vertical\" {
+        pane size=\"70%\" command=\"($claude_cmd)\" name=\"claude\" close_on_exit=false
+        pane size=\"30%\" command=\"bash\" name=\"overview\" close_on_exit=false {
+            args \"-lc\" \"exec htab\"
+        }
+    }"
+    } else {
+        $"pane split_direction=\"vertical\" {
         pane size=\"65%\" name=\"editor\"
         pane size=\"35%\" command=\"($claude_cmd)\" name=\"claude\" close_on_exit=false
+    }"
     }
+    $"($main)
     pane size=1 borderless=true {
         plugin location=\"compact-bar\"
     }"
 }
 
-def hcdev-tab-layout [claude: string] {
+def hcdev-tab-layout [claude: string, mode: string] {
     $"layout {
-    (hcdev-dev-panes $claude)
+    (hcdev-dev-panes $claude $mode)
 }
 "
+}
+
+def hcdev-session-mode [session: string] {
+    let panes = (hcdev-session-terminal-panes $session)
+    if ($panes | any {|p| $p.title == "overview" }) { "claude" } else { "editor" }
+}
+
+def hcdev-mode [claude: bool] {
+    if $claude { "claude" } else { "editor" }
+}
+
+def hcdev-find-tab [session: string, name: string] {
+    let names = (^zellij --session $session action query-tab-names | lines)
+    $names | where {|n| $n == $name or ($n | str starts-with $"($name) · ") } | get -o 0
 }
 
 def hcdev-task-tabs [parent: record] {
@@ -222,44 +247,45 @@ def hcdev-task-tabs [parent: record] {
     $aspects | where {|t| $t.dir | path exists }
 }
 
-def hcdev-task-layout [task: string, tabs: list, focus?: string] {
+def hcdev-task-layout [task: string, tabs: list, mode: string, focus?: string] {
     let rest = ($tabs | each {|t|
         let focused = if $t.name == $focus { " focus=true" } else { "" }
         $"    tab name=($t.name | to json) cwd=($t.dir | to json)($focused) {
-        (hcdev-dev-panes $t.claude)
+        (hcdev-dev-panes $t.claude $mode)
     }"
     } | str join "\n")
     let main_focus = if $focus == null { " focus=true" } else { "" }
     $"layout {
     tab name=($task | to json)($main_focus) {
-        (hcdev-dev-panes 'chobby')
+        (hcdev-dev-panes 'chobby' $mode)
     }
 ($rest)
 }
 "
 }
 
-def --env hcdev-launch-task [found: record, focus?: string, extra?: record] {
+def --env hcdev-launch-task [found: record, mode: string, focus?: string, extra?: record] {
     let session = (hcdev-session-name $found.project $found.topic $found.task)
     let known = (hcdev-task-tabs $found)
     let tabs = if $extra != null and ($extra.name not-in ($known | get -o name | default [])) { $known | append $extra } else { $known }
     if ($tabs | is-empty) {
-        hcdev-launch $found.path $session
+        hcdev-launch $found.path $session (if $mode == "claude" { $CLAUDE_LAYOUT } else { $LAYOUT })
         return
     }
     let layout_file = (hcdev-runtime-dir | path join $"hobby-tabs-($session).kdl")
-    hcdev-task-layout $found.task $tabs $focus | save -f $layout_file
+    hcdev-task-layout $found.task $tabs $mode $focus | save -f $layout_file
     hcdev-launch $found.path $session $layout_file
 }
 
 def hcdev-open-tab [session: string, name: string, dir: string, claude: string] {
-    let names = (^zellij --session $session action query-tab-names | lines)
-    if $name in $names {
-        ^zellij --session $session action go-to-tab-name $name | ignore
+    let existing = (hcdev-find-tab $session $name)
+    if $existing != null {
+        ^zellij --session $session action go-to-tab-name $existing | ignore
         return
     }
-    let layout_file = (hcdev-runtime-dir | path join $"hobby-tab-($claude).kdl")
-    hcdev-tab-layout $claude | save -f $layout_file
+    let mode = (hcdev-session-mode $session)
+    let layout_file = (hcdev-runtime-dir | path join $"hobby-tab-($claude)-($mode).kdl")
+    hcdev-tab-layout $claude $mode | save -f $layout_file
     ^zellij --session $session action new-tab --layout $layout_file --name $name --cwd $dir | ignore
 }
 
@@ -599,12 +625,12 @@ export def main [] {
     print ""
     print "Usage:"
     print "  hcdev new <task> -t <topic>      Create worktree from current repo + start session"
-    print "  hcdev wt <task> [-p] [-t]        Start session in an existing worktree"
+    print "  hcdev wt <task> [-p] [-t] [-c]   Start session in an existing worktree (-c: Claude mode)"
     print "  hcdev here                       Start session in the current directory"
     print "  hcdev dir <path>                 Start session in a given directory"
     print "  hcdev auto <task> [-p] [-t] [-w] Session whose Claude pane starts /task:auto (-w: new window)"
     print "  hcdev coordinator <blurb> [-p]   Coordinator session (task list + Claude) from a main checkout"
-    print "  hcdev tab <name> [--task] [-a]   Open or focus a started aspect's tab in its task's session"
+    print "  hcdev tab <name> [--task] [-a] [-c]  Open or focus a started aspect's tab in its task's session"
     print "  hcdev notes                      cd to this task's notes directory"
     print "  hcdev code                       cd to this task's worktree"
     print "  hcdev list                       List running hobby sessions"
@@ -612,24 +638,27 @@ export def main [] {
     print "  hcdev close <task> [-p] [-t]     Kill the session, stop its processes, close the window"
     print "  hcdev claude-pane <task> [-p] [-t] [--json]  Resolve the Claude pane id of a running auto session"
     print ""
-    print $"Layout:  ~/.config/zellij/layouts/($LAYOUT).kdl"
+    print $"Layouts: ~/.config/zellij/layouts/($LAYOUT).kdl \(editor\), ($CLAUDE_LAYOUT).kdl \(Claude, with the htab overview\)"
     print $"Account: ($HOBBY_CONFIG_DIR)  \(via chobby in the Claude pane\)"
 }
 
 # Start a session in an existing worktree, or attach to its running one. A new
 # session opens with the task's tab first and one more tab per aspect that is
 # not closed and whose worktree is checked out — so a session closed or lost
-# comes back as it was.
+# comes back as it was. Every tab is Helix beside Claude, or with `--claude`
+# Claude beside the `htab` overview of that tab's task or aspect; a running
+# session keeps the mode it was started in.
 export def --env "hcdev wt" [
     task: string@hcdev-task-completions               # Task name
     --project (-p): string@hcdev-project-completions  # Disambiguate across projects
     --topic (-t): string@hcdev-topic-completions      # Disambiguate across topics
+    --claude (-c)                                     # Claude mode: Claude and the overview, no editor
 ] {
     let found = (hcdev-find-task $task $project $topic)
     if $found == null {
         error make { msg: $"Task '($task)' not found in ($WORKTREE_BASE)" }
     }
-    hcdev-launch-task $found
+    hcdev-launch-task $found (hcdev-mode $claude)
 }
 
 # Create a worktree from the current git repo and start a session
@@ -767,19 +796,21 @@ export def --env "hcdev coordinator" [
 
 # Open started aspect `name` of the task as a tab in the task's session, or
 # switch to that tab when it is already open. The tab runs `haspect` in the
-# aspect's worktree, whatever the aspect's kind. The task is the one the current
+# aspect's worktree, whatever the aspect's kind, in the session's mode. The task is the one the current
 # directory lies in (its worktree, or any of its aspect worktrees) unless
 # `--task` names it. When the task's session is not running it is started, in
 # the foreground, with the new tab focused. With `--attach`, a running session
 # is also attached when the caller is not already inside it. Errors when the
 # task is unknown or not checked out, when it has no aspect `name`, or when the
-# aspect is not started (`hwt aspect start <name>` starts it).
+# aspect is not started (`hwt aspect start <name>` starts it). `--claude` picks
+# Claude mode for a session this starts, and is ignored by a running one.
 export def --env "hcdev tab" [
     name: string@hcdev-aspect-completions             # Aspect name
     --task: string@hcdev-task-completions             # Parent task (defaults to the current directory's)
     --project (-p): string@hcdev-project-completions  # Disambiguate the task across projects
     --topic (-t): string@hcdev-topic-completions      # Disambiguate the task across topics
     --attach (-a)                                     # Attach to the running session after opening the tab
+    --claude (-c)                                     # Claude mode, when this starts the session
 ] {
     let parent = (hcdev-aspect-parent $task $project $topic)
     let target = (hcdev-tab-target $parent $name)
@@ -791,7 +822,7 @@ export def --env "hcdev tab" [
         }
         return
     }
-    hcdev-launch-task $parent $name { name: $name, dir: $target.dir, claude: $target.claude }
+    hcdev-launch-task $parent (hcdev-mode $claude) $name { name: $name, dir: $target.dir, claude: $target.claude }
 }
 
 # Start a session in the current directory

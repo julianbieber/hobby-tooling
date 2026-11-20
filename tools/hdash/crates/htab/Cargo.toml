@@ -1,0 +1,26 @@
+[package]
+name = "htab"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+description = "The overview pane of a Claude-mode hcdev tab: what the tab's task or aspect is for and how far it has come, read from its notes."
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+
+[[bin]]
+name = "htab"
+path = "src/main.rs"
+
+[dependencies]
+hwt_core.workspace = true
+log.workspace = true
+ratatui.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+unicode-width.workspace = true

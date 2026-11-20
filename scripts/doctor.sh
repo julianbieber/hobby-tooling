@@ -97,7 +97,7 @@ fi
 # repo installed, which is how ~/.config/zellij/config.kdl went unnoticed: present,
 # working, and owned by the home dotfiles repo. A real file here is a gap, not a pass.
 ZJ="${XDG_CONFIG_HOME:-$HOME/.config}/zellij"
-for f in "config.kdl" "layouts/hobby-dev.kdl" "layouts/hobby-auto.kdl"; do
+for f in "config.kdl" "layouts/hobby-dev.kdl" "layouts/hobby-claude.kdl" "layouts/hobby-auto.kdl"; do
     name=$(basename "$f")
     if [ -h "$ZJ/$f" ]; then
         ok "$name linked"
@@ -152,6 +152,7 @@ fi
 echo ""
 echo "Optional extras"
 if command -v hdash >/dev/null 2>&1; then ok "hdash built"; else warn "hdash not built" "just install-dash"; fi
+if command -v htab >/dev/null 2>&1; then ok "htab built"; else warn "htab not built (the Claude-mode overview pane)" "just install-dash"; fi
 if command -v hcoord >/dev/null 2>&1; then ok "hcoord built"; else warn "hcoord not built (hcdev coordinator needs it)" "just install-coord"; fi
 if command -v hatlas >/dev/null 2>&1; then ok "hatlas built"; else warn "hatlas not built" "just install-atlas"; fi
 # The two dashboards hdash replaces. Reported so a machine that installed them before the
