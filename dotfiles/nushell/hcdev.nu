@@ -233,7 +233,10 @@ def hcdev-mode [claude: bool] {
 
 def hcdev-find-tab [session: string, name: string] {
     let names = (^zellij --session $session action query-tab-names | lines)
-    $names | where {|n| $n == $name or ($n | str starts-with $"($name) · ") } | get -o 0
+    $names | where {|n|
+        let bare = ($n | str replace -r '^[●○] ' '')
+        $bare == $name or ($bare | str starts-with $"($name) · ")
+    } | get -o 0
 }
 
 def hcdev-task-tabs [parent: record] {

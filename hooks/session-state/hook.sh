@@ -1,6 +1,7 @@
 #!/usr/bin/env -S -u BASH_ENV bash
 # Claude Code hook: record whether this hobby-account session is busy (mid-turn) or idle (waiting
-# on the user) in one small JSON file per session, for the hdash dashboard to read.
+# on the user) in one small JSON file per session, for the hdash dashboard to read, and show it as
+# a leading `● ` (idle) or `○ ` (busy) on the name of the zellij tab the session runs in.
 #
 # Input: JSON on stdin from any of SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop,
 # Notification, SessionEnd. Effect only — never blocks, always exits 0. File format: README.md.
@@ -20,10 +21,33 @@ DIR="${XDG_RUNTIME_DIR:-$HOME/.cache}/hobby-session-state"
 FILE="$DIR/$SID.json"
 LOCK="$DIR/$SID.lock"
 
+mark_tab() {
+  [ -n "${ZELLIJ:-}" ] && [[ "${ZELLIJ_PANE_ID:-}" =~ ^[0-9]+$ ]] || return 0
+  local tabs="$DIR/tabs" key="${ZELLIJ_SESSION_NAME:-}-p$ZELLIJ_PANE_ID"
+  mkdir -p -m 700 "$tabs" || return 0
+  (
+    flock -w 5 8 || exit 0
+    local marker="" tab name base
+    case "$(cat "$FILE" 2>/dev/null)" in
+      *'"state":"idle"'*) marker="● " ;;
+      *'"state":"busy"'*) marker="○ " ;;
+    esac
+    IFS=$'\x1f' read -r tab name < <(
+      zellij action list-panes -a --json 2>/dev/null | jaq -r --argjson p "$ZELLIJ_PANE_ID" \
+        'first(.[] | select((.is_plugin | not) and .id == $p)) | [.tab_id, .tab_name] | map(tostring) | join("\u001f")' 2>/dev/null
+    )
+    [[ "$tab" =~ ^[0-9]+$ ]] || exit 0
+    base=${name#● }
+    base=${base#○ }
+    [ "$marker$base" = "$name" ] || zellij action rename-tab-by-id "$tab" "$marker$base"
+  ) 8>"$tabs/${key//[^A-Za-z0-9._-]/_}.lock"
+}
+
 FRESH=0
 case "$EVENT" in
   SessionEnd)
     rm -f "$FILE" "$LOCK"
+    mark_tab </dev/null >/dev/null 2>&1 &
     exit 0
     ;;
   SessionStart)
@@ -102,3 +126,5 @@ START=0
       pid: $pid, pid_start: $pid_start}' >"$TMP" && mv -f "$TMP" "$FILE"
   rm -f "$TMP"
 ) 9>"$LOCK"
+
+mark_tab </dev/null >/dev/null 2>&1 &
