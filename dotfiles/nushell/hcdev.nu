@@ -4,7 +4,7 @@
 # Ported from the work `cdev` module, restructured for single-repo hobby tasks.
 #
 # Usage:
-#   hcdev new <task> -t <topic>   - create a worktree from the current repo + session
+#   hcdev new <task> -t <topic> [--claude] - create a worktree from the current repo + session
 #   hcdev wt <task> [--claude]    - session in an existing worktree (editor or Claude mode)
 #   hcdev here                    - session in the current directory
 #   hcdev auto <task>             - session whose Claude pane starts /task:auto
@@ -624,7 +624,7 @@ export def main [] {
     print "Hobby Claude Dev Session Management"
     print ""
     print "Usage:"
-    print "  hcdev new <task> -t <topic>      Create worktree from current repo + start session"
+    print "  hcdev new <task> -t <topic> [-c] Create worktree from current repo + start session (-c: Claude mode)"
     print "  hcdev wt <task> [-p] [-t] [-c]   Start session in an existing worktree (-c: Claude mode)"
     print "  hcdev here                       Start session in the current directory"
     print "  hcdev dir <path>                 Start session in a given directory"
@@ -661,11 +661,13 @@ export def --env "hcdev wt" [
     hcdev-launch-task $found (hcdev-mode $claude)
 }
 
-# Create a worktree from the current git repo and start a session
+# Create a worktree from the current git repo and start a session in it,
+# Helix beside Claude, or with `--claude` Claude beside the `htab` overview.
 export def --env "hcdev new" [
     task: string                                  # Task/branch name
     --topic (-t): string@hcdev-topic-completions  # Topic (required for new tasks)
     --base (-b): string                           # Base branch (defaults to HEAD)
+    --claude (-c)                                 # Claude mode: Claude and the overview, no editor
 ] {
     let repo_root = (^git rev-parse --show-toplevel | str trim)
     let repo_name = ($repo_root | path basename)
@@ -713,7 +715,8 @@ export def --env "hcdev new" [
         { done: false, blocked: null } | to json --indent 2 | save -f $meta_file
     }
 
-    hcdev-launch $worktree_dir (hcdev-session-name $repo_name $resolved_topic $task)
+    let layout = if $claude { $CLAUDE_LAYOUT } else { $LAYOUT }
+    hcdev-launch $worktree_dir (hcdev-session-name $repo_name $resolved_topic $task) $layout
 }
 
 # Start a session in an existing worktree whose Claude pane runs `hauto`, the
