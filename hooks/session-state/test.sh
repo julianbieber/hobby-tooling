@@ -72,4 +72,29 @@ check "garbage input exits 0" "$?" 0
 send SessionEnd
 check "end removes the file" "$([ -e "$FILE" ] && echo present || echo gone)" gone
 
+FAKE="$XDG_RUNTIME_DIR/bin"
+TABNAME="$XDG_RUNTIME_DIR/tab-name"
+mkdir -p "$FAKE"
+printf 'x · plan\n' >"$TABNAME"
+cat >"$FAKE/zellij" <<FAKEEOF
+#!/usr/bin/env bash
+case "\$2" in
+  list-panes) jaq -nc --arg n "\$(cat "$TABNAME")" '[{id: 1, is_plugin: true, tab_id: 0, tab_name: "plugin"}, {id: 1, is_plugin: false, tab_id: 4, tab_name: \$n}]' ;;
+  rename-tab-by-id) [ "\$3" = 4 ] && printf '%s\n' "\$4" >"$TABNAME" ;;
+esac
+FAKEEOF
+chmod +x "$FAKE/zellij"
+tab_after() {
+  jaq -nc --arg e "$1" --arg sid "$SID" '{hook_event_name: $e, session_id: $sid, cwd: "/tmp/x"}' |
+    env -u CLAUDE_PROJECT_DIR PATH="$FAKE:$PATH" ZELLIJ=0 ZELLIJ_SESSION_NAME=hcdev-p-t-x ZELLIJ_PANE_ID=1 "$HOOK"
+  for _ in $(seq 50); do
+    [ "$(cat "$TABNAME")" = "$2" ] && break
+    sleep 0.05
+  done
+  cat "$TABNAME"
+}
+check "idle marks the tab" "$(tab_after SessionStart '● x · plan')" "● x · plan"
+check "busy replaces the marker" "$(tab_after UserPromptSubmit '○ x · plan')" "○ x · plan"
+check "end clears the marker" "$(tab_after SessionEnd 'x · plan')" "x · plan"
+
 exit $FAIL

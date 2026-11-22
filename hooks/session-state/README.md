@@ -20,6 +20,13 @@ an idle task first.
 | `Notification` (any other type) | ignored |
 | `SessionEnd` | file deleted |
 
+Inside zellij it also marks the tab the session runs in: the tab name gets a leading `● ` while
+the session is idle and `○ ` while it is busy, and loses it at `SessionEnd`. The rename runs in
+the background after the state file is written, under a per-pane `flock` in `tabs/`, and reads
+the state back from the file, so the last event to finish sets the marker whatever order they
+ran in. Anything that looks a tab up by name strips the marker first (`hcdev-find-tab`,
+`zj-notes`), and `htab` keeps it when it renames its tab.
+
 An unchanged state only touches the file (its mtime is the time of the last event). A state
 change is written under a per-session `flock` to a temp file and renamed into place. The hook
 always exits 0 and never blocks a turn.

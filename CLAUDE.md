@@ -669,7 +669,9 @@ session start, from two buttons on the hdash card, and not remembered (business-
 `htab` reads only files on disk, so what it can show is what the pipeline records
 (`## aspect-context`); a question it cannot answer is answered by recording more in the
 notes, not by asking a model. It names its own tab `<name> · <phase>`, which is why tab
-lookup in `hcdev` matches a prefix. A running session's mode is read back from the session
+lookup in `hcdev` matches a prefix. The session-state hook puts `● ` (idle) or `○ ` (busy) in
+front of every tab a hobby Claude runs in, in either mode; `htab` keeps that marker, and every
+lookup by tab name strips it. A running session's mode is read back from the session
 itself — a pane named `overview` — so an aspect tab opened later matches it without a
 record that could go stale. `hcdev auto`, the coordinator and the notes tab keep their
 layouts (`## other-layouts-unchanged`).

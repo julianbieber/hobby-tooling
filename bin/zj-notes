@@ -19,12 +19,23 @@ die() {
     exit 1
 }
 
-current_tab() {
-    zellij action current-tab-info 2>/dev/null | sed -n 's/^name: //p'
+unmarked() {
+    sed -E 's/^(● |○ )//'
 }
 
-tab_exists() {
-    zellij action query-tab-names 2>/dev/null | grep -qxF "$1"
+current_tab() {
+    zellij action current-tab-info 2>/dev/null | sed -n 's/^name: //p' | unmarked
+}
+
+marked_name() {
+    local n
+    while IFS= read -r n; do
+        if [[ "$(unmarked <<<"$n")" == "$1" ]]; then
+            printf '%s\n' "$n"
+            return 0
+        fi
+    done < <(zellij action query-tab-names 2>/dev/null)
+    return 1
 }
 
 state_file() {
@@ -75,8 +86,8 @@ current=$(current_tab)
 if [[ "$current" == "$TAB" ]]; then
     origin=""
     [[ -r "$state" ]] && origin=$(<"$state")
-    if [[ -n "$origin" ]] && tab_exists "$origin"; then
-        zellij action go-to-tab-name "$origin" >/dev/null
+    if [[ -n "$origin" ]] && target=$(marked_name "$origin"); then
+        zellij action go-to-tab-name "$target" >/dev/null
     else
         zellij action go-to-previous-tab >/dev/null
     fi
@@ -85,7 +96,7 @@ fi
 
 printf '%s\n' "$current" >"$state"
 
-if tab_exists "$TAB"; then
+if marked_name "$TAB" >/dev/null; then
     zellij action go-to-tab-name "$TAB" >/dev/null
     exit 0
 fi

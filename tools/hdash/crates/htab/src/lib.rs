@@ -2,7 +2,7 @@
 //! a task (the one whose worktree the pane runs in): why it exists, what it builds and where it
 //! stops, the steps still open and those done, and its PRs and plan, which a click opens. Every
 //! field is read from the notes on disk and re-read every second. It also keeps its own tab named
-//! `<name> · <phase>`.
+//! `<name> · <phase>`, after any idle or busy marker the session-state hook put in front.
 
 pub mod overview;
 pub mod scope;
@@ -105,7 +105,6 @@ struct Pane {
     scroll: usize,
     rows: Vec<Row>,
     area: Rect,
-    tab: Option<u64>,
     label: Option<String>,
     quit: bool,
 }
@@ -121,7 +120,6 @@ impl Pane {
             scroll: 0,
             rows: Vec::new(),
             area: Rect::default(),
-            tab: None,
             label: None,
             quit: false,
         }
@@ -155,11 +153,8 @@ impl Pane {
         if self.label.as_ref() == Some(&label) {
             return;
         }
-        if self.tab.is_none() {
-            self.tab = zellij::own_tab_id();
-        }
-        if let Some(tab) = self.tab {
-            zellij::rename_tab(tab, &label);
+        if let Some((tab, current)) = zellij::own_tab() {
+            zellij::rename_tab(tab, &current, &label);
             self.label = Some(label);
         }
     }
