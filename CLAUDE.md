@@ -590,9 +590,10 @@ does not record an aspect's PR; `/task:build` writes it into `aspect.json`.
 **A tab, not a session.** `hcdev tab <name>` opens a started aspect with
 `zellij --session <task's> action new-tab`, or switches to it; with the
 session down it starts it from a rendered layout. `hcdev-dev-panes` spells the
-two panes for the rendered layouts; `hobby-dev.kdl` stays the layout of a
-session with no tabs to restore and of `hcdev here`/`dir`/`new`, so the two
-have to stay alike.
+two panes for the rendered layouts; `hobby-dev.kdl` and `hobby-claude.kdl`
+stay the layouts of a session with no tabs to restore and of `hcdev new` (by
+its `--claude`), and `hobby-dev.kdl` of `hcdev here`/`dir`, so they have to
+stay alike.
 
 **Every tab shares the task's zellij session name**, so two things that keyed
 on it alone had to learn the tab. hdash credits a session-state record to
