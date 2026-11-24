@@ -67,7 +67,7 @@ The three path components:
 - **Topic** — directory-shaped (`[A-Za-z0-9._-]+`, no leading dot, no spaces).
   Reuse an existing topic where one fits: `hwt topics -p <project>` lists them from
   the notes tree. A new topic is fine when the work genuinely belongs to none of
-  them. `coordinator` is reserved and never a topic for an issue.
+  them.
 - **Task** — a plain slug of the title: lowercase ASCII words joined by `_`, at most
   40 characters, cut at a word boundary. No `gh-<n>` prefix — there is no number to
   point at. It must not already exist anywhere under `notes/<project>/`, since

@@ -318,7 +318,6 @@ mod tests {
             prs: Vec::new(),
             aspects: Vec::new(),
             last_active: None,
-            coordinator: None,
             phase: None,
             todo: Vec::new(),
             waiting_on: None,
@@ -338,7 +337,6 @@ mod tests {
         Filters(chips.iter().cloned().collect())
     }
 
-    // Pins the State group: lifecycle stages and blocks each carry their own chip.
     #[test]
     fn state_chips_follow_stage_and_block() {
         let mut orphan = task("o");
@@ -362,7 +360,6 @@ mod tests {
         assert!(!of(&done, None).matches(&Chip::State(StateChip::NotBlocked)));
     }
 
-    // Pins that chips in one group are alternatives and groups combine with AND.
     #[test]
     fn groups_and_chips_within_a_group_or() {
         let mut planned = task("a");
@@ -389,7 +386,6 @@ mod tests {
         ));
     }
 
-    // Pins that the Phase group offers every phase in use plus any that is on, "no phase" last.
     #[test]
     fn phase_candidates_come_from_the_data() {
         let mut a = task("a");
@@ -409,7 +405,6 @@ mod tests {
         );
     }
 
-    // Pins a chip's count: its own group replaced by it, every other group applied.
     #[test]
     fn count_replaces_the_chips_own_group() {
         let mut a = task("a");

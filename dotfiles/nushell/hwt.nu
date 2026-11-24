@@ -74,17 +74,12 @@ export def main [] {
     print "checkout it may or may not currently have."
 }
 
-# Ensure the worktree base directory exists
 def ensure-worktree-dir [] {
     if not ($WORKTREE_BASE | path exists) {
         mkdir $WORKTREE_BASE
     }
 }
 
-# Ensure the notes directory for a task exists, named to match its worktree
-# (notes/<project>/<topic>/<task>/). Keeping the notes dir name identical to the
-# worktree task name is what lets journals and prs.json line up
-# with the right worktree. Idempotent; never touches git on the notes repo.
 def ensure-notes-dir [project: string, topic: string, task: string] {
     let notes_dir = ($NOTES_BASE | path join $project $topic $task)
     if not ($notes_dir | path exists) {
@@ -94,27 +89,10 @@ def ensure-notes-dir [project: string, topic: string, task: string] {
     $notes_dir
 }
 
-# --- task.json metadata -----------------------------------------------------
-# A task's metadata lives at notes/<project>/<topic>/<task>/task.json:
-#   { done: bool, blocked: {until?, reason?, pr?, pr_state?}|null, backlog?: bool }
-# It outlives the worktree, so done/blocked state survives `hwt rm` and lets
-# `hwt restore` re-create the checkout. Tracked in the notes repo, not gitignored.
-#
-# Unlike the work module there is no `repos` field — the project is in the path,
-# and a task is exactly one repo. Because the file is tracked and hdash
-# writes it too, both writers must emit the same keys in the same order:
-# `blocked` is always present (null when unblocked), and `backlog` follows it
-# only once hdash has recorded one. No hwt verb sets `backlog`, but every
-# rewrite here carries it through, or the mark would be lost.
-
-# Path to a task's task.json.
 def task-meta-path [project: string, topic: string, task: string] {
     $NOTES_BASE | path join $project $topic $task "task.json"
 }
 
-# Derive {project, topic, task} from a worktree path
-# (~/fun_worktrees/<project>/<topic>/<task>[/...]). Null if the path isn't under
-# the worktree base with at least three components.
 def task-parts-from-path [task_path: path] {
     let expanded = ($task_path | path expand)
     if not ($expanded | str starts-with $"($WORKTREE_BASE)/") { return null }
@@ -123,8 +101,6 @@ def task-parts-from-path [task_path: path] {
     { project: ($parts | get 0), topic: ($parts | get 1), task: ($parts | get 2) }
 }
 
-# Read a task's task.json, filling defaults for missing fields. Tolerant of a
-# missing or malformed file (returns the all-default record).
 def read-task-meta [project: string, topic: string, task: string] {
     let default = { done: false, blocked: null }
     let f = (task-meta-path $project $topic $task)
@@ -139,48 +115,35 @@ def read-task-meta [project: string, topic: string, task: string] {
     if $backlog == null { $meta } else { $meta | insert backlog $backlog }
 }
 
-# Write a task's task.json (creating the notes dir if needed). Never touches git.
 def write-task-meta [project: string, topic: string, task: string, meta: record] {
     ensure-notes-dir $project $topic $task | ignore
     $meta | to json --indent 2 | save -f (task-meta-path $project $topic $task)
 }
 
-# Set the done flag on a task.
 def meta-set-done [project: string, topic: string, task: string, done: bool] {
     let meta = (read-task-meta $project $topic $task)
     write-task-meta $project $topic $task ($meta | upsert done $done)
 }
 
-# Set (or clear) the blocked record. Pass null to unblock; pass a (possibly
-# empty) record {until?, reason?} to block.
 def meta-set-blocked [project: string, topic: string, task: string, blocked: any] {
     let meta = (read-task-meta $project $topic $task)
     write-task-meta $project $topic $task ($meta | upsert blocked $blocked)
 }
 
-# --- predicates -------------------------------------------------------------
-
-# Check if a directory is a git repository or worktree (has a .git entry).
-# For linked worktrees .git is a file, not a directory — `path exists` covers both.
 def is-git-repo [dir: path] {
     ($dir | path join ".git") | path exists
 }
 
-# Check whether a git ref (e.g. refs/heads/main) exists in a repo
 def ref-exists [repo: path, ref: string] {
     (do -i { ^git -C $repo rev-parse --verify --quiet $ref } | complete).exit_code == 0
 }
 
-# Check if a task is marked done.
 def is-task-done [task_path: path] {
     let parts = (task-parts-from-path $task_path)
     if $parts == null { return false }
     (read-task-meta $parts.project $parts.topic $parts.task).done
 }
 
-# Read a task's block info. Null if not blocked, otherwise
-# { until: string|null, reason: string|null, ready: bool }.
-# A block is "ready" once its until-date is today or past (the block has lifted).
 def task-block-info [task_path: path] {
     let parts = (task-parts-from-path $task_path)
     if $parts == null { return null }
@@ -210,7 +173,6 @@ def refresh-block-pr [t: record] {
     }
 }
 
-# State label for a task: "done" | "ready" | "blocked" | "active".
 def task-state [task_path: path] {
     if (is-task-done $task_path) { return "done" }
     let b = (task-block-info $task_path)
@@ -218,23 +180,16 @@ def task-state [task_path: path] {
     if $b.ready { "ready" } else { "blocked" }
 }
 
-# A group of tasks (a topic, or a whole project) is done iff it holds at least
-# one task and every one of them is done. Takes `known-tasks` rows rather than a
-# worktree directory: a topic whose last worktree was removed still has tasks.
 def tasks-all-done [tasks: list] {
     if ($tasks | is-empty) { return false }
     ($tasks | all {|t| $t.done })
 }
 
-# Is a named zellij session currently running (exists and not EXITED)?
 def session-running [lines: list, session: string] {
     let m = ($lines | where { $in | str starts-with $"($session) " })
     if ($m | is-empty) { false } else { not (($m | first) | str contains "EXITED") }
 }
 
-# --- flag parsing for completions -------------------------------------------
-
-# Pull the value of a flag (e.g. --project/-p) out of a completion context line.
 def flag-from-context [context: string, names: list<string>] {
     let parts = ($context | str trim | split row " " | where { $in != "" })
     let hit = ($parts | window 2 | where { ($in | first) in $names })
@@ -242,21 +197,6 @@ def flag-from-context [context: string, names: list<string>] {
     try { $hit | first | get 1 } catch { null }
 }
 
-# --- notes-tree inventory ---------------------------------------------------
-# The notes repo — not ~/fun_worktrees — is what makes a task exist. `hwt rm`
-# deletes the worktree and keeps the notes (and prunes the now-empty topic and
-# project dirs on the worktree side), so the worktree tree is only ever a subset:
-# enumerating from it hides every task between `hwt rm` and `hwt forget`, and
-# hides a topic entirely once its last task is removed. Every command that asks
-# "what work exists" therefore reads the notes tree; the worktree tree answers
-# only "is it checked out".
-#
-# TODO(jb-comment): why hdash and hwt have to agree on this rule, not merely overlap
-
-# Every task directory under the notes tree, as [{project, topic, task}].
-# A `task.json` is what marks the directory as a task — the same rule hdash
-# applies, and what makes `hwt forget` (which removes exactly that file) do what
-# it says. A notes dir without one is notes, not a task.
 def notes-task-dirs [] {
     if not ($NOTES_BASE | path exists) { return [] }
     try {
@@ -268,8 +208,6 @@ def notes-task-dirs [] {
     } catch { [] }
 }
 
-# Every topic directory under the notes tree, as [{project, topic}]. Includes
-# topics holding no task yet — `misc`, where a plan lives before a worktree does.
 def notes-topic-dirs [] {
     if not ($NOTES_BASE | path exists) { return [] }
     try {
@@ -281,13 +219,6 @@ def notes-topic-dirs [] {
     } catch { [] }
 }
 
-# Every task the notes repo records, as
-# [{project, topic, task, path, present, done}], where `path` is the worktree
-# directory the task would occupy and `present` says whether it is checked out.
-#
-# The worktree tree is deliberately *not* unioned in: a directory under
-# ~/fun_worktrees with no task.json behind it is an orphan (see
-# `orphan-worktrees`), not a task.
 def known-tasks [] {
     notes-task-dirs
     | each {|t|
@@ -303,28 +234,17 @@ def known-tasks [] {
     }
 }
 
-# Every worktree with no task.json in the notes repo, as
-# [{project, topic, task, path}]. The inverse of `known-tasks`: what is on disk
-# but not recorded.
 def orphan-worktrees [] {
     all-tasks
     | where {|t| not ((task-meta-path $t.project $t.topic $t.task) | path exists) }
 }
 
-# "2/5 open" / "all done" / "no tasks" for a group of known-tasks rows. Shown in
-# completion descriptions so it is visible up front whether filtering a command
-# by that project or topic will select anything.
 def task-count-summary [tasks: list] {
     let total = ($tasks | length)
     let open = ($tasks | where {|t| not $t.done } | length)
     if $total == 0 { "no tasks" } else if $open == 0 { "all done" } else { $"($open)/($total) open" }
 }
 
-# --- completions ------------------------------------------------------------
-
-# Projects: git repos under ~/fun_repos, since a project without a checkout is
-# not something any command can act on. Task counts come from the notes tree, so
-# a project whose worktrees are all removed no longer reads as "no tasks".
 def project-completions [] {
     if not ($PROJECTS_BASE | path exists) { return [] }
     try {
@@ -348,9 +268,6 @@ def project-completions [] {
     } catch { [] }
 }
 
-# Topics from the notes tree (plus any live worktree topic), narrowed to
-# --project/-p when that flag is already present. Topics with open tasks sort
-# first; the description names the project(s) the topic appears under.
 def topic-completions [context?: string] {
     let proj_filter = if $context != null { flag-from-context $context ["--project" "-p"] } else { null }
     let tasks = (known-tasks | where {|t| ($proj_filter == null) or ($t.project == $proj_filter) })
@@ -361,8 +278,6 @@ def topic-completions [context?: string] {
     | uniq-by project topic
     | group-by topic
     | items {|topic, rows|
-        # One entry per topic name: the value inserted is the same either way, so
-        # a topic shared by two projects names both rather than appearing twice.
         let projects = ($rows | get project | uniq | sort | str join ", ")
         let mine = ($tasks | where topic == $topic)
         {
@@ -375,8 +290,6 @@ def topic-completions [context?: string] {
     | each {|r| { value: $r.value, description: $r.description } }
 }
 
-# Shared body of the two task completers. Narrowed by --project/-p and
-# --topic/-t; open checked-out tasks sort first, then removed ones, then done.
 def task-completion-rows [live_only: bool, context?: string] {
     let proj_filter = if $context != null { flag-from-context $context ["--project" "-p"] } else { null }
     let topic_filter = if $context != null { flag-from-context $context ["--topic" "-t"] } else { null }
@@ -398,21 +311,14 @@ def task-completion-rows [live_only: bool, context?: string] {
     | each {|r| { value: $r.value, description: $r.description } }
 }
 
-# Every task the notes tree knows, checked out or not. Removed tasks are marked
-# [removed] and kept, because `hwt done`/`undone` read and write notes metadata
-# and work perfectly well without a checkout.
 def task-completions [context?: string] {
     task-completion-rows false $context
 }
 
-# Only tasks with a checkout on disk — for `go`, `rm` and `claude`, which act on
-# the worktree. A removed task typed out in full still resolves, and `find-task`
-# then names `hwt restore` rather than claiming the task does not exist.
 def live-task-completions [context?: string] {
     task-completion-rows true $context
 }
 
-# Branch names from the project implied by --project/-p or the current directory
 def base-branch-completions [context: string] {
     let proj_name = (flag-from-context $context ["--project" "-p"])
 
@@ -436,11 +342,6 @@ def base-branch-completions [context: string] {
     } catch { [] }
 }
 
-# --- task lookup ------------------------------------------------------------
-
-# Every worktree directory on disk, as [{project, topic, task, path}]. Not the
-# task list: a directory here with no task.json behind it is an orphan. Used only
-# by `orphan-worktrees`.
 def all-tasks [] {
     if not ($WORKTREE_BASE | path exists) { return [] }
     try {
@@ -460,10 +361,6 @@ def all-tasks [] {
     } catch { [] }
 }
 
-# Pick one task out of a pool by name: an exact match wins over a substring one.
-# Returns null when nothing matches, but *raises* on ambiguity (with `hint`
-# naming the way to narrow it), so callers report "ambiguous" rather than the
-# misleading "not found".
 def match-task [pool: list, task_name: string, hint: string] {
     if ($pool | is-empty) { return null }
 
@@ -480,12 +377,6 @@ def match-task [pool: list, task_name: string, hint: string] {
     error make { msg: $"Task '($task_name)' is ambiguous — ($hint)" }
 }
 
-# Find a task that is checked out, as {project, topic, task, path, present, done}.
-# For the commands that need the worktree itself.
-#
-# Resolves against the notes tree, not the worktree tree, so a task that exists
-# but has been `hwt rm`'d is reported as removed rather than as missing — the
-# fix is `hwt restore`, and "not found" sends you looking for the wrong thing.
 def find-task [task_name: string, project?: string] {
     let pool = if $project != null { known-tasks | where project == $project } else { known-tasks }
     let found = (match-task $pool $task_name "narrow it with -p <project>, or give the full task name")
@@ -496,23 +387,15 @@ def find-task [task_name: string, project?: string] {
     $found
 }
 
-# Find a task among everything the notes tree records, checked out or not. For
-# the commands that only read and write notes metadata (`done` / `undone`):
-# marking a task done is exactly as meaningful after `hwt rm` as before it, and
-# the completions offer removed tasks there, so the lookup has to see them too.
 def find-known-task [task_name: string, project?: string] {
     let pool = if $project != null { known-tasks | where project == $project } else { known-tasks }
     match-task $pool $task_name "narrow it with -p <project>, or give the full task name"
 }
 
-# Find a task by name among notes tasks. `restore` and `forget` take no -p, so
-# the only way to narrow an ambiguous name there is to spell it out.
 def find-task-in-notes [task_name: string] {
     match-task (known-tasks) $task_name "give the full task name"
 }
 
-# Completion over notes tasks (includes removed ones). For restore / forget,
-# where a removed task is the normal argument, so those sort first.
 def notes-task-completions [] {
     known-tasks | each {|t|
         let done = $t.done
@@ -527,8 +410,6 @@ def notes-task-completions [] {
     | each {|r| { value: $r.value, description: $r.description } }
 }
 
-# Resolve the project: explicit name, else inferred from the current directory
-# (inside ~/fun_repos/<project> or ~/fun_worktrees/<project>/...).
 def find-project [name?: string] {
     if $name != null {
         let project_path = ($PROJECTS_BASE | path join $name)
@@ -552,7 +433,6 @@ def find-project [name?: string] {
         return { path: $proj_path, name: $proj_name }
     }
 
-    # Inside a worktree: the project is the first path component.
     if ($current | str starts-with $"($WORKTREE_BASE)/") {
         let parts = ($current | str replace $"($WORKTREE_BASE)/" "" | split row "/")
         if ($parts | length) >= 1 {
@@ -567,7 +447,6 @@ def find-project [name?: string] {
     error make { msg: $"Not in a project under ($PROJECTS_BASE) or ($WORKTREE_BASE). Use -p to select one." }
 }
 
-# Resolve {project, topic, task, path} from the current directory, or null.
 def task-from-cwd [] {
     let parts = (task-parts-from-path (pwd))
     if $parts == null { return null }
@@ -576,8 +455,6 @@ def task-from-cwd [] {
     { project: $parts.project, topic: $parts.topic, task: $parts.task, path: $task_path }
 }
 
-# Resolve a task either by name or, with no name, from the current directory.
-# Notes-inclusive: its callers only touch task.json, which outlives the worktree.
 def resolve-task-arg [task?: string, project?: string] {
     if $task != null {
         find-known-task $task $project
@@ -664,8 +541,6 @@ def create-worktree [main_repo: path, worktree_dir: path, task: string, base?: s
     if ($out | is-not-empty) { print $out }
 }
 
-# --- commands ---------------------------------------------------------------
-
 # Create a new worktree for a task
 export def --env "hwt new" [
     task: string@task-completions                # Task/branch name
@@ -678,8 +553,6 @@ export def --env "hwt new" [
 
     let proj = find-project $project
 
-    # Topic: explicit flag, else inherited from an existing task of the same name
-    # within this project.
     let resolved_topic = if $topic != null {
         $topic
     } else {
@@ -695,8 +568,6 @@ export def --env "hwt new" [
 
     if ($worktree_dir | path exists) {
         ensure-notes-dir $proj.name $resolved_topic $task | ignore
-        # An existing worktree with no task.json is an orphan; recording it here is
-        # the same write hdash's Adopt makes.
         if not ((task-meta-path $proj.name $resolved_topic $task) | path exists) {
             write-task-meta $proj.name $resolved_topic $task { done: false, blocked: null }
             print $"Recorded task.json for existing worktree: ($proj.name)/($resolved_topic)/($task)"
@@ -710,7 +581,6 @@ export def --env "hwt new" [
         return $worktree_dir
     }
 
-    # git worktree add creates the leaf itself, so only make the parents.
     let topic_dir = ($WORKTREE_BASE | path join $proj.name $resolved_topic)
     if not ($topic_dir | path exists) { mkdir $topic_dir }
 
@@ -1011,8 +881,6 @@ export def "hwt aspect close" [
     print $"Closed aspect ($parent.task)/($name); notes kept"
 }
 
-# Find notes task(s) that reference a given PR URL, by scanning prs.json.
-# Returns [{project, topic, task, notes_path}].
 def pr-owning-tasks [url: string] {
     if not ($NOTES_BASE | path exists) { return [] }
     let target = ($url | str replace -r '\.git$' '' | str replace -r '/+$' '')
@@ -1072,11 +940,8 @@ export def --env "hwt pr" [
         error make { msg: $"'($repo_name)' is not a git repository" }
     }
 
-    # Slashes in a branch name would add path levels; flatten them.
     let sanitized_task = ($branch | str replace -a "/" "-")
 
-    # Resolve topic/task: explicit --topic, else the notes task that already
-    # records this PR, else an existing same-name task, else error.
     let owners = (pr-owning-tasks $url)
     let resolved = if $topic != null {
         { topic: $topic, task: $sanitized_task }
@@ -1109,7 +974,6 @@ export def --env "hwt pr" [
     if not ($topic_dir | path exists) { mkdir $topic_dir }
 
     if $is_fork {
-        # Cross-repo PR: fetch via pull/N/head — works without fork remotes.
         let local_branch = $"pr-($pr_number)-($resolved.task)"
         print $"Fetching cross-repo PR #($pr_number) into local branch '($local_branch)'..."
         ^git -C $proj_path fetch origin $"pull/($pr_number)/head:($local_branch)"
@@ -1127,8 +991,6 @@ export def --env "hwt pr" [
 
     print $"Created worktree: ($worktree_dir)"
 
-    # Ensure the notes dir exists and the PR is recorded in prs.json (deduped by
-    # URL), mirroring the track-pr hook's entry shape.
     let notes_dir = (ensure-notes-dir $repo_name $resolved.topic $resolved.task)
     let prs_file = ($notes_dir | path join "prs.json")
     let existing = if ($prs_file | path exists) { (try { open $prs_file } catch { [] }) } else { [] }
@@ -1164,14 +1026,11 @@ export def "hwt list" [
 ] {
     ensure-worktree-dir
 
-    # One `where` per filter: a multi-line boolean expression needs an enclosing
-    # paren in nushell, and chained filters read better than that anyway.
     known-tasks
     | where {|t| ($project == null) or ($t.project == $project) }
     | where {|t| ($topic == null) or ($t.topic == $topic) }
     | where {|t| ($task == null) or ($t.task == $task) }
     | each {|t|
-        # A removed task has no checkout to read, so git is not asked.
         let info = if not $t.present {
             { head: null, branch: null }
         } else {
@@ -1243,7 +1102,6 @@ export def "hwt rm" [
         rm -rf $found.path
     }
 
-    # Clean up now-empty topic and project directories.
     let topic_path = ($WORKTREE_BASE | path join $found.project $found.topic)
     if ($topic_path | path exists) and ((ls $topic_path | length) == 0) {
         rm -r $topic_path
@@ -1277,9 +1135,6 @@ export def --env "hwt restore" [
     let found = find-task-in-notes $task
     if $found == null {
         error make { msg: $"No notes directory found for '($task)' under ($NOTES_BASE)" }
-    }
-    if $found.topic == "coordinator" {
-        error make { msg: $"'($found.task)' is a coordinator — it has no worktree; run 'hcdev coordinator ($found.task) -p ($found.project)'" }
     }
     if $found.present and (is-git-repo $found.path) {
         print $"Already present: ($found.path)"
@@ -1321,8 +1176,6 @@ export def "hwt forget" [
     let notes_dir = ($NOTES_BASE | path join $found.project $found.topic $found.task)
     if $all {
         if ($notes_dir | path exists) { rm -r $notes_dir }
-        # Drop now-empty topic/project dirs too, mirroring what `hwt rm` does for
-        # the worktree side — otherwise the notes tree accretes empty shells.
         let topic_dir = ($NOTES_BASE | path join $found.project $found.topic)
         if ($topic_dir | path exists) and ((ls $topic_dir | length) == 0) { rm -r $topic_dir }
         let project_dir = ($NOTES_BASE | path join $found.project)
@@ -1498,7 +1351,6 @@ export def "hwt tasks" [] {
     }
 }
 
-# Most recent journal date for a task (YYYY-MM-DD.md in its notes dir), or "—".
 def last-active [project: string, topic: string, task: string] {
     let notes_dir = ($NOTES_BASE | path join $project $topic $task)
     try {
@@ -1550,7 +1402,6 @@ export def "hwt tree" [] {
             let tasks = ($topic_tasks
                 | sort-by task
                 | sort-by { |x|
-                    # ready floats up, blocked sinks below active, done last
                     match (task-state $x.path) {
                         "ready" => 0
                         "active" => 1
@@ -1613,8 +1464,6 @@ export def "hwt tree" [] {
 export def "hwt status" [] {
     hwt list | where present | each {|tree|
         let dirty = try { ^git -C $tree.path status --porcelain | lines | length } catch { 0 }
-        # A fresh task branch has no upstream, which is normal and not worth
-        # printing. `complete` captures git's stderr instead of letting it leak.
         let up = (do -i { ^git -C $tree.path rev-parse --abbrev-ref '@{upstream}' } | complete)
         let ahead_behind = if $up.exit_code != 0 {
             { behind: 0, ahead: 0 }
@@ -1670,9 +1519,6 @@ export def "hwt refresh" [
     for repo in $repos {
         let name = ($repo | path basename)
 
-        # Resolve the default branch by checking which of main/master exists.
-        # Prefer the local head, fall back to the remote-tracking ref so a repo
-        # whose default branch isn't checked out locally still works.
         let target = (
             ["main" "master"]
             | where {|c|
@@ -1745,8 +1591,6 @@ export def "hwt sessions" [
 ] {
     ensure-worktree-dir
 
-    # A session needs a checkout to open in, so removed tasks are skipped here even
-    # though they are tasks everywhere else.
     let tasks = (known-tasks
         | where present
         | where { not $in.done }
@@ -1773,19 +1617,6 @@ export def "hwt sessions" [
     }
 }
 
-# --- sync -------------------------------------------------------------------
-
-# Every git checkout on this disk that `hwt sync` acts on: the main repos, the
-# task worktrees, and the orphans.
-#
-# Three sources, not one directory walk. Worktrees come from `known-tasks`, which
-# reads `notes/*/*/*/task.json` — the notes repo is what makes a task exist — so a
-# directory under ~/fun_worktrees with no task.json behind it is not a worktree
-# here but an orphan, gathered separately by `orphan-worktrees`.
-#
-# The notes checkout is left out of all three: it is synced by a Claude session
-# rather than by git commands, so `sync-notes-session` owns it end to end and the
-# mechanical path never sees it.
 def sync-checkouts [project?: string] {
     let repos = try {
         ls $PROJECTS_BASE | where type == dir | get name
@@ -1804,24 +1635,11 @@ def sync-checkouts [project?: string] {
     if $project == null { $all } else { $all | where project == $project }
 }
 
-# `git -C <path> <args>` as a trimmed string, empty when git fails.
-#
-# `do -i` and `complete` together are the reason this exists rather than calling
-# ^git inline: without them a non-zero exit aborts the whole command and git's
-# stderr lands in the middle of the report. Every probe here runs against a
-# checkout that may be unborn, remote-less or mid-rebase, so non-zero is a normal
-# answer rather than an error worth propagating.
 def git-out [path: path, args: list<string>] {
     let r = (do -i { ^git -C $path ...$args } | complete)
     if $r.exit_code == 0 { $r.stdout | str trim } else { "" }
 }
 
-# What this machine calls itself, short hostname unless $HOBBY_MACHINE says
-# otherwise — the same variable `link-dotfile.sh` uses to pick a per-machine
-# variant, because a hostname is not always short or stable.
-#
-# It is in the subject of every wip commit, which is the only place a reader finds
-# out which disk the uncommitted work was sitting on when the sync picked it up.
 def sync-host [] {
     let h = ($env.HOBBY_MACHINE? | default "")
     if ($h | is-not-empty) { $h } else { (sys host).hostname | split row "." | get 0 }
@@ -1831,15 +1649,6 @@ def plural [n: int, word: string] {
     if $n == 1 { $"($n) ($word)" } else { $"($n) ($word)s" }
 }
 
-# Unsynced state for one checkout.
-#
-# `unpushed` counts commits on *any* local branch that no remote has, which is the
-# measure that matches "would be lost with this disk" — an ahead-count of the
-# current branch would miss the side branches that hold most of it.
-#
-# The states are ordered by what blocks the fix, not by severity: an unborn or
-# remote-less checkout needs a decision (a first commit, a `gh repo create`)
-# before anything can be pushed at all, so those outrank `unsynced`.
 def sync-scan-one [c: record] {
     let p = $c.path
     let opted_out = ((git-out $p ["config" "--get" "hobby.sync"]) == "false")
@@ -1870,7 +1679,6 @@ def sync-scan-one [c: record] {
     }
 }
 
-# Fetch one checkout.
 def sync-fetch-one [row: record] {
     if ($row.remote | is-empty) { return { ok: false, err: "no remote" } }
     let a = (do -i { ^git -C $row.path fetch --prune $row.remote } | complete)
@@ -1880,11 +1688,6 @@ def sync-fetch-one [row: record] {
     { ok: true, err: "" }
 }
 
-# How far the current branch is from its upstream, as {ahead, behind, upstream}.
-#
-# Both counts are zero when there is no upstream, which is a fresh task branch
-# rather than a problem — the push side is what gives it one. Callers check
-# `upstream` for empty to tell the two cases apart.
 def sync-tracking [path: path] {
     let up = (git-out $path ["rev-parse" "--abbrev-ref" "@{upstream}"])
     if ($up | is-empty) { return { ahead: 0, behind: 0, upstream: "" } }
@@ -1897,13 +1700,6 @@ def sync-tracking [path: path] {
     }
 }
 
-# Bring one main checkout current, when that can be done without losing anything.
-#
-# Fast-forward is the only move here, and a main checkout is why: it is where a
-# clone is read, tried and scribbled in, so its dirty tree and its local commits
-# belong to whatever was being done there and are nobody's task branch. Everything
-# that is not a fast-forward is therefore printed rather than attempted, and the
-# summary names the ones holding commits.
 def sync-pull-one [row: record] {
     let label = $"  ($row.project)(if ($row.name | is-empty) { '' } else { $'/($row.name)' })"
 
@@ -1938,18 +1734,6 @@ def sync-pull-one [row: record] {
     print $"($label)  ($row.branch)  ff  ($before)..($after) \(($t.behind)\)"
 }
 
-# Commit the working tree — tracked edits and untracked files alike, minus what
-# .gitignore excludes — onto the branch, and say so. Returns whether it worked.
-#
-# It lands on the branch rather than on a ref beside it because everything after
-# this step needs it there: a rebase refuses to run over a dirty tree, and a push
-# carries branches and nothing else. The price is a commit that has to be squashed
-# or amended before the branch is reviewed, which is what the `wip` first word and
-# the body are for.
-#
-# The message is a file count, the machine, and the path to the task's notes. It
-# never describes the change: the notes are synced too and are where the prose
-# lives, so it points at them instead of paraphrasing them.
 def sync-wip-commit [row: record] {
     let p = $row.path
     let staged = (do -i { ^git -C $p add --all } | complete)
@@ -1971,9 +1755,6 @@ def sync-wip-commit [row: record] {
     ] | append (if ($row.kind != "repo") and ($notes | path exists) { ["" $"notes: ($notes)"] } else { [] })
       | str join "\n")
 
-    # --no-verify: a repo's commit hooks lint what a person wrote, and this commit
-    # is a machine picking up a tree mid-edit. A failing hook here would block the
-    # sync on work that was never claimed to be finished.
     let c = (do -i { ^git -C $p commit --no-verify -m $msg } | complete)
     if $c.exit_code != 0 {
         print $"    FAILED to commit: ($c.stderr | str trim | lines | last)"
@@ -1984,13 +1765,6 @@ def sync-wip-commit [row: record] {
     true
 }
 
-# Publish one worktree: commit whatever is uncommitted, rebase onto the upstream,
-# push.
-#
-# A task branch is the one population that is meant to travel — it exists to
-# become a PR — so all three steps run without asking. A failed rebase is aborted
-# rather than left mid-flight, because the next thing to touch this checkout is a
-# Claude session or an editor and neither expects to arrive in a conflict.
 def sync-worktree-one [row: record] {
     let p = $row.path
     let label = (if ($row.name | is-empty) { $row.project } else { $"($row.project)/($row.name)" })
@@ -2029,9 +1803,6 @@ def sync-worktree-one [row: record] {
     }
     if $ahead == 0 { return }
 
-    # -u only when there is no upstream yet: push.autoSetupRemote covers the same
-    # case globally, and saying it here keeps a fresh task branch working on a
-    # machine whose git config has not been through `just bootstrap`.
     let args = if ($t2.upstream | is-empty) {
         ["push" "-u" $row.remote $row.branch]
     } else {
@@ -2045,16 +1816,6 @@ def sync-worktree-one [row: record] {
     }
 }
 
-# Hand the notes checkout to a Claude session running `/sync-notes`.
-#
-# It is the one checkout `hwt sync` does not touch itself, and it is the one where
-# the mechanical treatment is wrong in both directions: a conflict there is a
-# journal entry written twice rather than two edits to one program, and the commit
-# carrying a day of notes needs a message that a file count cannot write.
-#
-# The skill is project-scoped to that repo (`.claude/commands/sync-notes.md` in
-# hobby-mimisbrunnr), not installed from here, which is why the session has to
-# start in that directory rather than anywhere with the config dir set.
 def sync-notes-session [] {
     print ""
     if not ($NOTES_REPO | path exists) {
@@ -2065,8 +1826,6 @@ def sync-notes-session [] {
         print "notes: `chobby` is not on PATH — run `just install-chobby` in hobby-tooling"
         return
     }
-    # A `claude` started from inside a Claude session would nest one agent in
-    # another, so the session that ran `hwt sync` is told the command instead.
     if ($env.CLAUDECODE? | default "") == "1" {
         print "notes: already inside a Claude session, so not starting a second one. Run:"
         print $"  cd ($NOTES_REPO); chobby '/sync-notes'"
@@ -2103,8 +1862,6 @@ export def "hwt sync" [
 
     print $"fetching ($fetchable | length) checkouts..."
 
-    # In parallel because this is the one phase that is network-bound; the results
-    # are collected before anything prints, so the report stays ordered.
     let fetched = ($fetchable | par-each {|r| { row: $r, res: (sync-fetch-one $r) } })
     for f in ($fetched | where {|f| not $f.res.ok }) {
         print $"  ($f.row.project): fetch failed — ($f.res.err)"
@@ -2121,9 +1878,6 @@ export def "hwt sync" [
     print $"worktrees \(($trees | length)\) — wip, rebase, push:"
     for r in $trees { sync-worktree-one $r }
 
-    # What is left needs a decision rather than a command: a first commit, a
-    # `gh repo create`, or a look at what those local commits are. Naming them is
-    # the whole of what the old report-only mode still had to offer.
     let held = ($repos | where unpushed > 0)
     if ($held | is-not-empty) {
         print ""

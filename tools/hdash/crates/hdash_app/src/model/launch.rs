@@ -8,7 +8,6 @@ use hwt_core::{Roots, spawn_detached, spawn_detached_with};
 use super::task::{Task, TaskId, notes_path, worktrees_root};
 
 pub use hwt_core::open_url;
-pub use hwt_core::projects_root;
 
 /// The three path components a launch needs: `~/fun_worktrees/<project>/<topic>/<task>`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -75,8 +74,6 @@ const TAB_ATTACH_SCRIPT: &str = "hwt aspect start $env.HDASH_TAB --no-tab --task
      --project $env.HDASH_PROJECT; hcdev tab $env.HDASH_TAB --task $env.HDASH_TASK \
      --project $env.HDASH_PROJECT --topic $env.HDASH_TOPIC --attach";
 
-const COORDINATOR_SCRIPT: &str = "hcdev coordinator $env.HDASH_TASK --project $env.HDASH_PROJECT";
-
 fn hold_on_error(cmd: &str) -> String {
     format!(
         "try {{ {cmd} }} catch {{|e| print $e.msg; print ''; print 'Failed. Press enter to close.'; input }}"
@@ -126,19 +123,6 @@ pub fn launch_restore(spec: &LaunchSpec, mode: Mode) {
         &worktrees_root().to_string_lossy(),
         &spec.session_title(),
         &mode.script(RESTORE_SCRIPT),
-        spec,
-    );
-}
-
-/// Open (or re-attach) a coordinator session: the task list beside Claude, in the
-/// project's main checkout, since a coordinator has no worktree of its own. `spec.task` is
-/// the coordinator's blurb.
-pub fn launch_coordinator(spec: &LaunchSpec) {
-    let dir = projects_root().join(&spec.project);
-    launch_nu(
-        &dir.to_string_lossy(),
-        &spec.session_title(),
-        COORDINATOR_SCRIPT,
         spec,
     );
 }
@@ -195,8 +179,6 @@ pub fn open_notes(task: &Task) {
 mod tests {
     use super::*;
 
-    // Pins that a task name reaches nu only as an environment variable, so a quote in it cannot
-    // end a string literal and run what follows.
     #[test]
     fn launch_scripts_read_the_task_from_the_environment() {
         let spec = LaunchSpec {
@@ -204,13 +186,7 @@ mod tests {
             topic: "perf".into(),
             task: "it's-'; rm -rf ~".into(),
         };
-        for script in [
-            HCDEV_SCRIPT,
-            RESTORE_SCRIPT,
-            COORDINATOR_SCRIPT,
-            TAB_SCRIPT,
-            TAB_ATTACH_SCRIPT,
-        ] {
+        for script in [HCDEV_SCRIPT, RESTORE_SCRIPT, TAB_SCRIPT, TAB_ATTACH_SCRIPT] {
             assert!(!script.contains('\''), "no literal in {script}");
             assert!(script.contains("$env.HDASH_TASK"));
         }
@@ -228,8 +204,6 @@ mod tests {
         assert_eq!(spec.session_title(), "hcdev-wusel-perf-it's-'; rm -rf ~");
     }
 
-    // Pins the wrapper every nu launch goes through: without the `catch`, a failing
-    // command closes the terminal it reported into and the message is never seen.
     #[test]
     fn failures_hold_the_terminal_open() {
         let held = hold_on_error("hwt restore 'x'");

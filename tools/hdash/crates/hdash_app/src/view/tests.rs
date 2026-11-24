@@ -42,7 +42,6 @@ pub(crate) fn task(name: &str) -> Task {
         prs: Vec::new(),
         aspects: Vec::new(),
         last_active: None,
-        coordinator: None,
         phase: None,
         todo: Vec::new(),
         waiting_on: None,
@@ -95,8 +94,6 @@ fn summary(buf: &Buffer) -> String {
     row(buf, y)
 }
 
-// Pins the todo line on a card: counts and the active step collapsed, waiting_on beside them, and
-// the toggle expanding to every item.
 #[test]
 fn todo_line_shows_progress_and_expands() {
     let mut a = task("task-a");
@@ -128,8 +125,6 @@ fn todo_line_shows_progress_and_expands() {
     assert!(shown.contains("○ ship it"), "{shown}");
 }
 
-// Pins that every click runs the control drawn under the pointer: card selection, the PR toggle
-// and lines, the primary button per stage, Hide, a project row and a chip.
 #[test]
 fn clicks_run_the_control_drawn_under_the_pointer() {
     let mut a = task("task-a");
@@ -210,8 +205,6 @@ fn clicks_run_the_control_drawn_under_the_pointer() {
     assert!(summary(&frame(&mut view)).contains("· 1 shown"));
 }
 
-// Pins the keyboard path: ü/ä move the selection, ö/# move along the card's buttons, Enter runs
-// the focused one.
 #[test]
 fn navigation_keys_move_selection_and_button_focus() {
     let mut view = view(vec![task("n1"), task("n2"), task("n3")]);
@@ -225,8 +218,6 @@ fn navigation_keys_move_selection_and_button_focus() {
     assert_eq!(press(&mut view, KeyCode::Enter), Some(Action::Notes(n2)));
 }
 
-// Pins that the selection stays on its task when a session moves the card, and falls to the
-// card at its position when its task leaves the list.
 #[test]
 fn selection_follows_its_task_across_a_resort() {
     let mut view = view(vec![task("n1"), task("n2"), task("n3"), task("n4")]);
@@ -261,8 +252,6 @@ fn selection_follows_its_task_across_a_resort() {
     assert_eq!(press(&mut view, KeyCode::Enter), hcdev(&view, "n2"));
 }
 
-// Pins that a terminal too small for the layout shows one line and leaves nothing clickable or
-// runnable that cannot be seen.
 #[test]
 fn too_small_draws_no_controls() {
     let mut view = view(vec![task("n1")]);
@@ -275,8 +264,6 @@ fn too_small_draws_no_controls() {
     assert_eq!(press(&mut view, KeyCode::Enter), None);
 }
 
-// Pins the stage-chosen primary button: Adopt writes nothing a test can see but is no shell
-// action, Start task restores, a coordinator opens its coordinator session.
 #[test]
 fn the_primary_button_follows_the_stage() {
     let mut orphan = task("stray");
@@ -284,10 +271,7 @@ fn the_primary_button_follows_the_stage() {
     let mut fresh = task("fresh");
     fresh.present = false;
     fresh.has_branch = false;
-    let mut coord = task("list");
-    coord.id.topic = "coordinator".into();
-    coord.present = false;
-    let mut view = view(vec![orphan, fresh.clone(), coord.clone()]);
+    let mut view = view(vec![orphan, fresh.clone()]);
     let buf = frame(&mut view);
     find(&buf, "[Adopt]", Some("stray"), 0);
     let start = find(&buf, "[Start task]", Some("fresh"), 0);
@@ -295,13 +279,8 @@ fn the_primary_button_follows_the_stage() {
         click(&mut view, start),
         Some(Action::Restore(fresh, Mode::Editor))
     );
-    let buf = frame(&mut view);
-    let open = find(&buf, "[Open coordinator]", Some("list"), 0);
-    assert_eq!(click(&mut view, open), Some(Action::Coordinator(coord)));
 }
 
-// Pins that a task's aspects are listed on its card with their kind, state and their own
-// session badge, and that clicking one asks for that aspect's tab rather than the task's session.
 #[test]
 fn aspect_lines_show_state_and_open_their_tab() {
     let mut a = task("task-a");

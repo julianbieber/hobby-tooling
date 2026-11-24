@@ -57,7 +57,6 @@ bootstrap: preflight clone-notes git-identity bootstrap-config install-chobby in
     @echo "Then, optionally:"
     @echo "    just install-mcps      the general-purpose MCP servers (Rust build)"
     @echo "    just install-dash      the hdash work dashboard (Rust build)"
-    @echo "    just install-coord     the coordinator task-list TUI (Rust build)"
     @echo "    just install-atlas     the Bevy app atlas (Rust build)"
     @echo "    just install-mml       forked HMML language server (Rust build)"
     @echo "    just install-struct    HSTRUCT structure checker + server (Rust build)"
@@ -71,7 +70,7 @@ bootstrap: preflight clone-notes git-identity bootstrap-config install-chobby in
     @echo "════════════════════════════════════════════════════════════════"
 
 # Bootstrap plus every optional Rust build and the MCP servers.
-bootstrap-full: bootstrap install-mcps install-dash install-coord install-atlas install-mml install-struct install-research install-lsps
+bootstrap-full: bootstrap install-mcps install-dash install-atlas install-mml install-struct install-research install-lsps
     @echo "Full install done. Still need: chobby, then /login."
 
 # Say so when invoked from a worktree — the install still targets the main checkout,
@@ -113,12 +112,6 @@ clone-notes:
 git-identity:
     #!/usr/bin/env bash
     set -euo pipefail
-    # The global identity is the work one, so anything that does not override it
-    # commits as work. Per-repo config alone never held that line: it has to be set
-    # again on every clone, and 35 of 44 repos here had silently missed it — ~600
-    # commits across 29 repos, 11 of them public. An includeIf on the two hobby
-    # trees is the part that cannot be forgotten, because a fresh clone is born
-    # with the right identity by virtue of where it lands.
     cat > "$HOME/.gitconfig-hobby" <<EOF
     [user]
     	email = {{GIT_EMAIL}}
@@ -128,8 +121,6 @@ git-identity:
     git config --global includeIf."gitdir:$HOME/fun_worktrees/".path "$HOME/.gitconfig-hobby"
     echo "  includeIf: ~/fun_repos, ~/fun_worktrees -> ~/.gitconfig-hobby"
 
-    # Explicit local config on top, so a repo keeps the hobby identity if it is ever
-    # moved out from under those paths.
     fixed=0
     for r in "{{FUN_REPOS}}"/*/ "{{REPO_ROOT}}" "{{NOTES_DIR}}"; do
         [ -e "$r/.git" ] || continue
@@ -151,9 +142,8 @@ bootstrap-config: _root-notice
     @ln -sf "{{REPO_ROOT}}/dotfiles/claude-md/hobby.CLAUDE.md" "{{CONFIG_DIR}}/CLAUDE.md"
     @echo "  config dir ready: {{CONFIG_DIR}}"
 
-# The `chobby` wrapper — bare claude on the hobby account — `hauto`, the stage
-# driver the hobby-auto layout runs in its Claude pane, `haspect`, the same
-# for an aspect's tab, and `happ`, which starts and stops the app a
+# The `chobby` wrapper — bare claude on the hobby account — `haspect`, the
+# Claude pane of an aspect's tab, and `happ`, which starts and stops the app a
 # task session runs
 install-chobby: _root-notice
     #!/usr/bin/env bash
@@ -161,8 +151,7 @@ install-chobby: _root-notice
     mkdir -p "{{BIN_DIR}}"
     ln -sf "{{REPO_ROOT}}/bin/chobby" "{{BIN_DIR}}/chobby"
     echo "  linked chobby -> {{BIN_DIR}}/chobby"
-    ln -sf "{{REPO_ROOT}}/bin/hauto" "{{BIN_DIR}}/hauto"
-    echo "  linked hauto -> {{BIN_DIR}}/hauto"
+    rm -f "{{BIN_DIR}}/hauto"
     ln -sf "{{REPO_ROOT}}/bin/haspect" "{{BIN_DIR}}/haspect"
     echo "  linked haspect -> {{BIN_DIR}}/haspect"
     ln -sf "{{REPO_ROOT}}/bin/hresearch" "{{BIN_DIR}}/hresearch"
@@ -252,7 +241,7 @@ install-shell: _root-notice
     @"{{REPO_ROOT}}"/scripts/link-dotfile.sh "{{REPO_ROOT}}/dotfiles/zellij/config.kdl" "{{ZJ_DIR}}/config.kdl"
     @"{{REPO_ROOT}}"/scripts/link-dotfile.sh "{{REPO_ROOT}}/dotfiles/zellij/layouts/hobby-dev.kdl" "{{ZJ_LAYOUTS}}/hobby-dev.kdl"
     @"{{REPO_ROOT}}"/scripts/link-dotfile.sh "{{REPO_ROOT}}/dotfiles/zellij/layouts/hobby-claude.kdl" "{{ZJ_LAYOUTS}}/hobby-claude.kdl"
-    @"{{REPO_ROOT}}"/scripts/link-dotfile.sh "{{REPO_ROOT}}/dotfiles/zellij/layouts/hobby-auto.kdl" "{{ZJ_LAYOUTS}}/hobby-auto.kdl"
+    @rm -f "{{ZJ_LAYOUTS}}/hobby-auto.kdl"
     @"{{REPO_ROOT}}"/scripts/link-dotfile.sh "{{REPO_ROOT}}/dotfiles/zellij/layouts/notes-task.kdl" "{{ZJ_LAYOUTS}}/notes-task.kdl"
     @"{{REPO_ROOT}}"/scripts/link-dotfile.sh "{{REPO_ROOT}}/bin/zj-notes" "{{BIN_DIR}}/zj-notes"
 
@@ -319,10 +308,6 @@ install-dash:
     cd tools/hdash && cargo install --path crates/htab --locked
     @echo "Installed hdash. If the retired dashboards are still on PATH:"
     @echo "    cargo uninstall hwt_app issues_app"
-
-# The coordinator's task-list pane, `hcoord wait` and `hcoord merged`; `hcdev coordinator` needs it on PATH
-install-coord:
-    cd tools/hcoord && cargo install --path . --locked
 
 # A Bevy workspace's plugins, components and resources as linked HTML, from rustdoc JSON
 install-atlas:
@@ -415,7 +400,6 @@ test:
     cd mcps/lsp-mcp && cargo test --locked
     cd mcps/tree-extract && cargo test --locked
     cd tools/hdash && cargo test --workspace --locked
-    cd tools/hcoord && cargo test --locked
     cd tools/hatlas && cargo test --locked
 
 # ---------------------------------------------------------------------------
@@ -429,8 +413,8 @@ test:
 uninstall:
     #!/usr/bin/env bash
     set -euo pipefail
-    rm -f "{{NU_DIR}}/hwt.nu" "{{NU_DIR}}/hcdev.nu" "{{ZJ_LAYOUTS}}/hobby-dev.kdl" "{{ZJ_LAYOUTS}}/hobby-claude.kdl" "{{ZJ_LAYOUTS}}/hobby-auto.kdl" "{{ZJ_LAYOUTS}}/notes-task.kdl"
-    rm -f "{{BIN_DIR}}/chobby" "{{BIN_DIR}}/hauto" "{{BIN_DIR}}/haspect" "{{BIN_DIR}}/hx-claude" "{{BIN_DIR}}/zj-notes"
+    rm -f "{{NU_DIR}}/hwt.nu" "{{NU_DIR}}/hcdev.nu" "{{ZJ_LAYOUTS}}/hobby-dev.kdl" "{{ZJ_LAYOUTS}}/hobby-claude.kdl" "{{ZJ_LAYOUTS}}/notes-task.kdl"
+    rm -f "{{BIN_DIR}}/chobby" "{{BIN_DIR}}/haspect" "{{BIN_DIR}}/hx-claude" "{{BIN_DIR}}/zj-notes"
     rm -f "$HOME/fun_worktrees/CLAUDE.md"
     rm -f "{{CONFIG_DIR}}/settings.json" "{{CONFIG_DIR}}/CLAUDE.md"
     rm -f "{{CONFIG_DIR}}"/commands/*.md "{{CONFIG_DIR}}"/hooks/*.sh

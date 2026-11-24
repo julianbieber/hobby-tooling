@@ -23,11 +23,6 @@ use serde::{Deserialize, Serialize};
 
 pub use hwt_core::{notes_root, worktrees_root};
 
-/// The reserved topic: a task under it is a **coordinator** — a notes directory with a
-/// `tasks.json` and no worktree of its own, opened with `hcdev coordinator` rather than
-/// `hcdev wt`.
-pub const COORDINATOR_TOPIC: &str = "coordinator";
-
 /// A git status result for one repo, delivered from the async scan over a channel.
 pub struct GitMsg {
     /// The task the repo belongs to.
@@ -82,7 +77,6 @@ pub struct Pr {
     #[serde(default)]
     pub opened: Option<String>,
 
-    // ---- live fields, not in the file (filled by the async query) ----
     /// Live review state. `Loading` until the async query lands.
     #[serde(skip, default)]
     pub status: PrStatus,
@@ -297,78 +291,6 @@ impl Block {
     }
 }
 
-/// What a coordinator's `tasks.json` says about its list, as counts per status, plus
-/// whether the coordinator merges its own PRs. Only those two fields are read; the rest
-/// of the file belongs to `/task:coordinate` and the `hcoord` pane.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct CoordinatorCounts {
-    pub todo: usize,
-    pub running: usize,
-    pub awaiting_human: usize,
-    pub awaiting_merge: usize,
-    pub done: usize,
-    pub blocked: usize,
-    /// `merge: "coordinator"` in the list: a PR waiting to be merged is its job, not mine.
-    pub self_merging: bool,
-}
-
-impl CoordinatorCounts {
-    /// How many tasks are waiting on me: the gates, plus the PRs I said I would merge.
-    pub fn wants_me(&self) -> usize {
-        self.awaiting_human
-            + if self.self_merging {
-                0
-            } else {
-                self.awaiting_merge
-            }
-    }
-
-    /// One line naming the non-zero counts, `waiting for you` first because it is the one
-    /// that wants a click; `no tasks` when the list is empty.
-    pub fn summary(&self) -> String {
-        let parts: Vec<String> = [
-            (self.awaiting_human, "waiting for you"),
-            (self.awaiting_merge, "waiting on a merge"),
-            (self.running, "running"),
-            (self.todo, "todo"),
-            (self.done, "done"),
-            (self.blocked, "blocked"),
-        ]
-        .into_iter()
-        .filter(|(n, _)| *n > 0)
-        .map(|(n, label)| format!("{n} {label}"))
-        .collect();
-        if parts.is_empty() {
-            "no tasks".to_owned()
-        } else {
-            parts.join(" · ")
-        }
-    }
-
-    fn parse(text: &str) -> Option<Self> {
-        let value: serde_json::Value = serde_json::from_str(text).ok()?;
-        let mut counts = Self {
-            self_merging: value.get("merge").and_then(|m| m.as_str()) == Some("coordinator"),
-            ..Self::default()
-        };
-        for entry in value.get("tasks")?.as_array()? {
-            match entry
-                .get("status")
-                .and_then(|s| s.as_str())
-                .unwrap_or("todo")
-            {
-                "running" => counts.running += 1,
-                "awaiting-human" => counts.awaiting_human += 1,
-                "awaiting-merge" => counts.awaiting_merge += 1,
-                "done" => counts.done += 1,
-                "blocked" => counts.blocked += 1,
-                _ => counts.todo += 1,
-            }
-        }
-        Some(counts)
-    }
-}
-
 /// A task: a directory under a topic, possibly holding several repos.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Task {
@@ -406,11 +328,7 @@ pub struct Task {
     pub aspects: Vec<AspectRef>,
     /// Notes directory/file last-modified time, if any.
     pub last_active: Option<SystemTime>,
-    /// The list counts when this task is a coordinator (topic [`COORDINATOR_TOPIC`]) whose
-    /// `tasks.json` could be read; `None` for every other task.
-    pub coordinator: Option<CoordinatorCounts>,
-    /// The `phase` recorded in the task's `build-task.json` by `/task:build` or `/task:auto`, if
-    /// there is one.
+    /// The `phase` recorded in the task's `build-task.json` by `/task:build`, if there is one.
     pub phase: Option<String>,
     /// The session's live plan, `todo` in the same `build-task.json`, in the order it was written.
     /// Empty when the file has none.
@@ -440,12 +358,6 @@ impl Task {
     /// The task's window title as `hdash` launches it: the unclamped `hcdev-PROJECT-TOPIC-TASK`.
     pub fn window_title(&self) -> String {
         unclamped_session_name(&self.id)
-    }
-
-    /// Whether this task is a coordinator: it lives under the reserved topic, so it has
-    /// no worktree and is opened with `hcdev coordinator`.
-    pub fn is_coordinator(&self) -> bool {
-        self.id.topic == COORDINATOR_TOPIC
     }
 
     /// Aggregate dirty count across repos.
@@ -489,10 +401,6 @@ impl Task {
         today >= days_from_civil(y, m, d)
     }
 }
-
-// ---------------------------------------------------------------------------
-// PR status cache
-// ---------------------------------------------------------------------------
 
 fn pr_cache_path() -> PathBuf {
     hwt_core::xdg_cache_path("hdash", "pr-status.json")
@@ -567,10 +475,6 @@ fn write_pr_cache_at(path: &Path, cache: &std::collections::HashMap<String, Cach
     }
 }
 
-// ---------------------------------------------------------------------------
-// Paths
-// ---------------------------------------------------------------------------
-
 /// Resolve a task's notes location: either `notes/PROJECT/TOPIC/TASK/` (dir) or
 /// `notes/PROJECT/TOPIC/TASK.md`.
 pub fn notes_path(roots: &Roots, id: &TaskId) -> Option<PathBuf> {
@@ -585,10 +489,6 @@ pub fn notes_path(roots: &Roots, id: &TaskId) -> Option<PathBuf> {
     }
     None
 }
-
-// ---------------------------------------------------------------------------
-// Scan
-// ---------------------------------------------------------------------------
 
 fn is_visible_dir(entry: &std::fs::DirEntry) -> bool {
     entry.path().is_dir() && !entry.file_name().to_string_lossy().starts_with('.')
@@ -737,7 +637,7 @@ fn session_names_from_nu(ids: &[TaskId]) -> Option<Vec<String>> {
 fn mark_unstarted(projects_root: &Path, tasks: &mut [Task]) {
     let projects: BTreeSet<String> = tasks
         .iter()
-        .filter(|t| !t.present && !t.is_coordinator())
+        .filter(|t| !t.present)
         .map(|t| t.id.project.clone())
         .collect();
     for project in projects {
@@ -746,7 +646,7 @@ fn mark_unstarted(projects_root: &Path, tasks: &mut [Task]) {
         };
         for task in tasks
             .iter_mut()
-            .filter(|t| t.id.project == project && !t.present && !t.is_coordinator())
+            .filter(|t| t.id.project == project && !t.present)
         {
             task.has_branch = branches.contains(&task.id.name);
         }
@@ -834,10 +734,6 @@ fn build_task(roots: &Roots, id: TaskId, adopted: bool, done: bool, block: Optio
         .ok()
         .and_then(|text| frontmatter_title(&text))
         .map(|t| clean(&t));
-    let coordinator = (id.topic == COORDINATOR_TOPIC)
-        .then(|| std::fs::read_to_string(coordinator_tasks_path(roots, &id)).ok())
-        .flatten()
-        .and_then(|text| CoordinatorCounts::parse(&text));
 
     Task {
         id,
@@ -853,7 +749,6 @@ fn build_task(roots: &Roots, id: TaskId, adopted: bool, done: bool, block: Optio
         prs,
         aspects,
         last_active,
-        coordinator,
         phase,
         todo,
         waiting_on,
@@ -861,12 +756,12 @@ fn build_task(roots: &Roots, id: TaskId, adopted: bool, done: bool, block: Optio
     }
 }
 
-/// Path to a task's `build-task.json` in the notes tree, the `/task:build` and `/task:auto` state.
+/// Path to a task's `build-task.json` in the notes tree, the `/task:build` state.
 pub fn build_state_path(roots: &Roots, id: &TaskId) -> PathBuf {
     roots.notes.join(id.rel()).join("build-task.json")
 }
 
-/// One step of a session's live plan, as `/task:build` and `/task:auto` record it.
+/// One step of a session's live plan, as `/task:build` records it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Todo {
     pub text: String,
@@ -982,11 +877,6 @@ fn frontmatter_title(text: &str) -> Option<String> {
         None => value.to_owned(),
     };
     (!unquoted.is_empty()).then_some(unquoted)
-}
-
-/// Path to a coordinator's `tasks.json`: `notes/PROJECT/coordinator/BLURB/tasks.json`.
-pub fn coordinator_tasks_path(roots: &Roots, id: &TaskId) -> PathBuf {
-    roots.notes.join(id.rel()).join("tasks.json")
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -1125,10 +1015,6 @@ fn read_aspect(dir: &Path, name: &str) -> AspectRef {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Git status / PR status (sync helpers; called from async tasks)
-// ---------------------------------------------------------------------------
-
 /// Read branch, short SHA, and dirty count for a single repo. Blocking; run off the main thread.
 pub fn read_git(path: &Path) -> GitInfo {
     let branch = git_capture(path, &["symbolic-ref", "--short", "HEAD"]).map(|b| clean(&b));
@@ -1168,7 +1054,6 @@ pub fn read_pr_status(url: &str) -> (PrStatus, Option<u64>, Option<String>) {
         _ => return (PrStatus::Unknown, None, None),
     };
 
-    // gh emits one JSON object: {"state":"OPEN","isDraft":false,"number":123,"title":"..."}
     let Ok(v) = serde_json::from_slice::<serde_json::Value>(&out.stdout) else {
         return (PrStatus::Unknown, None, None);
     };
@@ -1191,10 +1076,6 @@ pub fn read_pr_status(url: &str) -> (PrStatus, Option<u64>, Option<String>) {
     };
     (status, number, title)
 }
-
-// ---------------------------------------------------------------------------
-// Actions
-// ---------------------------------------------------------------------------
 
 /// Toggle the `done` flag in a task's `task.json`, preserving its other fields. Returns the new
 /// done state. Creates the file (and notes dir) if absent.
@@ -1436,8 +1317,6 @@ mod tests {
         assert_eq!(TodoCount::of(&read.todo), TodoCount { open: 1, done: 1 });
     }
 
-    // Pins how build-task.json's todo list and waiting_on are read: statuses map, blank text and
-    // an unknown status degrade instead of failing, and a file without them yields nothing.
     #[test]
     fn build_state_reads_todo_and_waiting_on() {
         let state = parse_build_state(
@@ -1476,7 +1355,6 @@ mod tests {
         let notes_root = home.join("fun_repos/hobby-mimisbrunnr/notes");
         let wt_root = home.join("fun_worktrees");
 
-        // Present task: the task dir itself is the worktree (a .git entry, no repo level).
         std::fs::create_dir_all(wt_root.join("projA/features/live-task/.git")).unwrap();
         std::fs::create_dir_all(notes_root.join("projA/features/live-task")).unwrap();
         std::fs::write(
@@ -1485,7 +1363,6 @@ mod tests {
         )
         .unwrap();
 
-        // Removed task: task.json only, no worktree. Done, and blocked with a past date.
         std::fs::create_dir_all(notes_root.join("projA/bugs/gone-task")).unwrap();
         std::fs::write(
             notes_root.join("projA/bugs/gone-task/task.json"),
@@ -1493,7 +1370,6 @@ mod tests {
         )
         .unwrap();
 
-        // A second project reusing the SAME topic name — must stay a separate task.
         std::fs::create_dir_all(wt_root.join("projB/features/other-task/.git")).unwrap();
         std::fs::create_dir_all(notes_root.join("projB/features/other-task")).unwrap();
         std::fs::write(
@@ -1502,11 +1378,8 @@ mod tests {
         )
         .unwrap();
 
-        // An orphan: a worktree with no task.json behind it. Not a task — a card asking
-        // to become one.
         std::fs::create_dir_all(wt_root.join("projA/features/orphan-task/.git")).unwrap();
 
-        // A notes dir with no task.json is not a task at all, and not an orphan either.
         std::fs::create_dir_all(notes_root.join("projA/bugs/just-notes")).unwrap();
         std::fs::write(notes_root.join("projA/bugs/just-notes/report.md"), "x").unwrap();
 
@@ -1524,7 +1397,6 @@ mod tests {
             "a notes dir without task.json is not a task"
         );
 
-        // The orphan is present on disk but not adopted, and sorts after the real tasks.
         let orphan = find("projA", "orphan-task");
         assert!(!orphan.adopted);
         assert!(orphan.present);
@@ -1539,7 +1411,6 @@ mod tests {
             "every notes-sourced task is adopted"
         );
 
-        // Adopting writes the task.json, and the next scan sees an ordinary task.
         adopt(&roots, &orphan.id).unwrap();
         let rescanned = scan_tasks(&roots);
         assert_eq!(rescanned.len(), 4);
@@ -1558,7 +1429,6 @@ mod tests {
             "adopt writes exactly what hwt writes"
         );
 
-        // A live worktree is present and carries one repo: itself, named for its project.
         let live = find("projA", "live-task");
         assert!(live.present);
         assert_eq!(live.id.topic, "features");
@@ -1566,17 +1436,14 @@ mod tests {
         assert_eq!(live.repos[0].path, live.dir, "the repo IS the task dir");
         assert_eq!(live.id.rel(), "projA/features/live-task");
 
-        // The same topic name under another project is its own task, not a merge.
         let other = find("projB", "other-task");
         assert_eq!(other.id.topic, "features");
 
-        // A removed task still shows up, from its retained metadata.
         let gone = find("projA", "gone-task");
         assert!(!gone.present, "removed task has no worktree");
         assert!(gone.done);
         assert!(gone.block.is_some(), "blocked parsed from task.json");
         assert!(gone.ready(), "a past until-date means the block has lifted");
-        // Its single repo entry points at where a restore would put it.
         assert_eq!(gone.repos.len(), 1);
         assert_eq!(gone.repos[0].path, gone.dir);
 
@@ -1599,8 +1466,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("nested/task.json");
 
-        // Byte-for-byte what `{ done: false, blocked: null } | to json --indent 2 | save` writes:
-        // two-space indent, `blocked` present and null, no trailing newline.
         let undone = "{\n  \"done\": false,\n  \"blocked\": null\n}";
         let done = "{\n  \"done\": true,\n  \"blocked\": null\n}";
 
@@ -1643,13 +1508,11 @@ mod tests {
         let block = back.blocked.expect("block preserved");
         assert_eq!(block.until.as_deref(), Some("2030-01-01"));
         assert_eq!(block.reason.as_deref(), Some("waiting"));
-        // Nested indent matches nushell's `to json --indent 2` (four spaces one level in).
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
             "{\n  \"done\": true,\n  \"blocked\": {\n    \"until\": \"2030-01-01\",\n    \"reason\": \"waiting\"\n  }\n}"
         );
 
-        // An empty block (bare `hwt block`) stays an empty object, not null.
         std::fs::write(&path, r#"{"done": false, "blocked": {}}"#).unwrap();
         toggle_done_at(&path).unwrap();
         assert_eq!(
@@ -1660,8 +1523,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // Pins that `backlog` is appended after `blocked` only once set, so every unmarked
-    // `task.json` keeps the bytes hwt writes, and that marking leaves done and blocked alone.
     #[test]
     fn set_backlog_appends_after_blocked_and_keeps_the_rest() {
         let dir = std::env::temp_dir().join("hdash_meta_backlog_fixture");
@@ -1717,13 +1578,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("nested/pr-status.json");
 
-        // Missing file → empty cache.
         assert!(
             read_pr_cache_at(&path).is_empty(),
             "missing file reads as empty"
         );
 
-        // Write (creating the nested dir) then read back the same entry.
         let mut cache = std::collections::HashMap::new();
         cache.insert(
             "https://github.com/o/r/pull/1".to_owned(),
@@ -1743,7 +1602,6 @@ mod tests {
         assert_eq!(hit.number, Some(1));
         assert_eq!(hit.title.as_deref(), Some("done"));
 
-        // Corrupt file → empty cache (not a panic).
         std::fs::write(&path, b"{ not json").unwrap();
         assert!(
             read_pr_cache_at(&path).is_empty(),
@@ -1753,8 +1611,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // Pins what a card headline reads from `issue.md`: the frontmatter's `title:`, quoted or
-    // bare, and nothing from a file without frontmatter or from the body.
     #[test]
     fn issue_title_comes_from_the_frontmatter_only() {
         let doc = "---\ntitle: \"Seasons \\\"and\\\" weather\"\ncreated: 2026-10-18\n---\n\ntitle: body\n";
@@ -1774,8 +1630,6 @@ mod tests {
         assert_eq!(frontmatter_title("---\ntitle: \"\"\n---\n"), None);
     }
 
-    // Pins the branch set a not-started task is judged against: local and remote branches by
-    // their bare name, slashes kept, and a remote's `HEAD` pointer not counted as a branch.
     #[test]
     fn branch_refs_are_named_without_their_remote() {
         let set = parse_branch_refs(
@@ -1784,28 +1638,5 @@ mod tests {
         let mut names: Vec<&str> = set.iter().map(String::as_str).collect();
         names.sort();
         assert_eq!(names, vec!["a/b", "feature/x", "gh-9-y", "main"]);
-    }
-
-    // A status the dashboard does not know falls into `todo`, which would have reported a
-    // task whose PR is merging as one that has not started — and left the card's dot green
-    // while the coordinator was waiting on me.
-    #[test]
-    fn awaiting_merge_counts_and_wants_me_unless_the_coordinator_merges() {
-        let list = |merge: &str| {
-            format!(
-                r#"{{"project":"p","blurb":"b"{merge},"tasks":[
-                    {{"task":"a","title":"A","status":"awaiting-merge"}},
-                    {{"task":"b","title":"B","status":"todo"}}]}}"#
-            )
-        };
-        let mine = CoordinatorCounts::parse(&list("")).unwrap();
-        assert_eq!(mine.awaiting_merge, 1);
-        assert_eq!(mine.todo, 1);
-        assert_eq!(mine.wants_me(), 1);
-        assert_eq!(mine.summary(), "1 waiting on a merge · 1 todo");
-
-        let theirs = CoordinatorCounts::parse(&list(r#","merge":"coordinator""#)).unwrap();
-        assert_eq!(theirs.awaiting_merge, 1);
-        assert_eq!(theirs.wants_me(), 0);
     }
 }

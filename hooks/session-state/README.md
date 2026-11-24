@@ -54,7 +54,7 @@ always exits 0 and never blocks a turn.
 | `state` | `busy` or `idle` |
 | `since` | epoch seconds of the last busy/idle transition |
 | `project_dir` | `$CLAUDE_PROJECT_DIR`, else the event's `cwd` |
-| `zellij_session` | `$ZELLIJ_SESSION_NAME` (empty outside zellij) — how `hdash` finds a coordinator's pane, whose directory is the main checkout |
+| `zellij_session` | `$ZELLIJ_SESSION_NAME` (empty outside zellij) — how `hdash` finds a pane whose directory is a main checkout |
 | `zellij_pane` | `$ZELLIJ_PANE_ID` (empty outside zellij) |
 | `pid` | the `claude` process (the first ancestor of the hook whose comm is `claude`; 0 if none) |
 | `pid_start` | that process's start time (field 22 of `/proc/<pid>/stat`), so a reused pid is detectable |
@@ -62,7 +62,7 @@ always exits 0 and never blocks a turn.
 Ported from the work `julian-session-state` hook. Two differences: the directory is
 `hobby-session-state`, not the work `claude-session-state`, so neither account's dashboard
 reads or deletes the other's files; and there is no `main` field — every Claude process
-counts, whatever pane or `/task:auto` stage started it.
+counts, whatever pane started it.
 
 ## Test
 

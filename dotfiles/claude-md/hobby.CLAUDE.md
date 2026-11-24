@@ -337,10 +337,3 @@ in a main checkout it is not, and is reported.
 `hwt` manages worktrees/tasks, `hcdev` opens a zellij dev session on this account.
 Both from `~/fun_repos/hobby-tooling`. Run `hwt` or `hcdev` with no arguments for
 the command list.
-
-`hcdev coordinator <blurb>`, run from `~/fun_repos/<project>`, opens a coordinator
-session: the task list (`hcoord tui`) on the left, Claude on the right. In it,
-`/task:coordinate <description>` carves the work into tasks and runs each through
-`/task:auto` in its own `hcdev auto` window, one at a time. The coordinator lives
-at `notes/<project>/coordinator/<blurb>/` — a task with a `task.json` and a
-`tasks.json` and no worktree — and its tasks sit under the blurb as their topic.
