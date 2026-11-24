@@ -572,6 +572,22 @@ state file, plan and journal in the aspect's notes dir, the task's
 `business-context.md`, `is_aspect` skipping the split, and the PR against the
 base. `/aspect` is allowed under `auto: true` (`## aspect-under-auto`).
 
+**Code aspects worked now run as a queue, planned up front.** Decided in
+`notes/hobby-tooling/llm_workflow/aspect_order/business-context.md`: when
+several code changes are scheduled, every question they raise is answered
+early, and they then run one by one with little input from me (`## intent`).
+`/task:build`'s `queue` phase — after GATE S, or `/task:build queue` over
+aspects added one by one (`## entry-point`) — plans each queued aspect with a
+headless `/task:auto plan` in its worktree, asks all their questions at one
+gate, GATE Q (`## front-load`), then starts them one at a time, each rebased
+onto its base after the one before it merged (`## ordering`) and replanned
+from the same answers when the base moved (`## stale-plans`). Each builds
+unattended, with no GATE 2, and merges its own PR (`## gate-2`); the task's
+session waits on it with `hcoord wait` (`## driver`). Research aspects still
+start in parallel tabs (`## research-aspects`). `queue.json` in the task's
+notes dir is the queue's state; `haspect` sends a `running` aspect to `hauto`,
+and a tab opened for one not yet at the head prints its place and exits.
+
 **An aspect is not a task**: no `task.json`, so `scan_tasks` and `known-tasks`
 never enumerate it and it has no card. It is listed on its task's card with
 kind and state, and a click on one not yet started starts it.

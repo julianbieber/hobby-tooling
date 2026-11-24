@@ -2,29 +2,36 @@
 # The Claude pane of an `hcdev auto` session: start whichever /task:auto stage the
 # task's recorded phase calls for, each as its own claude process.
 #
-# Runs from the task worktree (~/fun_worktrees/<project>/<topic>/<task>) and reads
-# build-task.json in the task's notes dir. The plan stage is headless and exits
+# Runs from a task worktree (~/fun_worktrees/<project>/<topic>/<task>) and reads
+# build-task.json in the task's notes dir, or from a queued code aspect's worktree
+# (~/fun_aspects/<project>/<topic>/<task>/<name>) and reads the one in that
+# aspect's notes dir. The plan stage is headless and exits
 # when it has written plan.md; the build stage is interactive and runs to the PR.
 # Records this pane's own id to the notes dir on every start, so a caller can
 # resolve it authoritatively instead of guessing (`hcdev claude-pane`); pass
-# --record-pane to run only that step. Exit 1 when the cwd is not a task
-# worktree or a stage ends without moving the phase; otherwise the exit code
+# --record-pane to run only that step. Exit 1 when the cwd is neither a task nor
+# an aspect worktree or a stage ends without moving the phase; otherwise the exit code
 # of the last claude process.
 
 set -uo pipefail
 
 WORKTREE_BASE="$HOME/fun_worktrees"
+ASPECT_BASE="$HOME/fun_aspects"
 NOTES_BASE="$HOME/fun_repos/hobby-mimisbrunnr/notes"
 
 case "$PWD" in
-  "$WORKTREE_BASE"/*/*/*) ;;
-  *) echo "hauto: $PWD is not a task worktree under $WORKTREE_BASE" >&2; exit 1 ;;
+  "$ASPECT_BASE"/*/*/*/*) REL="${PWD#"$ASPECT_BASE"/}" ;;
+  "$WORKTREE_BASE"/*/*/*) REL="${PWD#"$WORKTREE_BASE"/}" ;;
+  *) echo "hauto: $PWD is neither a task worktree under $WORKTREE_BASE nor an aspect worktree under $ASPECT_BASE" >&2; exit 1 ;;
 esac
-REL="${PWD#"$WORKTREE_BASE"/}"
 PROJECT="${REL%%/*}"; REST="${REL#*/}"
 TOPIC="${REST%%/*}"; REST="${REST#*/}"
-TASK="${REST%%/*}"
-STATE="$NOTES_BASE/$PROJECT/$TOPIC/$TASK/build-task.json"
+TASK="${REST%%/*}"; REST="${REST#*/}"
+DIR="$NOTES_BASE/$PROJECT/$TOPIC/$TASK"
+case "$PWD" in
+  "$ASPECT_BASE"/*) NAME="${REST%%/*}"; DIR="$DIR/aspects/$NAME"; TASK="$TASK@$NAME" ;;
+esac
+STATE="$DIR/build-task.json"
 
 phase() { jaq -r '.phase // "acceptance"' "$STATE" 2>/dev/null || echo acceptance; }
 model_flag() {
@@ -34,7 +41,7 @@ model_flag() {
 }
 record_pane() {
   [ -n "${ZELLIJ_PANE_ID:-}" ] || return 1
-  local dir="$NOTES_BASE/$PROJECT/$TOPIC/$TASK"
+  local dir="$DIR"
   mkdir -p "$dir"
   jaq -n --arg session "$ZELLIJ_SESSION_NAME" --arg pane_id "terminal_$ZELLIJ_PANE_ID" \
     --arg worktree "$PWD" --arg recorded "$(date -u +%FT%TZ)" \

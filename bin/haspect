@@ -4,6 +4,10 @@
 # /task:aspect while it is unfinished, so a respawned tab picks up what changed
 # while it was gone, and resume it idle once it is finished.
 #
+# A code aspect in its task's aspect queue (queue.json in the task's notes dir)
+# is instead run unattended by hauto, and only once the queue has started it; a
+# tab opened for one still waiting its turn prints its place and exits.
+#
 # Runs from the aspect worktree (~/fun_aspects/<project>/<topic>/<task>/<name>)
 # and reads aspect.json in notes/<project>/<topic>/<task>/aspects/<name>/.
 # Records this pane's own id there as claude-pane.json on every start, as hauto
@@ -35,8 +39,21 @@ if [ -n "${ZELLIJ_PANE_ID:-}" ]; then
 fi
 
 STATE=$(jaq -r '.state // "open"' "$DIR/aspect.json" 2>/dev/null || echo open)
+QUEUE="$NOTES_BASE/$PROJECT/$TOPIC/$TASK/queue.json"
+QUEUED=$(jaq -r --arg n "$NAME" '.aspects[]? | select(.name == $n) | .status' "$QUEUE" 2>/dev/null || true)
+
+case "$STATE" in
+  reported | done | closed) exec chobby --continue ;;
+esac
+case "$QUEUED" in
+  "") ;;
+  running | await-fix) exec hauto ;;
+  *)
+    echo "haspect: $NAME is '$QUEUED' in $TASK's aspect queue; the task's session starts it in turn"
+    exit 0
+    ;;
+esac
 case "$STATE" in
   open) exec chobby "/task:aspect" ;;
-  reported | done | closed) exec chobby --continue ;;
   *) exec chobby --continue "/task:aspect" ;;
 esac
