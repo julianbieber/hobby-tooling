@@ -107,10 +107,9 @@ names.
 | `chobby` | Bare `claude` on the hobby account |
 | `hx-claude` | `$EDITOR` for ctrl-g — Helix on the prompt buffer, conversation in a vsplit |
 | `hdash` | Bevy dashboard over every task in the notes tree — the issue it records, its worktree, PRs, done. One card per piece of work |
-| `hcoord` | The coordinator's task-list pane (ratatui) and `hcoord wait`, which blocks a coordinator on a task's pipeline state |
 | `hobby-mml-lsp` | HMML language server, routed to `.hmml` review deltas by file type |
 | 4 vendored LSPs | `claude-lsp`, `claude-skills-lsp`, `treesitter-class-lsp`, `path-lsp` — buildable without the work checkout |
-| 20 skills | Task loop (journal, resume, aspect, triage, reflect), HMML delta extract, comment review, PR + task:build, the unattended task:auto and task:coordinate, the goal interview task:goal, issues in the notes |
+| 17 skills | Task loop (journal, resume, aspect, triage, reflect), HMML delta extract, comment review, PR + task:build, issues in the notes |
 
 ## Account Separation
 

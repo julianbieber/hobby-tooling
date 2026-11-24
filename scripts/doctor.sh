@@ -26,7 +26,6 @@ else
     bad "not logged in" "chobby   then  /login"
 fi
 if command -v chobby >/dev/null 2>&1; then ok "chobby on PATH"; else bad "chobby not on PATH" "just install-chobby"; fi
-if command -v hauto >/dev/null 2>&1; then ok "hauto on PATH"; else warn "hauto not on PATH (hcdev auto needs it)" "just install-chobby"; fi
 if command -v haspect >/dev/null 2>&1; then ok "haspect on PATH"; else warn "haspect not on PATH (hcdev tab needs it)" "just install-chobby"; fi
 if command -v hresearch >/dev/null 2>&1; then ok "hresearch on PATH"; else warn "hresearch not on PATH (/research needs it)" "just install-chobby"; fi
 
@@ -66,8 +65,6 @@ else
     bad "session-state hook not linked or not in settings.json" "just install-hooks bootstrap-config"
 fi
 if command -v hx-claude >/dev/null 2>&1; then
-    # Resolving to a copy outside this checkout is how this broke in the first
-    # place: ~/.local/bin pointed into a work *worktree*, one `wt rm` from gone.
     if [ "$(readlink -f "$(command -v hx-claude)")" = "$(readlink -f "$HERE/../bin/hx-claude")" ]; then
         ok "hx-claude on PATH, from this checkout"
     else
@@ -97,7 +94,7 @@ fi
 # repo installed, which is how ~/.config/zellij/config.kdl went unnoticed: present,
 # working, and owned by the home dotfiles repo. A real file here is a gap, not a pass.
 ZJ="${XDG_CONFIG_HOME:-$HOME/.config}/zellij"
-for f in "config.kdl" "layouts/hobby-dev.kdl" "layouts/hobby-claude.kdl" "layouts/hobby-auto.kdl"; do
+for f in "config.kdl" "layouts/hobby-dev.kdl" "layouts/hobby-claude.kdl"; do
     name=$(basename "$f")
     if [ -h "$ZJ/$f" ]; then
         ok "$name linked"
@@ -153,7 +150,6 @@ echo ""
 echo "Optional extras"
 if command -v hdash >/dev/null 2>&1; then ok "hdash built"; else warn "hdash not built" "just install-dash"; fi
 if command -v htab >/dev/null 2>&1; then ok "htab built"; else warn "htab not built (the Claude-mode overview pane)" "just install-dash"; fi
-if command -v hcoord >/dev/null 2>&1; then ok "hcoord built"; else warn "hcoord not built (hcdev coordinator needs it)" "just install-coord"; fi
 if command -v hatlas >/dev/null 2>&1; then ok "hatlas built"; else warn "hatlas not built" "just install-atlas"; fi
 # The two dashboards hdash replaces. Reported so a machine that installed them before the
 # merge is told to reclaim the names, rather than silently keeping two stale binaries.

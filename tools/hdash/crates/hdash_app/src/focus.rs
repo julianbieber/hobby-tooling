@@ -15,7 +15,7 @@ use crate::model::task::{Task, TaskId};
 pub const PRESENCE_POLL_SECS: u64 = 2;
 /// How long after a launch from a card further launches of the same task are ignored.
 pub const LAUNCH_GRACE_SECS: u64 = 5;
-const WINDOW_CLASSES: [&str; 2] = ["Alacritty", "hcdev-auto"];
+const WINDOW_CLASS: &str = "Alacritty";
 
 /// Whether a window title shows the task's session: its zellij session name or the unclamped
 /// `hcdev-PROJECT-TOPIC-TASK` an hdash launch titles the window with, alone or followed by
@@ -76,22 +76,18 @@ impl Presences {
 }
 
 fn hcdev_windows() -> Option<Vec<(u64, String)>> {
-    let mut ids = BTreeSet::new();
-    for class in WINDOW_CLASSES {
-        let out = Command::new("xdotool")
-            .args(["search", "--class", class])
-            .stdin(Stdio::null())
-            .output()
-            .ok()?;
-        if !out.status.success() && (!out.stdout.is_empty() || !out.stderr.is_empty()) {
-            return None;
-        }
-        ids.extend(
-            String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .filter_map(|l| l.trim().parse::<u64>().ok()),
-        );
+    let out = Command::new("xdotool")
+        .args(["search", "--class", WINDOW_CLASS])
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() && (!out.stdout.is_empty() || !out.stderr.is_empty()) {
+        return None;
     }
+    let ids: BTreeSet<u64> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| l.trim().parse::<u64>().ok())
+        .collect();
     Some(
         ids.into_iter()
             .filter_map(|wid| {
@@ -243,7 +239,6 @@ mod tests {
             prs: Vec::new(),
             aspects: Vec::new(),
             last_active: None,
-            coordinator: None,
             phase: None,
             todo: Vec::new(),
             waiting_on: None,
@@ -251,8 +246,6 @@ mod tests {
         }
     }
 
-    // Pins that a window is found under either spelling a session's title takes — the clamped
-    // session name zellij and `hcdev auto -w` use, or the unclamped one an hdash launch sets.
     #[test]
     fn titles_match_session_or_unclamped_name_literally() {
         let long = task(
@@ -276,7 +269,6 @@ mod tests {
         ));
     }
 
-    // Pins that an exited session or zellij's chatter is not read as a running session.
     #[test]
     fn parse_sessions_skips_exited_and_noise() {
         let out = "hcdev-a-b-c [Created 2h ago] (current)\nhcdev-c-d-e [Created 2months ago] (EXITED - attach to resurrect)\nNo active zellij sessions found.\n";
@@ -286,8 +278,6 @@ mod tests {
         );
     }
 
-    // Pins the label order of the primary button: a window, then a running session, then none;
-    // a failed probe is unknown.
     #[test]
     fn presence_prefers_window_then_running_session() {
         let t = task("a", "b", "c", "hcdev-a-b-c");

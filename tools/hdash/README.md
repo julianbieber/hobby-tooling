@@ -48,12 +48,11 @@ project, `Esc` empties it and lets go.
 | active | a live worktree | **Focus** / **Attach** / **Open hcdev** |
 | removed | worktree gone, branch and notes kept | **Restore** — `hwt restore` then `hcdev wt` |
 | done | `done` in `task.json` | **Open hcdev** (and **Reopen**) |
-| coordinator | a task under the reserved `coordinator` topic | **Focus** / **Attach** / **Open coordinator** — `hcdev coordinator` in the main checkout; the card shows the `tasks.json` counts |
 
 Plus, as they apply: **Done**/**Reopen**, **Backlog**/**Unbacklog**, **Terminal**,
 **Notes**, **Hide**.
 
-**Focus** when an Alacritty window (class `Alacritty` or `hcdev-auto`) already shows the
+**Focus** when an Alacritty window (class `Alacritty`) already shows the
 task's zellij session: the click activates it, so leftwm switches to its tag. **Attach** when
 the session runs without a window, **Open …** when it does not run or the probe cannot (no
 `xdotool`/`zellij`); both open a terminal running `hcdev`, which attaches or starts it. The
@@ -125,7 +124,7 @@ field has text. The query is transient.
 
 A **chip bar** under the header narrows the list: **State** (ready, blocked, not blocked, not
 started, removed, orphan), **PR** (awaiting review), **Repos** (dirty), **Phase** (every
-`/task:build` / `/task:auto` phase some task's `build-task.json` records, plus no phase),
+`/task:build` phase some task's `build-task.json` records, plus no phase),
 **Active** (today, 7 days, older) and **Session** (busy, idle, no session). Chips in one group
 are alternatives; groups combine with AND. Each chip shows how many items the list would have
 with it on; a chip that would match nothing is hidden unless it is on, and **clear** turns
@@ -136,8 +135,8 @@ them all off. Chips live in memory.
 A task whose `build-task.json` carries a `todo` list or a `waiting_on` line gets one more
 card line: **`▸ Todo (3/7)`** with the active step beside it, and **`waiting: <line>`** in
 amber while a gate holds. Clicking the toggle (or focusing it and pressing `Enter`) expands
-the whole list — `✓` done, `▶` active, `○` pending, `✗` dropped. `/task:build` and
-`/task:auto` write both fields; a dropped item counts as done. It is the hobby half of the
+the whole list — `✓` done, `▶` active, `○` pending, `✗` dropped. `/task:build`
+writes both fields; a dropped item counts as done. It is the hobby half of the
 work `wt-overview`'s flow line, without work's flow aspects: a second PR here is a code
 aspect, which the card already lists.
 
@@ -154,8 +153,8 @@ session with the tab.
 A card whose task has a live Claude session shows **`idle 12m`** in amber while it waits on
 you, or **`busy 3m`** while it works; the header counts the open tasks waiting on you. The
 state comes from the [`session-state`](../../hooks/session-state/README.md) hook, re-read
-every second. Every Claude process of the hobby account counts — a plain hcdev pane, both
-`/task:auto` stages, a coordinator's pane — matched to a task by the worktree its directory
+every second. Every Claude process of the hobby account counts — a plain hcdev pane or an
+aspect's tab — matched to a task by the worktree its directory
 lies in, else by its zellij session name (from `hcdev.nu`'s `hcdev-session-names`); the
 newest live record per task decides. A session busy for 30 seconds whose `claude` process used
 under 60 CPU ticks over that window reads idle since its last hook event.
@@ -207,7 +206,7 @@ Every read runs in the background, on a small job pool (git, `gh`, pull) or its 
 
 The fingerprint is the mtimes of the project, topic and task dirs of both trees and of each
 notes task's `task.json`, `prs.json`, `build-task.json`, `issue.md`,
-`tasks.json`, its `aspects/` dir and each aspect's `aspect.json`. A rescan is merged in: git status carries over by repo path and PR state by URL,
+its `aspects/` dir and each aspect's `aspect.json`. A rescan is merged in: git status carries over by repo path and PR state by URL,
 so a background update never resets a card to loading, and nothing is redrawn when nothing
 changed. **Refresh** un-hides the cards and rescans in the background, keeping the cards
 until it lands.

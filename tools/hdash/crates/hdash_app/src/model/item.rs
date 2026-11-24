@@ -31,12 +31,6 @@ pub enum Stage {
     Active,
     /// A task marked done in its `task.json`.
     Done,
-    /// A task under the reserved `coordinator` topic: **Open coordinator**.
-    ///
-    /// Outranks `Removed` because a coordinator never has a worktree, so without this
-    /// it would sit at **Restore** forever. A done coordinator is `Done` like any other
-    /// task, so the done toggle hides it; its card still opens the coordinator session.
-    Coordinator,
 }
 
 /// One piece of work, as the list draws it.
@@ -59,8 +53,6 @@ impl<'a> Item<'a> {
             Stage::Orphan
         } else if task.done {
             Stage::Done
-        } else if task.is_coordinator() {
-            Stage::Coordinator
         } else if !task.present && !task.has_branch {
             Stage::NotStarted
         } else if !task.present {
@@ -107,7 +99,7 @@ impl<'a> Item<'a> {
             Stage::Done => 9,
             _ if busy && !task.ready() && task.awaiting_review() == 0 => 4,
             Stage::NotStarted => 7,
-            Stage::Removed | Stage::Coordinator => 8,
+            Stage::Removed => 8,
             _ if task.ready() => 2,
             _ if task.blocked() => 6,
             _ if task.awaiting_review() > 0 => 3,
@@ -179,8 +171,7 @@ impl Model {
     /// the order is total and stable.
     ///
     /// Rank, first match wins: a task that is not done whose session is idle; an orphan; a lifted
-    /// block; a PR awaiting review; a busy session; active; blocked; not started; removed or a
-    /// coordinator; done. A coordinator's session counts like any other task's.
+    /// block; a PR awaiting review; a busy session; active; blocked; not started; removed; done.
     pub fn items(&self, sessions: &HashMap<TaskId, SessionState>) -> Vec<Item<'_>> {
         let mut items: Vec<(u8, Item<'_>)> = self
             .tasks
@@ -329,7 +320,6 @@ mod tests {
             prs: Vec::new(),
             aspects: Vec::new(),
             last_active: None,
-            coordinator: None,
             phase: None,
             todo: Vec::new(),
             waiting_on: None,
@@ -344,8 +334,6 @@ mod tests {
         }
     }
 
-    // Pins the stage of each task state, including the split this list exists to make
-    // between a task never started and one whose worktree was removed.
     #[test]
     fn stages_follow_the_lifecycle() {
         let mut removed = task("p", "t", "gone");
@@ -358,9 +346,6 @@ mod tests {
         let mut done_and_gone = task("p", "t", "finished-and-gone");
         done_and_gone.done = true;
         done_and_gone.present = false;
-        let mut coordinator = task("p", "coordinator", "list");
-        coordinator.present = false;
-        coordinator.has_branch = false;
 
         let m = model(vec![
             task("p", "t", "live"),
@@ -368,7 +353,6 @@ mod tests {
             unstarted,
             done,
             done_and_gone,
-            coordinator,
         ]);
         let items = m.items(&HashMap::new());
         let stage = |n: &str| items.iter().find(|i| i.task_name() == n).unwrap().stage();
@@ -378,14 +362,8 @@ mod tests {
         assert_eq!(stage("fresh"), Stage::NotStarted);
         assert_eq!(stage("finished"), Stage::Done);
         assert_eq!(stage("finished-and-gone"), Stage::Done, "done wins");
-        assert_eq!(
-            stage("list"),
-            Stage::Coordinator,
-            "a coordinator never starts"
-        );
     }
 
-    // Pins that the headline is the issue.md title when the task has one, the name otherwise.
     #[test]
     fn the_title_prefers_the_issue_file() {
         let mut titled = task("p", "t", "gh-27-seasons");
@@ -402,8 +380,6 @@ mod tests {
         assert_eq!(title("unify_uis"), "unify_uis");
     }
 
-    // Pins the display order: what wants a click first, then live work, then what has to be
-    // started or restored, done last; ties broken by recent activity, then name.
     #[test]
     fn sort_order() {
         let day = |n: u64| UNIX_EPOCH + Duration::from_secs(n * 86_400);
@@ -480,8 +456,6 @@ mod tests {
         );
     }
 
-    // Pins the filters: project selection, the done toggle, the session hide, and that no
-    // toggle hides an orphan.
     #[test]
     fn visibility_honours_filters_and_defaults() {
         let mut done = task("p", "t", "finished");
@@ -523,8 +497,6 @@ mod tests {
         assert_eq!(visible(&ui), vec!["stray"]);
     }
 
-    // Pins the backlog-mode grid: backlogged open work only in backlog mode, done work only
-    // outside it, and orphans in both.
     #[test]
     fn backlog_mode_splits_the_list() {
         let mut parked = task("p", "t", "parked");
@@ -568,8 +540,6 @@ mod tests {
         assert_eq!(visible(&ui), vec!["parked", "stray"]);
     }
 
-    // Pins where a session moves a card: an idle one ahead of everything that is not done, even
-    // an orphan; a busy one between a PR awaiting review and plain active work; done stays last.
     #[test]
     fn sessions_move_cards_by_attention() {
         let mut orphan = task("p", "t", "a-orphan");
@@ -618,8 +588,6 @@ mod tests {
         );
     }
 
-    // Pins that a rescan keeps what was already loaded — git by repo path, PR state by URL — and
-    // reports a change only when the drawn model differs.
     #[test]
     fn merge_keeps_loaded_state_by_path_and_url() {
         let mut old = task("p", "t", "live");
@@ -656,8 +624,6 @@ mod tests {
         assert_eq!(m.tasks[0].prs[0].live_title.as_deref(), Some("Done"));
     }
 
-    // Pins the sidebar filter: a project surfaces by its own name or by a task name or title in
-    // it, and an empty query keeps every project.
     #[test]
     fn projects_rank_by_name_task_and_title() {
         let project = |name: &str| Project {

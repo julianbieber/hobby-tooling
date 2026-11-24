@@ -291,7 +291,7 @@ impl DashView {
             match item.stage() {
                 Stage::Done => done += 1,
                 Stage::NotStarted => unstarted += 1,
-                Stage::Active | Stage::Removed | Stage::Coordinator => active += 1,
+                Stage::Active | Stage::Removed => active += 1,
                 Stage::Orphan => orphans += 1,
             }
         }
@@ -550,9 +550,6 @@ impl DashView {
         let dot = match stage {
             Stage::Done => DIM,
             Stage::Active if task.dirty_total() == 0 => DONE,
-            Stage::Coordinator if task.coordinator.as_ref().is_none_or(|c| c.wants_me() == 0) => {
-                DONE
-            }
             _ => AMBER,
         };
         let mut header = vec![
@@ -596,7 +593,6 @@ impl DashView {
         }
         let stage_badge = match stage {
             Stage::Orphan => Some(("orphan", AMBER)),
-            _ if task.is_coordinator() => Some(("coordinator", ACCENT)),
             Stage::NotStarted => Some(("not started", DIM)),
             _ if !task.present => Some(("removed", DIM)),
             _ => None,
@@ -652,14 +648,6 @@ impl DashView {
         }
         if let Some(phase) = &task.phase {
             meta.push(text(&format!("· {phase}"), phase_style(phase)));
-        }
-        if task.is_coordinator() {
-            let (line, style) = match &task.coordinator {
-                Some(c) if c.wants_me() > 0 => (c.summary(), Style::default().fg(AMBER)),
-                Some(c) => (c.summary(), Style::default()),
-                None => ("no tasks.json".to_owned(), Style::default().fg(DIM)),
-            };
-            meta.push(text(&format!("· {line}"), style));
         }
         if let Some(reason) = task.block.as_ref().and_then(|b| b.reason.as_ref()) {
             meta.push(text(&format!("· {reason}"), Style::default().fg(DIM)));
@@ -783,7 +771,7 @@ impl DashView {
     pub(super) fn starts_session(&self, task: &Task) -> bool {
         match (Item { task }).stage() {
             Stage::NotStarted | Stage::Removed => true,
-            Stage::Active | Stage::Done if !task.is_coordinator() => {
+            Stage::Active | Stage::Done => {
                 matches!(self.presences.of(task), Presence::None | Presence::Unknown)
             }
             _ => false,
@@ -792,19 +780,14 @@ impl DashView {
 
     fn main_label(&self, item: &Item<'_>) -> String {
         let task = item.task;
-        let target = if task.is_coordinator() {
-            "coordinator"
-        } else {
-            "hcdev"
-        };
         match item.stage() {
             Stage::Orphan => "Adopt".to_owned(),
             Stage::NotStarted => "Start task".to_owned(),
             Stage::Removed => "Restore".to_owned(),
-            Stage::Active | Stage::Done | Stage::Coordinator => match self.presences.of(task) {
+            Stage::Active | Stage::Done => match self.presences.of(task) {
                 Presence::Window => "Focus".to_owned(),
                 Presence::Detached => "Attach".to_owned(),
-                Presence::None | Presence::Unknown => format!("Open {target}"),
+                Presence::None | Presence::Unknown => "Open hcdev".to_owned(),
             },
         }
     }

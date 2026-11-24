@@ -233,8 +233,6 @@ impl DashView {
                         None
                     }
                     Stage::NotStarted | Stage::Removed => Some(Action::Restore(task, mode)),
-                    Stage::Coordinator => Some(Action::Coordinator(task)),
-                    Stage::Done if task.is_coordinator() => Some(Action::Coordinator(task)),
                     Stage::Active | Stage::Done => Some(Action::Hcdev(task, mode)),
                 };
             }

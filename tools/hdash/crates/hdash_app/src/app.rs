@@ -25,8 +25,7 @@ use ratatui::style::{Color, Style};
 
 use crate::focus::{Launches, activate, find_window};
 use crate::model::launch::{
-    Mode, launch_coordinator, launch_hcdev, launch_restore, launch_tab, launch_terminal,
-    open_notes, open_tab, open_url,
+    Mode, launch_hcdev, launch_restore, launch_tab, launch_terminal, open_notes, open_tab, open_url,
 };
 use crate::model::task::Task;
 use crate::session::now_secs;
@@ -41,7 +40,6 @@ pub enum Action {
     OpenUrl(String),
     Hcdev(Task, Mode),
     Restore(Task, Mode),
-    Coordinator(Task),
     Terminal(Task),
     Notes(Task),
     Tab(Task, String),
@@ -260,17 +258,11 @@ impl App {
     fn run(&mut self, action: Action) {
         match action {
             Action::OpenUrl(url) => open_url(&url),
-            Action::Hcdev(task, _) | Action::Coordinator(task) | Action::Restore(task, _)
+            Action::Hcdev(task, _) | Action::Restore(task, _)
                 if self.launches.pending(&task.id) => {}
             Action::Hcdev(task, mode) => {
                 if !find_window(&task).is_some_and(activate) {
                     launch_hcdev(&task.dir, &task_spec(&task), mode);
-                    self.launches.record(task.id.clone());
-                }
-            }
-            Action::Coordinator(task) => {
-                if !find_window(&task).is_some_and(activate) {
-                    launch_coordinator(&task_spec(&task));
                     self.launches.record(task.id.clone());
                 }
             }
@@ -326,8 +318,6 @@ mod tests {
         let _ = app.key(KeyEvent::new(code, KeyModifiers::NONE));
     }
 
-    // Pins that while the filter field has focus, the bound keys — q included — are typed into it
-    // rather than acting, and that Esc gives the bindings back.
     #[test]
     fn keys_in_the_filter_field_are_typed_not_bound() {
         let mut app = App::new(view(vec![task("n1"), task("n2")]));
@@ -351,7 +341,6 @@ mod tests {
         assert!(app.quit);
     }
 
-    // Pins the point of the port: the dashboard builds without any Bevy crate.
     #[test]
     fn workspace_has_no_bevy() {
         let lock =

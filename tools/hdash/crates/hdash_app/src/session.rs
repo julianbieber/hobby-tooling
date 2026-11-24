@@ -172,7 +172,7 @@ pub fn aspect_of(project_dir: &Path, root: &Path) -> Option<(TaskId, String)> {
 /// a reused pid does not count). A record belongs to what its project dir lies in: an aspect's
 /// worktree under `aspects`, else a task's worktree under `root` — so a tab of a task's session
 /// that works an aspect is credited to that aspect, although every tab shares the
-/// task's zellij session name. Only a dir in neither, such as a coordinator's main checkout, is
+/// task's zellij session name. Only a dir in neither, such as a main checkout, is
 /// matched by the zellij session it ran in. Every Claude process counts, whatever pane or stage
 /// started it.
 pub fn attribute(
@@ -443,7 +443,6 @@ mod tests {
         })
     }
 
-    // Pins the record format the hook writes, and that another version is ignored.
     #[test]
     fn parse_record_accepts_hook_output_and_rejects_other_versions() {
         let line = r#"{"version":1,"state":"busy","since":5,"project_dir":"/w/p/t/x","zellij_session":"hcdev-p-t-x","zellij_pane":"1","pid":42,"pid_start":9}"#;
@@ -454,7 +453,6 @@ mod tests {
         assert!(parse_record("{").is_none());
     }
 
-    // Pins that a project dir maps to its task by the three path levels, compared whole.
     #[test]
     fn task_of_maps_three_whole_components_under_root() {
         let root = Path::new("/home/u/fun_worktrees");
@@ -480,19 +478,16 @@ mod tests {
         );
     }
 
-    // Pins that a coordinator's pane, whose directory is the main checkout, is found by its zellij
-    // session.
     #[test]
-    fn attribute_finds_coordinators_by_session_name() {
-        let coordinator = id("p", "coordinator", "list");
-        let by_session =
-            HashMap::from([("hcdev-p-coordinator-list".to_owned(), coordinator.clone())]);
+    fn attribute_finds_a_main_checkout_pane_by_session_name() {
+        let owner = id("p", "t", "list");
+        let by_session = HashMap::from([("hcdev-p-t-list".to_owned(), owner.clone())]);
         let out = attribute(
             [
                 (
                     rec(
                         "/home/u/fun_repos/p",
-                        "hcdev-p-coordinator-list",
+                        "hcdev-p-t-list",
                         SessionState::Idle,
                         1,
                     ),
@@ -510,12 +505,10 @@ mod tests {
             alive,
         );
         assert_eq!(out.len(), 2);
-        assert_eq!(out[&Owner::Task(coordinator)].record.pid, 1);
+        assert_eq!(out[&Owner::Task(owner)].record.pid, 1);
         assert_eq!(out[&Owner::Task(id("p", "t", "a"))].record.pid, 2);
     }
 
-    // Pins the rule when several Claude processes run for one task (an auto run's stages, a
-    // nested claude): the newest live record decides; a dead or reused pid never does.
     #[test]
     fn attribute_keeps_the_newest_live_record_per_task() {
         let stat = |pid: u32| match pid {
@@ -542,8 +535,6 @@ mod tests {
         assert_eq!((a.record.pid, a.last_event), (2, 20));
     }
 
-    // Pins that an aspect tab's Claude, which shares its task's zellij session name, is credited
-    // to that aspect by its worktree and not to the task; the task's own pane stays the task's.
     #[test]
     fn attribute_credits_aspect_tabs_to_their_aspect() {
         let task = id("p", "t", "a");
@@ -575,8 +566,6 @@ mod tests {
         );
     }
 
-    // Pins how a task's sessions and its aspects' combine for ordering: any idle one makes the
-    // task idle, and an aspect alone still makes it busy or idle.
     #[test]
     fn states_count_a_tasks_aspects() {
         let s = |state| Session { state, since: 0 };
@@ -605,8 +594,6 @@ mod tests {
         );
     }
 
-    // Pins the stuck-busy correction: busy for a whole window with almost no CPU reads idle,
-    // dated from the last hook event.
     #[test]
     fn busy_with_quiet_heartbeat_reads_idle_since_last_event() {
         let o = Observed {
@@ -629,7 +616,6 @@ mod tests {
         );
     }
 
-    // Pins that a turn which just started is not judged by quiet samples from before it.
     #[test]
     fn busy_that_just_started_ignores_quiet_samples_from_before() {
         let mut fresh = rec("/w/p/t/a", "", SessionState::Busy, 1);
@@ -646,7 +632,6 @@ mod tests {
         assert_eq!(effective(&o, &hb, 1030).state, SessionState::Busy);
     }
 
-    // Pins that a session using CPU stays busy however long its turn runs.
     #[test]
     fn busy_with_cpu_activity_stays_busy() {
         let o = Observed {
@@ -662,7 +647,6 @@ mod tests {
         assert_eq!(effective(&o, &hb, 1040).state, SessionState::Busy);
     }
 
-    // Pins that the heartbeat judges only the last window, not the whole history.
     #[test]
     fn heartbeat_window_slides() {
         let key = (1, 7);

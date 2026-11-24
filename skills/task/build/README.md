@@ -5,7 +5,7 @@
 | Type         | skill                                                                  |
 | Install path | `~/.claude-hobby/commands/task/build.md` → `/task:build`               |
 | Owner        | @julianbieber                                                          |
-| Dependencies | `journal:resume`, `hmml-extract`, `comment-pass`, `structure`, `journal:write`; nushell `hwt aspect`; `hcoord ci`, `hcoord merged`; `gh` |
+| Dependencies | `journal:resume`, `hmml-extract`, `comment-pass`, `structure`, `journal:write`; nushell `hwt aspect`; `gh` |
 | Status       | experimental                                                           |
 | Supersedes   | `dev-flow`                                                             |
 
@@ -86,31 +86,29 @@ split again.
 
 Most tasks are one task, and the phase is expected to say so in a line.
 
-## Code aspects worked now run as a queue
+## Code aspects worked now ask first, then implement in turn
 
 Several code aspects started at once each stopped at their own GATE C and
 GATE 2, in whichever tab got there first, so the planning was spread over the
-whole run. The `queue` phase moves every question to the front and the rest
-to the back: it plans each queued aspect headless with `/task:auto`, asks all
-of their questions — business context, done-when and design — at one gate
-(GATE Q), then runs them one at a time, each rebased onto a base that already
-holds the ones before it, built unattended, merged by its own session. I am
-asked again only for an `await-fix`.
+whole run. The `queue` phase keeps every aspect a regular `/task:build` run in
+its own tab, gates included, and changes only when the implementation starts:
+every tab opens at once, asks its questions and writes its plan, then waits in
+`await-turn`; the task's session starts the next one's implementation once the
+one before it has merged, so it rebases onto a base that already holds it.
 
-Decided in `notes/hobby-tooling/llm_workflow/aspect_order/business-context.md`:
-the questions asked up front (`## front-load`), no GATE 2 and a self-merge
-(`## gate-2`), each aspect started only after the one before it merged
-(`## ordering`), the task's session as the driver (`## driver`), a replan
-before each start once the base has moved, keeping the answers and recording
-the differences (`## stale-plans`), entry from GATE S and from
-`/task:build queue` (`## entry-point`), the build on the session's model
-(`## build-model`), and research aspects still started in parallel tabs
-(`## research-aspects`).
+Decided in `notes/hobby-tooling/llm_workflow/drop_auto_mode/business-context.md`:
+nothing unattended — every run is `/task:build` with its gates (`## intent`);
+the aspect's own session asks, then stops (`## questions-first`); the task's
+session wakes the next aspect (`## queue-driver`); a stale plan is replanned
+from the recorded answers as if given now, and what changed is printed
+(`## stale-plan`); a merge stays mine unless I say in the tab that the PR may
+merge once green (`## self-merge-permission`). Entry from GATE S and from
+`/task:build queue` and research aspects in parallel tabs carry over from
+`llm_workflow/aspect_order` (`## entry-point`, `## research-aspects`).
 
-`queue.json` in the task's notes dir is the queue's whole state, and
-`haspect` reads it: a tab opened for an aspect not yet at the head of the
-queue — after a session restore, say — prints its place and exits rather than
-starting a second build.
+`queue.json` in the task's notes dir is the queue's whole state. Only the
+task's session moves an aspect to `running`, and writes that before it sends
+the message, so a tab restarted after that point picks its turn up by itself.
 
 ## Where the standards fit
 
@@ -159,8 +157,9 @@ gate used to print every level at once. On trial for the next few tasks
 | phase | runs | ends |
 |---|---|---|
 | `assess-split` | precondition check, the cut tested against the shaping rules | hard stop |
-| `handed-off` | `hwt aspect new` per approved aspect, `/issue-create` per task, `journal:write`, the research aspects worked now started | terminal, or `queue` |
-| `queue` | headless `/task:auto plan` per queued code aspect, GATE Q, then each aspect built and merged in turn (`queue.json`) | hard stop at GATE Q, then runs to the last merge |
+| `handed-off` | `hwt aspect new` per approved aspect, `/issue-create` per task, `journal:write`, every aspect worked now started in its tab | terminal, or `queue` |
+| `queue` | waits on each queued code aspect's merge, then tells the next one it is its turn (`queue.json`) | runs to the last merge |
+| `await-turn` | in an aspect: waits for its turn, then rebases and replans if the base moved | falls through to `implement` |
 | `plan` | Gate 0 prior art, Gate 0b the repo's standards, brief, reading the code, then the business-context questions | hard stop |
 | `context` | records my answers verbatim, writes the plan file, seeds `todo` | falls through |
 | `implement` | the change from the plan, run + test, the repo's CI workflows run locally | falls through |
@@ -170,7 +169,7 @@ gate used to print every level at once. On trial for the next few tasks
 | `review` | prints the layered GATE 2 overview; `design`, `diff`, `messages` zoom in | hard stop |
 | `await-review` | nothing — I read the summary | `continue` |
 | `pr` | commits the approved messages, pushes the task branch, opens the PR | falls through |
-| `ci` | `hcoord ci` on the PR, repairing a red check on the diff's own for at most three rounds | falls through, or stops when blocked |
+| `ci` | `gh pr checks --watch` on the PR, repairing a red check on the diff's own for at most three rounds; merges only on my word | falls through, or stops when blocked |
 | `journal` | `journal:write` | `done` |
 
 State lives in `build-task.json` in the task's notes dir, beside the plan and

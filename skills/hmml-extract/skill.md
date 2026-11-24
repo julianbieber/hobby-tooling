@@ -49,7 +49,7 @@ a caller sees, and report the rest.
       `~/fun_repos/<repo>`.
     - **`head`**: `worktree` when `git -C <checkout> status --porcelain` lists
       anything — the change, or part of it, is not committed yet, which is how
-      `/task:build` and `/task:auto` call this skill. Otherwise
+      `/task:build` calls this skill. Otherwise
       `git -C <checkout> rev-parse --short=10 HEAD`.
     - **`branch`**: the checked-out branch.
     - **`base`**: `--against <ref>` resolved to a commit, else

@@ -32,7 +32,7 @@ dotfiles/
   nushell/{hwt.nu, hcdev.nu}          # symlinked into ~/.config/nushell/
   zellij/{config.kdl, layouts/hobby-dev.kdl}   # symlinked into ~/.config/zellij/
   claude-md/                          # symlinked into ~/.claude-hobby/ and ~/fun_worktrees/
-bin/{chobby, hauto, haspect, happ, hresearch, hx-claude, zj-notes}   # symlinked into ~/.local/bin/
+bin/{chobby, haspect, happ, hresearch, hx-claude, zj-notes}   # symlinked into ~/.local/bin/
 hooks/<name>/hook.sh                  # symlinked into ~/.claude-hobby/hooks/
 skills/<name>/{skill.md, README.md}   # symlinked into ~/.claude-hobby/commands/
 settings/hobby.settings.json          # symlinked to ~/.claude-hobby/settings.json
@@ -41,7 +41,6 @@ lsps/hobby-mml-lsp/                   # forked HMML language server + grammar.md
 lsps/{claude,claude-skills,treesitter-class,path}-lsp/   # vendored from the work checkout
 mcps/{just-mcp, lsp-mcp, tree-extract}/   # vendored from the work checkout
 tools/hdash/                          # the work dashboard and htab, the Claude-mode overview pane (ratatui)
-tools/hcoord/                         # the coordinator's task-list pane + `hcoord wait` (ratatui)
 tools/hatlas/                         # a Bevy app's linked HTML atlas, from rustdoc JSON
 ```
 
@@ -305,13 +304,13 @@ first. Started without a terminal it re-runs itself in a fullscreen Alacritty ti
 classed `hdash`; warnings go to `~/.cache/hdash/hdash.log`, never to the screen. With the
 port came what the work version had grown and this one had not: the list rescans by
 itself when the notes or worktree trees move, a fuzzy filter narrows the project sidebar,
-filter chips narrow the list (including by the `/task:build` / `/task:auto` phase in
+filter chips narrow the list (including by the `/task:build` phase in
 `build-task.json`), and the primary button reads **Focus** when a window already shows the
 task's session — it activates that window, so leftwm switches to its tag — or **Attach**
 when the session runs without one.
 
 A card also carries the session's **live plan**: `todo` and `waiting_on` from the same
-`build-task.json`, which `/task:build` and `/task:auto` keep current — a `▸ Todo (3/7)`
+`build-task.json`, which `/task:build` keeps current — a `▸ Todo (3/7)`
 toggle with the active step beside it, `waiting: <line>` in amber while a gate holds, and
 the whole list when expanded. It is the hobby half of work's `flow` record: the todos and
 the waiting line came over, the aspects did not as they were, because a second PR here is
@@ -320,8 +319,7 @@ needs none of work's `wt flow patch` locking.
 
 Cards carry an `idle 12m` / `busy 3m` badge from `hooks/session-state`, which writes one
 file per hobby-account Claude session under `$XDG_RUNTIME_DIR/hobby-session-state`. **Every
-Claude process counts** — a plain hcdev pane, both `/task:auto` stages, a coordinator's
-pane — and a record belongs to the task whose zellij session it ran in, falling back to the
+Claude process counts** — a plain hcdev pane or an aspect's tab — and a record belongs to the task whose zellij session it ran in, falling back to the
 worktree its directory lies in; the newest live record per task decides the badge. The
 directory is not the work hook's `claude-session-state`, so neither dashboard reads or
 deletes the other's records. An idle session on an open task sorts first.
@@ -334,195 +332,27 @@ session name is spelled.
 **Installing never needs tests** — the committed code is already tested, so
 `install-dash` builds and replaces the binary and nothing more.
 
-## A coordinator is a task with no worktree, and `tasks.json` is its whole state
+## Every run is `/task:build`, and nothing runs unattended
 
-`/task:auto` and `/task:coordinate` exist for work where I care about what the
-change does and not how it is built. The first runs a task in two processes —
-a headless **plan** stage that reads the code once and writes `plan.md`, then a
-fresh **build** stage that implements from the plan alone — with two gates:
-acceptance criteria at the start, only if the brief does not already say what
-done looks like, and the running application at the end, before the PR opens.
-The second works a list of such tasks one at a time from a **coordinator
-session**: `hcdev coordinator <blurb>` run from `~/fun_repos/<project>`, a
-zellij session with `hcoord tui` on the left and `chobby` on the right.
+`/task:auto`, `/task:coordinate`, `/task:goal`, `hauto`, `hcoord`, the
+`hobby-auto` layout, `hcdev auto`, `hcdev coordinator`, `hcdev claude-pane` and
+the reserved `coordinator` topic are gone
+(`notes/hobby-tooling/llm_workflow/drop_auto_mode/business-context.md`,
+`## intent`, `## removal-scope`, `## drop-hcoord`). The aspect queue had been
+built on the unattended mode, and that was never what it was for: the intent was
+only to change when the questions are asked and when the implementation starts.
+Every task and every aspect is worked through `/task:build`, GATE C and GATE 2
+included.
 
-**Two processes per task, because context was the cost.** The first version ran
-`/task:build`'s whole pipeline in one session — HMML baseline, annotated delta,
-the multi-lens spec review, then the implementation on top of all of it — and
-one task used up a session. The spec review loop and the planning conversation
-carried into the implementation were the two largest costs, and neither buys
-anything when the UX is what matters. So `/task:auto` has no HMML, and `hauto`
-(`bin/hauto`, the Claude pane of the `hobby-auto` layout) starts the plan stage
-as `chobby -p` and the build stage as a fresh `chobby` once the phase is
-`planned`. A session cannot clear another session's context — a cross-session
-message is delivered as text and a slash command in it is never executed — so
-a new process is the only clear there is, and it costs nothing because the
-window had to be opened anyway. The build stage runs on `model` from the state
-file, `sonnet` when a coordinator seeded it, since a plan that names the files
-and the steps leaves mostly mechanical work.
+What `hcoord` still did for the gated pipeline — waiting for a PR's checks,
+waiting for a merge, sorting a red check into the diff's own or not — is `gh`
+in the skill: `gh pr checks --watch`, and a background `gh pr view` loop. The
+bound of three repairs on a red check is a rule in the skill rather than in a
+binary. A PR is merged by me, unless I say in the session that it may merge once
+its checks are green (`## self-merge-permission`).
 
-**The coordinator knows nothing about any task.** It never reads a task's code,
-plan, diff or journal; planning happens in the task's own window. What reaches
-it is a phase name from `build-task.json`, the acceptance result beside it, and
-a PR URL from `prs.json`, which is what lets one coordinator session work a
-whole list.
-
-**The coordinator is a task under the reserved topic `coordinator`.** Its notes
-dir `notes/<project>/coordinator/<blurb>/` has a `task.json`, so `hwt`, `hdash`
-and the journal skills all see it without a new kind of thing existing — and no
-worktree, because it works other tasks' worktrees rather than one of its own.
-The three places that would otherwise treat it as a removed task each know the
-topic by name: `hcdev wt` and `hwt restore` refuse it and name
-`hcdev coordinator`, and `hdash` gives it a `Coordinator` stage whose primary
-button is **Open coordinator** and whose card shows the counts from
-`tasks.json`. The topic is a constant in each of the three, not a config.
-
-**`tasks.json` is the record and the display, and there is no channel between
-them.** `/task:coordinate` writes the file at every change; `hcoord tui`
-re-reads it whenever its mtime moves; `hdash` counts its `status` fields. A
-resumed coordinator picks up from it after an interrupt, and editing it by hand
-between tasks is expected. The tasks it creates sit under the blurb as their
-topic (`~/fun_worktrees/<project>/<blurb>/<blurb>_<slug>`), so a coordinator's
-work groups itself.
-
-**The coordinator waits on an idle notice, and falls back to a shell call.** A
-Claude session cannot sleep except through a tool. The task's window is a peer
-session on this machine, so the coordinator subscribes with `SendMessage`
-(`notify_when_idle`, no message) and gets one notice when that session ends a
-turn — a gate or `done` — for free. It never sends the session text. Before the
-peer is listed, and after a resume, `hcoord wait <task notes dir>` blocks on
-the task's `build-task.json` and returns when the phase is one a person answers
-(`await-*`) or terminal. That phase naming is the contract that keeps the two
-sessions independent: `/task:auto` names its gates `await-acceptance`,
-`await-play` and `await-fix`, and nothing else in either skill has to know the
-other exists — the third was added without touching `hcoord` at all, because
-`await-` is the whole of the *declared* contract for an `auto: true` state file.
-Only a state file without `auto` — a `/task:build` session — also stops on that
-pipeline's two waiting states, `context` and `assess-split`; an unattended run
-never writes them, so `hcoord` counts them only there. A `play` phase left untouched
-for three minutes is a backstop under it, for the one case the naming cannot
-cover: the skill's write to `await-play` and its printed report are two halves
-of one step (#45), and a session that drops the write leaves nothing named
-`await-*` for `hcoord wait` to see.
-`--after <phase>` is the second call on the same gate, so a reported
-`await-play` is not reported again at once. The timeout is 570 seconds because
-a Claude Code shell call gets ten minutes.
-
-**The file carries `written` and `phase_since`, because mtime cannot tell the
-two rewrites apart.** A phase that has not moved for an hour is either a
-healthy session doing something slow or a dead one, and the only distinguishing
-signal available to a script was sampling `/proc/<pid>/stat` for CPU ticks and
-reading a pane it cannot actually read (#46) — both unavailable to `hcoord`, and
-neither reliable. The file's own mtime looked like a substitute, but a write
-that leaves the phase unchanged moves the mtime exactly as much as one that
-advances it, so mtime alone cannot distinguish them. `written` records every
-write; `phase_since` records only the ones that changed the phase; `hcoord wait`
-and `hcoord status` both read the gap between them.
-
-`hcoord merged <pr>` is the same shape one layer further on: it polls `gh pr
-view` and returns `merged`, `blocked` with a reason, or `timeout` — plus
-`mergeable`, only with `--ready`, which is how a task session learns it may run
-`gh pr merge` on its own PR. The coordinator calls it without the flag, and only
-for a PR whose session finished without merging.
-
-**The coordinator layout is rendered per session, not installed.** The TUI pane
-needs the notes dir as an argument and KDL cannot expand anything, so a
-committed layout could only ever show one coordinator. `hcdev coordinator`
-writes `hobby-coordinator-<session>.kdl` into the runtime dir and hands zellij
-the path. `hobby-auto.kdl` *is* installed: it is `hobby-dev` with the Claude
-pane running `hauto`, which is how a window a coordinator spawns starts working
-the moment it exists.
-
-**A coordinator's windows go to one desktop.** `hcdev auto --window` gives its
-alacritty the WM_CLASS `hcdev-auto`, and the window manager does the rest: in
-leftwm that is a `window_rules` entry on that class with a `spawn_on_tag`. The
-rule lives in `~/.config/leftwm/config.ron`, which this repo does not manage,
-so it is a per-machine line, not an install step.
-
-**One task session at a time is the design.** Two `/task:auto` sessions on one
-repo would race on the default branch and on my attention, since a gate assumes
-one window is being looked at.
-
-**A task is not done until its PR is merged.** `done` used to mean *the session
-ended*, and a task whose dependency was still open was based on that
-dependency's branch — a stack that had to be merged in order and rebased
-whenever a review changed anything early in it. Now the list holds in
-`awaiting-merge` between the session ending and the PR landing, and the stack
-is gone with it: every task branches off the default branch, because everything
-before it is already there.
-
-**An unattended task merges its own PR, and there is no other option.** The
-task's **own session** merges once its checks are green and its acceptance
-passed: every seed writes `merge: coordinator` into its `build-task.json`, it
-watches its own checks with `hcoord merged --ready`, merges, confirms the merge
-landed, runs `hwt done` on its own task — so hdash's card closes with the PR —
-and reports `done` with the merge already made. `tasks.json` no longer carries a
-`merge` choice, so a list `/task:goal` wrote needs no GATE L before it is
-worked. Both decisions are mine, recorded in
-`notes/hobby-tooling/skills/coord-contract/business-context.md`
-(`## one-merge-option`, `## task-done-owner`). `hcoord merged` decides green
-from `gh`'s `statusCheckRollup`, and a repo with no checks at all counts as
-green: most hobby repos have no CI, and the alternative is a list that never
-moves.
-
-**A decision the session cannot make holds the list on that task.** A conflict,
-a `gh` refusal, a red check `fix-ci` (below) may not repair, or an acceptance
-that would not pass is `await-fix`, with the reason in `ci_result`,
-`merge_result` or `acceptance_result`. `hcoord wait` names the one still
-standing as `decision` on its line, beside the PR, and the coordinator marks
-the card `blocked` with `requires decision: <decision>` and waits on with
-`--after await-fix`. I answer in the task's window, the session carries on to a
-merged PR, and the list moves (`## leave-await-fix`). A resumed coordinator
-re-checks every `blocked` entry, so a PR merged by hand releases its
-dependents.
-
-**A red check on a task's PR is that task's own diff, and its own session is
-the one holding the branch, the plan and the log** — handing it to a
-coordinator that deliberately knows nothing about the task would be the wrong
-place to fix it. `hcoord ci` separates the failure that is the diff's own from
-the three that are not: the base branch is already red there, a pinned
-revision now needs re-pinning (a project decision, not a repair), or the
-runner died (a bounded rerun, not a code change). The bound is three attempts
-and lives in the binary, not the prompt, so a session that loses count still
-stops. The mechanism is inert in a repo with no CI, which is every repo here
-— recorded in `business-context.md` `## ci-scope`, adding CI to
-`hobby-tooling` would change the merge gate for every task behind it, so it
-is deliberately not part of this change.
-
-**`/task:auto` commits once, after its last gate.** A PR cannot open without
-commits and nobody is at the keyboard between the last gate and the PR, so the
-pipeline commits once after it, to the same message rule. `/task:build` commits
-too, after GATE 2, where the proposed commit and PR messages are shown with the
-local changes. Neither commits the notes repo.
-
-**An unattended run has no play gate; it runs its own acceptance.** A gate is
-worth having because a person reads what it prints, and in a coordinator's task
-window nobody does: the window is 800x600 and off-screen and the Claude pane is
-about seventeen columns wide, so a report there is not merely unread but
-unreadable, and `continue` gets answered having read none of it. A task shipped
-that way with four of its six scenarios failing. So with `auto: true` the plan
-stage writes the acceptance observation as **commands**, a `verify` phase runs
-them, and a failure is the session's own to fix for at most three rounds. The
-run either opens a PR with its checks passing or reaches `await-fix` with none.
-
-The report is replaced rather than improved because the property that matters is
-not who looks: a failing command stops the pipeline by itself and a printed
-report does not. The rounds are capped because a repair loop nobody can
-interrupt is the same failure wearing different clothes, and the count is
-recorded so a run that keeps spending all three is visible.
-
-What the checks did is written to `build-task.json` as `acceptance_result` —
-command, exit status, per-check verdict — and `hcoord wait` puts it on the line
-it already returns. **Evidence has to arrive as data or it does not arrive**,
-which is the same argument `tasks.json` makes one level up. The acceptance gate
-survives unattended: a done-when that cannot be written as commands stops at
-`await-acceptance` and asks, because a check that passes while the observation
-fails is worse than no check. `auto` is set only by a coordinator, so a
-hand-typed `hcdev auto` keeps the play gate and the running application.
-
-`hcoord` is its own workspace rather than a member of `tools/hdash`'s, and `hdash`
-reads the one field it needs from `tasks.json` with `serde_json::Value` rather than
-depending on the crate.
+The coordinator notes dirs that exist stay as done tasks under the topic
+`coordinator`; nothing reads their `tasks.json` any more.
 
 ## An aspect is a part of a task, worked in a tab; a task is work for later
 
@@ -570,23 +400,18 @@ research aspect is answered into `findings.md`; a code aspect runs the full
 `/task:build` pipeline in its worktree (`## code-aspect-pipeline`), with its
 state file, plan and journal in the aspect's notes dir, the task's
 `business-context.md`, `is_aspect` skipping the split, and the PR against the
-base. `/aspect` is allowed under `auto: true` (`## aspect-under-auto`).
+base.
 
-**Code aspects worked now run as a queue, planned up front.** Decided in
-`notes/hobby-tooling/llm_workflow/aspect_order/business-context.md`: when
-several code changes are scheduled, every question they raise is answered
-early, and they then run one by one with little input from me (`## intent`).
-`/task:build`'s `queue` phase — after GATE S, or `/task:build queue` over
-aspects added one by one (`## entry-point`) — plans each queued aspect with a
-headless `/task:auto plan` in its worktree, asks all their questions at one
-gate, GATE Q (`## front-load`), then starts them one at a time, each rebased
-onto its base after the one before it merged (`## ordering`) and replanned
-from the same answers when the base moved (`## stale-plans`). Each builds
-unattended, with no GATE 2, and merges its own PR (`## gate-2`); the task's
-session waits on it with `hcoord wait` (`## driver`). Research aspects still
-start in parallel tabs (`## research-aspects`). `queue.json` in the task's
-notes dir is the queue's state; `haspect` sends a `running` aspect to `hauto`,
-and a tab opened for one not yet at the head prints its place and exits.
+**Code aspects worked now ask first, then implement in turn.** Decided in
+`notes/hobby-tooling/llm_workflow/drop_auto_mode/business-context.md`: every
+tab opens at once — from GATE S, or `/task:build queue` over aspects added one
+by one — asks its GATE C questions and writes its plan, then waits in
+`await-turn` (`## questions-first`). The task's session waits for the running
+aspect's `aspect.json` to reach `done`, sets the next one `running` in
+`queue.json` and messages its session (`## queue-driver`); that aspect rebases
+onto its base, replans from the recorded answers as if given now when the base
+moved, prints what changed against its first plan (`## stale-plan`), and runs
+the rest of `/task:build`. Research aspects still start in parallel tabs.
 
 **An aspect is not a task**: no `task.json`, so `scan_tasks` and `known-tasks`
 never enumerate it and it has no card. It is listed on its task's card with
@@ -595,7 +420,7 @@ kind and state, and a click on one not yet started starts it.
 **Its worktree lives under `~/fun_aspects`, not beside the task.** About a
 dozen consumers read the third component under `~/fun_worktrees` as the task —
 `hcdev-task-parts`, `all-tasks` (orphans, `hwt sync`), hdash's `task_of` and
-orphan scan, `hauto`, `track-pr`, `zj-notes` — so a sibling `<task>@<name>`
+orphan scan, `track-pr`, `zj-notes` — so a sibling `<task>@<name>`
 dir would have been an orphan, a sync target, and a phantom notes dir on the
 first PR. Under a separate root each of them says "not a task" unchanged, and
 aspect awareness is added only where it is wanted: `hresearch` resolves an
@@ -614,7 +439,7 @@ stay alike.
 **Every tab shares the task's zellij session name**, so two things that keyed
 on it alone had to learn the tab. hdash credits a session-state record to
 what its project dir lies in — an aspect worktree, else a task worktree — and
-only falls back to the session name for a dir in neither (a coordinator's main
+only falls back to the session name for a dir in neither (a main
 checkout); it badges the aspect's line; a task's ordering counts its
 aspects, so an aspect waiting on you raises the card. The ctrl-g dump keys on
 the session name plus `$ZELLIJ_PANE_ID`. That the pane id is distinct per tab
@@ -689,8 +514,8 @@ lookup in `hcdev` matches a prefix. The session-state hook puts `● ` (idle) or
 front of every tab a hobby Claude runs in, in either mode; `htab` keeps that marker, and every
 lookup by tab name strips it. A running session's mode is read back from the session
 itself — a pane named `overview` — so an aspect tab opened later matches it without a
-record that could go stale. `hcdev auto`, the coordinator and the notes tab keep their
-layouts (`## other-layouts-unchanged`).
+record that could go stale. The notes tab keeps its
+layout (`## other-layouts-unchanged`).
 
 ## Opening a session from a dashboard: two things that kill the terminal
 
@@ -718,7 +543,7 @@ does not undo that — the terminal it opens believes it is already inside that 
 For the task you are *currently* in, `hcdev` then asks zellij to attach a session to
 itself, which zellij answers with a **panic**. `hwt_core::spawn_detached` therefore
 removes the three variables from every process it starts, and every nu-side launch of
-a detached terminal (`hcdev auto -w`, `hwt sessions`) goes through `hcdev-spawn-window`,
+a detached terminal (`hwt sessions`) goes through `hcdev-spawn-window`,
 which does the same with `with-env`. `hcdev-launch` also refuses the self-attach in so
 many words, for the case nothing spawned: a `hcdev wt <this task>` typed by hand.
 
@@ -730,12 +555,11 @@ message that says what went wrong is still there to read. The cost is a keypress
 session that exits non-zero; that is worth paying to never lose an error again.
 
 **And an inherited stdout keeps the *caller* alive, not the window.** `setsid -f`
-returns the instant it forks, so `hcdev auto -w` was never blocking on its child —
+returns the instant it forks, so a caller is never blocking on its child —
 alacritty inherits the caller's stdout and stderr, so a caller that reads that pipe to
 EOF (`nu -l -c "…"` from a tool, `$(…)` in a shell) waits for the window to *close*
 instead. `hcdev-spawn-window` redirects the terminal's stdio to `/dev/null`
-(`o+e> /dev/null`) and `hcdev auto -w` then polls `hcdev-session-live` for up to 20s so
-its own exit code means "the window is up", not just "the fork succeeded".
+(`o+e> /dev/null`).
 
 **Closing a session has the opposite failure: a name pattern can match the caller
 itself.** `hcdev close <task>` tears the session back down — stop what it started,
@@ -747,9 +571,7 @@ instead — a process whose `/proc/<pid>/cwd` or `/proc/<pid>/exe` resolves unde
 worktree — which is a fact about the process, not a string the caller's own argv can
 happen to contain. `hcdev-protected-pids` walks `$nu.pid` and its ancestors so the
 calling shell, its terminal and the Claude process above it are never swept even
-though their cwd is the worktree too. `hcdev close` also refuses a coordinator
-session (the reserved topic is a hand-rolled kill away from someone else's task
-list) and refuses the session you are currently in — ending your own session out
+though their cwd is the worktree too. `hcdev close` also refuses the session you are currently in — ending your own session out
 from under yourself is `#48`'s problem, not this verb's.
 
 `Restore` also runs `hcdev wt` after `hwt restore`, as `Start task` does after `hwt new`.
@@ -757,28 +579,7 @@ When the card was only rescanned by the **Refresh** button, a restore that stopp
 worktree left the card reading `Removed` and a second click could report nothing but
 "already present".
 
-## Resolving the Claude pane: `dump-layout` lies about the command, `list-panes` doesn't
-
-`hcdev auto`'s Claude pane has no dependable handle by construction: `hobby-auto`
-names it `claude`, but `zellij action dump-layout` reported that pane's *command*
-as `rust-analyzer` — its sibling's language server — in three of four live sessions
-checked (2026-09-16, zellij 0.44.3). The pane **names** it printed were right in
-all four, so the layout is not crossed; `dump-layout`'s command discovery just
-cannot be trusted, and why it attributes a descendant process to the wrong pane was
-not dug into.
-
-`zellij action list-panes -a --json` and `$ZELLIJ_PANE_ID` are not subject to that
-bug — checked against ground truth (`dump-screen --pane-id <id>`, which reads any
-pane without focusing it) in this task's own session, both agreed. So `hcdev
-claude-pane <task>` resolves via that JSON rather than the layout dump, and prefers
-an id the pane recorded for itself over inferring one: `hauto` writes
-`claude-pane.json` (`session`, `pane_id`, `worktree`, `recorded`) into the task's
-notes dir from `$ZELLIJ_PANE_ID` on every start, which is the issue's suggested
-"stable id recorded when hauto starts" — the *pane* stating its own id is
-authoritative in a way no derivation after the fact can be. The resolver falls back
-to the single live pane whose `terminal_command` is `hauto`/`chobby`, then to the
-single one whose `pane_command` starts with `claude`, and refuses rather than
-guessing when more than one pane matches a step.
+## The zellij startup tip
 
 **The startup tip is suppressed in `config.kdl`, not the layout**, because it is a
 property of the zellij *client*, not of a layout: a floating `zellij:about` plugin
@@ -786,8 +587,7 @@ pane comes up focused in every fresh window regardless of which layout opened it
 and it swallows keystrokes until dismissed. `show_startup_tips false` is one line
 in the vendored config that both accounts share, so it silences the tip everywhere
 this config is used, work `cdev` sessions included — there is no per-session
-config short of rendering one, which `hobby-auto` (installed, not generated) does
-not do.
+config short of rendering one.
 
 ## HMML is the review delta of one PR
 
@@ -821,7 +621,7 @@ a changed system or a changed ECS shape read as one; type-checking access was
 what a hand-maintained spec needed, and a delta derived from the diff does not.
 
 **`head: worktree` is the second divergence** (`## delta-head-worktree`).
-`/task:build` and `/task:auto` derive the delta before anything is committed —
+`/task:build` derives the delta before anything is committed —
 the commits are made after the last gate — and work's v2 resolves every link
 against a `head` commit, so the delta of an uncommitted change could not lint.
 With `head: worktree` the head side is the files on disk, untracked ones
@@ -1259,71 +1059,13 @@ The rule was written against the code, not applied to it. Outstanding:
 Deleting is mechanical. The 50 module headers are the real writing; the public
 candidates mostly want no comment.
 
-19 `TODO(jb-comment)` / `TODO(jb-doc)` markers also remain, in
-`tools/hdash/README.md`, `hooks/edit-before-execute/README.md`,
-`skills/task/build/README.md` and `dotfiles/nushell/hwt.nu`. They are unwritten
+3 `TODO(jb-doc)` markers also remain, in `tools/hdash/README.md` and
+`hooks/edit-before-execute/README.md`. They are unwritten
 documentation, not policy artifacts, so deleting the convention did not delete
 them. `just check-placeholders` no longer exists to find them:
 `rg 'TODO\(jb-(comment|doc)\):'`.
 
 [bevy-website#2551]: https://github.com/bevyengine/bevy-website/pull/2551
-
-## A goal file is what an unattended run is built and accepted against
-
-Seven coordinator runs and 48 merged PRs produced work that matched its
-description and missed what I pictured. The description I write is three to
-six lines of intent; every question, issue and acceptance after it was the
-model's reading of its own answers, and my picture of the screen never entered
-the record. Every divergence those runs left behind was an unstated screen, a
-spec at odds with itself, or a bound nobody named — and the one gate that would
-have shown it, a person at the running app, is off in every unattended run.
-
-So the front of the pipeline gains a **goal file**:
-`notes/<project>/planning/<blurb>/goal.md`, written once with me in one
-sitting, in screens (captured, then drawn as ASCII with `changes / unchanged /
-hides`) and scenarios (a gesture per step, one `->`, `hand` when nobody can
-script it), plus the widget inventory, my decisions verbatim, and what is
-deliberately left to the build. `skills/task/goal/README.md` is the format;
-`hcoord goal lint` checks the cross-references, and with `--tasks` that every
-scenario is owned by exactly one task. Nothing downstream paraphrases a
-scenario: a brief quotes it (`hcoord goal show`), and it is the acceptance.
-
-Two things the format decided against. **Not a grammar** — HMML and HSTRUCT
-each cost a parser and an LSP, and this is markdown with a linter that can
-grow into one if the shape holds. **No `Recommended` on a UX question** — in
-the planning sessions I picked the recommended option in 12 of 14, which is
-the model choosing dressed as a question; anything that is a picture is asked
-open.
-
-The first goal (`bevy_pbr_generator`, texture projects, 2026-09-19) added four
-sections the plan had not foreseen — Decisions inside the goal, Current state,
-a directory tree as a screen, Left to the build — which is why the format was
-written by writing one before any skill automates it. The three pieces that
-automate it exist: the interview (`/task:goal`), the seed from scenarios
-(`hcoord seed`), and `hand` in `verify`.
-
-A fourth, the judgement pass (`/task:judge`, `hcoord judge`), walked a finished
-run scenario by scenario and recorded `ok` / `wrong` / `tune` in
-`judgement.md`. It was dropped: it was meant to structure looking at the result,
-and in practice it was more cumbersome than that is.
-
-`/task:goal` encodes two decisions. **Its questions are asked open**, with no
-option list, because an answer picked from offered options is the model's
-choosing and not my words, and Decisions are recorded verbatim. The skill lists
-`AskUserQuestion` under `disallowed-tools`, but that removes it only for the
-turn that invokes the skill — `allowed-tools` never restricted anything, it
-only pre-approves — so after the first gate the skill's own rule is what keeps
-it out. **Decisions are made at that gate and never become a task in the
-split**: `hcoord goal lint --tasks` requires every task to own a scenario, so a
-decision task would be rejected, and a question still open by the time of the
-split is a question the interview did not finish.
-
-The one task allowed to own no scenario is an **`enabling`** one — Task shaping
-rule 1's labelled escape. Its `note` says `enabling -> <task>`, the lint checks
-that the named task is in the list and has it in `depends_on`, because the
-enabling task is done before the next one starts, and `hcoord seed` gives it no
-acceptance checks: its PR's CI going green is the acceptance. Its brief quotes
-the scenarios it unlocks, marked as the other task's.
 
 ## Task shaping lives in CLAUDE.md, not in the skill that applies it
 

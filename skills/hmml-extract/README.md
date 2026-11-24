@@ -15,8 +15,7 @@ behaviour walks as the branch leaves them — a system with the schedule that ru
 it, an observer with its event — with each changed step marked `+`, `-` or `~`
 and linked to its line in the diff, plus the data shapes (with their ECS roles)
 and public signatures the change touches and a grouped summary of its tests.
-`/task:build` runs it in its `delta` phase and shows it at GATE 2; `/task:auto`
-runs it on `--delta`.
+`/task:build` runs it in its `delta` phase and shows it at GATE 2.
 
 Produces one file per PR, in the notes dir of the checkout it reads:
 
