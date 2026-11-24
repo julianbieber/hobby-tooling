@@ -20,7 +20,8 @@ works the aspect by its kind:
   evidence, consequence for the task, open questions, spikes. State moves
   `open` → `active` → `reported`.
 - **code** — runs the full `/task:build` pipeline in the aspect's worktree,
-  with every gate. State moves `open` → `active` → `pr` → `done`, the last
+  with every gate — unless it is in its task's aspect queue, where `haspect`
+  hands it to `hauto` and `/task:auto` builds it unattended. State moves `open` → `active` → `pr` → `done`, the last
   once the PR to the aspect's base has merged.
 
 `hwt aspect close` sets `closed`. hdash shows the state on the task's card.

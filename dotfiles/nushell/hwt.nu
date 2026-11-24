@@ -757,6 +757,20 @@ def aspect-completions [context?: string] {
     try { ls $dir | where type == dir | get name | path basename } catch { [] }
 }
 
+def rebase-aspect-checkout [dir: path, main_repo: path, base?: string] {
+    let dirty = (^git -C $dir status --porcelain | str trim)
+    if $dirty != "" {
+        error make { msg: $"($dir) has uncommitted changes; commit or drop them before rebasing it onto its base" }
+    }
+    let start_ref = (aspect-start-ref $main_repo $base)
+    let r = (do -i { ^git -C $dir rebase $start_ref } | complete)
+    if $r.exit_code != 0 {
+        do -i { ^git -C $dir rebase --abort } | complete | ignore
+        error make { msg: $"Rebasing ($dir) onto ($start_ref) conflicted and was aborted; the branch is unchanged. ($r.stderr | str trim)" }
+    }
+    print $"Rebased ($dir | path basename) onto ($start_ref)"
+}
+
 def aspect-start-ref [main_repo: path, base?: string] {
     if $base == null { return (default-base-ref $main_repo) }
     do -i { ^git -C $main_repo fetch -q origin } | complete | ignore
@@ -887,14 +901,16 @@ tags:
 # the aspect's base, or, when the branch already exists, rebased onto it — and
 # open it as a tab of the task's session (`hcdev tab`), unless `--no-tab`. The
 # state stays `open` until the tab's Claude picks the aspect up. An aspect
-# already checked out is not rebased again, only opened. Returns the worktree
-# path. Errors when the task has no such aspect, when the aspect is closed
+# already checked out is not rebased again, only opened — unless `--rebase`,
+# which fetches and rebases it onto its base's current tip first, refusing a
+# dirty worktree. Returns the worktree path. Errors when the task has no such aspect, when the aspect is closed
 # (`hwt aspect new <name>` reopens it), when the project's main checkout or the
 # named base branch is missing, and when the rebase conflicts — it is aborted,
 # leaving the branch as it was.
 export def "hwt aspect start" [
     name: string@aspect-completions              # Aspect name
     --no-tab                                     # Check it out but open no tab
+    --rebase                                     # Rebase an existing checkout onto the base's current tip
     --task: string@task-completions              # Parent task (defaults to the current directory's)
     --project (-p): string@project-completions   # Disambiguate the task across projects
 ] {
@@ -926,6 +942,8 @@ export def "hwt aspect start" [
             }
             print $"Rebased ($branch) onto ($start_ref)"
         }
+    } else if $rebase {
+        rebase-aspect-checkout $dir $main_repo ($meta.base? | default null)
     }
     if not $no_tab {
         hcdev tab $name --task $parent.task --project $parent.project

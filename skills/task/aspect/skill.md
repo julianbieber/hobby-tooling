@@ -104,7 +104,12 @@ Follow-up questions from me in this tab continue the same aspect: update
 
 ## 6. A code aspect
 
-Run `/task:build` (Skill tool) with no argument, in this worktree. It resolves
+A code aspect in its task's queue — an entry in the task's `queue.json`, and
+`auto: true` in the aspect's `build-task.json` — is not built here: `hauto`
+runs it through `/task:auto`, and the task's session starts it in turn. Say
+so in one line and stop.
+
+Otherwise run `/task:build` (Skill tool) with no argument, in this worktree. It resolves
 the aspect from `pwd`, takes `brief.md` as its brief and keeps its own state in
 the aspect notes dir; its gates are mine as in any task. It sets
 `aspect.json` `state` to `pr` with the PR's URL once the PR is open, and runs

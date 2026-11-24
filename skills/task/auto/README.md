@@ -151,6 +151,19 @@ unchanged: terse, a record of decisions, justified only from the brief, the
 acceptance answer, the recorded context and verified facts. The notes repo is
 still never committed here.
 
+## A queued aspect is a task with a different notes dir
+
+`/task:build`'s `queue` phase runs a task's code aspects through this
+pipeline, one after another, so the aspect needed no third pipeline: the
+headless plan already asks, the unattended build already checks its own
+acceptance and merges its own PR. Run from `~/fun_aspects/…/<name>`, the state
+file and plan live in the aspect's notes dir and `hauto` resolves them there;
+the PR targets the aspect's base, `aspect.json` records it, and
+`/task:aspect finish` replaces `hwt done`. `front_load` makes the plan stage
+ask business context and design as well as acceptance — up to seven questions,
+shown by the task's session at one gate — and `replan` re-plans from the same
+answers once the earlier aspects have merged, listing what changed.
+
 ## The state file is what the coordinator watches
 
 `build-task.json` is written at every transition, as in `/task:build`, and the

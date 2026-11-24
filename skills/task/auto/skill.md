@@ -76,7 +76,11 @@ the report because a failing command stops the pipeline and a report does not.
 ## Step 0 — Context and state
 
 Task context from `pwd` (`~/fun_worktrees/PROJECT/TOPIC/TASK`). State file at
-`~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/build-task.json`:
+`~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/build-task.json`.
+From `~/fun_aspects/PROJECT/TOPIC/TASK/NAME` this is a **queued aspect** — see
+**A queued aspect** below — and the state file, `plan.md`, the journal and every
+other notes file this skill writes are in that aspect's notes dir,
+`…/{task}/aspects/{name}/`:
 
 ```json
 { "phase": "acceptance", "auto": true, "model": "sonnet",
@@ -100,6 +104,8 @@ Task context from `pwd` (`~/fun_worktrees/PROJECT/TOPIC/TASK`). State file at
   "play": { "command": "", "log": "", "pid": "" }, "feedback": [], "rounds": 0,
   "todo": [ { "text": "<plan step>", "status": "pending" } ],
   "waiting_on": null, "delta": false, "hmml_delta": "",
+  "queue": "<the task's notes dir, a queued aspect only>", "base": "<branch>",
+  "front_load": true, "answered": false, "replan": false,
   "written": "<RFC 3339>", "phase_since": "<RFC 3339>" }
 ```
 
@@ -150,6 +156,49 @@ rather than invoking a stage.
    `acceptance`.
 
 Announce `{project, topic, task, stage, phase}` in one line and run.
+
+## A queued aspect
+
+A code aspect in its task's aspect queue (`/task:build`, phase `queue`). The
+task's session seeds its state file — `auto: true`, `merge: coordinator`,
+`brief_source: coordinator` with `brief.md` as `brief`, `queue`, `base`,
+`front_load: true`, and `model` set to the task session's own — runs the
+`plan` stage headless in this worktree, and opens the tab for the `build`
+stage only once every aspect before it has merged. Everything above and below
+holds, with these differences:
+
+- **Recorded context is the task's**: `business-context.md` is read from the
+  task's notes dir (`queue`), where the task's session records my answers.
+  Nothing in this run writes it.
+- **P1 asks everything, once** (`front_load: true`, `answered` false). Not just
+  the acceptance question: derive **at most seven** questions — the acceptance
+  question first unless the brief already states the observation, then the
+  business context the change has to be designed inside, then the design
+  decisions the plan would otherwise make on my behalf. Each is anchored to a
+  file, unit or rule, open with no draft answer, and carries `what I found: …`.
+  Write them to `context_questions`, set `phase: await-acceptance`, write the
+  state file and end — print nothing beyond one line, since the task's session
+  is what shows them to me. No questions → record `answered: true` and go on.
+- **With `answered: true`**, my answers are in the task's
+  `business-context.md` under `## <name>-<handle>`, and the acceptance answer
+  under `## <name>-acceptance`. Read them, write `acceptance`, set
+  `phase: plan`, and plan from them. P1 asks nothing further; a question that
+  still blocks the plan is an `await-acceptance` with that one question.
+- **A replan** (`replan: true`) is run just before the build starts, once the
+  worktree has been rebased onto a base that now holds the aspects before it.
+  Read the existing `plan.md` before overwriting it, reread the code it names
+  as the base now has it, plan again from the same answers, and add a
+  `## Changes since the up-front plan` section: each difference and what in the
+  code caused it, or `none`. Set `replan: false` with `phase: planned`.
+- **`pr`**: `gh pr create --base <base>`. Nothing goes to `prs.json` — the
+  `track-pr` hook does not see an aspect. Set `aspect.json` `state` to `pr` and
+  its `pr` to the URL (Edit, keep every other key), and for each `<p>/<t>` in
+  its `blocks`, `nu -c "use ~/.config/nushell/hwt.nu *; hwt block --pr <url> --task <t> --project <p>"`.
+- **`merge`** step 4 checks ancestry against `origin/<base>`, and step 5 does
+  not run `hwt done`: the task is not done because one aspect is.
+- **`journal`** writes into the aspect's notes dir, then runs
+  `/task:aspect finish`, which records the outcome and tells the task's
+  session — the queue moves on when `phase: done` is written.
 
 ______________________________________________________________________
 

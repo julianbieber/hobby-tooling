@@ -183,6 +183,10 @@
   "effortLevel": "high",
   "autoUpdatesChannel": "latest",
   "theme": "dark",
-  "voiceEnabled": false,
-  "autoCompactEnabled": false
+  "autoCompactEnabled": false,
+  "voiceEnabled": true,
+  "voice": {
+    "enabled": true,
+    "mode": "hold"
+  }
 }

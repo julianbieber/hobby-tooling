@@ -1,7 +1,7 @@
 ---
 description: Run a task end to end as one human-gated pipeline with a recorded stage and a live todo list — assess once whether it splits into aspects of the task, brief, the business context only I hold, a short plan, implement and test, read the implemented change back as an HMML delta derived from the diff, comment pass, code quality standards, my review, PR, journal
-argument-hint: '[<description> | --issue | --notes] [<phase>] [--no-hmml] [--no-context] [--no-split] [--resume-deep]'
-allowed-tools: Skill, Read, Write, Edit, AskUserQuestion, Bash(hobby-struct-parser:*), Bash(pwd:*), Bash(date:*), Bash(ls:*), Bash(rg:*), Bash(git branch:*), Bash(git -C * status:*), Bash(git -C * diff:*), Bash(git -C * log:*), Bash(git -C * rev-parse:*), Bash(git -C * ls-files:*), Bash(git -C * merge-base:*), Bash(git status:*), Bash(git diff:*), Bash(git log:*), Bash(git merge-base:*), Bash(git add:*), Bash(git commit:*), Bash(git push:*), Bash(gh pr list:*), Bash(gh pr view:*), Bash(gh pr create:*), Bash(gh repo view:*), Bash(hcoord ci:*), Bash(hcoord merged:*), Bash(gh run list:*), Bash(gh run rerun:*), Bash(nu -c:*), Bash(cargo:*), Bash(just:*)
+argument-hint: '[<description> | --issue | --notes] [<phase> | queue [<aspect>...]] [--no-hmml] [--no-context] [--no-split] [--resume-deep]'
+allowed-tools: Skill, Read, Write, Edit, AskUserQuestion, Bash(hobby-struct-parser:*), Bash(pwd:*), Bash(date:*), Bash(ls:*), Bash(rg:*), Bash(git branch:*), Bash(git -C * status:*), Bash(git -C * diff:*), Bash(git -C * log:*), Bash(git -C * rev-parse:*), Bash(git -C * ls-files:*), Bash(git -C * merge-base:*), Bash(git status:*), Bash(git diff:*), Bash(git log:*), Bash(git merge-base:*), Bash(git add:*), Bash(git commit:*), Bash(git push:*), Bash(gh pr list:*), Bash(gh pr view:*), Bash(gh pr create:*), Bash(gh repo view:*), Bash(hcoord ci:*), Bash(hcoord merged:*), Bash(hcoord wait:*), Bash(chobby:*), Bash(jaq:*), Bash(gh run list:*), Bash(gh run rerun:*), Bash(nu -c:*), Bash(cargo:*), Bash(just:*)
 ---
 
 Run a task **end to end** as one predictable, human-gated pipeline. The individual
@@ -119,7 +119,9 @@ represents the implemented change, never a plan.
 
    `phase` is one of `assess-split`, `plan`, `context`, `implement`, `delta`,
    `comments`, `standards`, `review`, `await-review`, `pr`, `ci`, `journal`,
-   `handed-off` (this task's work lives in its aspects), `done`. `context` is the waiting state GATE C leaves: the pipeline
+   `handed-off` (this task's work lives in its aspects), `done`. The aspect
+   queue keeps its own state in `queue.json` (**Phase `queue`**) and never
+   moves `phase`. `context` is the waiting state GATE C leaves: the pipeline
    has asked me something and stops until I answer.
    Every write sets `written` to that write's time; `phase_since` moves with it
    only when the write also changes `phase`, and otherwise keeps its old value.
@@ -148,10 +150,15 @@ represents the implemented change, never a plan.
    task treated as having `split` recorded; a `subtasks` key is dropped too,
    and a `subtasks.json` is no longer read.
 
-4. **Starting phase**, in this precedence: `phase: assess-split` outranks
+4. **Starting phase**, in this precedence: a `queue.json` in the task's notes
+   dir whose `phase` is not `done` outranks everything — the queue resumes
+   where it stopped (**Phase `queue`**), and the task's own phase is taken up
+   again once it is done. Then `phase: assess-split` outranks
    everything below — the split question is answered before any planning, and
    is skipped only when `is_aspect` is true, `no_split` is set, or `split` is
-   already recorded. Else an explicit phase argument forces it; else `phase`
+   already recorded. Else an explicit phase argument forces it — `queue`
+   included, which queues this task's code aspects without touching `phase`;
+   else `phase`
    from the state file; else **infer** from artifacts and say what you inferred
    — `business-context.md` has no section for this task and there is no
    `plan-*.md` → `plan`; a section but no plan file → `context`, resuming at the
@@ -289,7 +296,8 @@ set, then print:
 - the **end state** in one or two sentences: what is true once every piece has
   landed;
 - a table of proposed pieces — name, aspect (`code`/`research`, `now`/`later`,
-  base when not the default branch) or task, the user-visible behaviour, the
+  base when not the default branch) or task, the queue position of every code
+  aspect worked now (they run one after another, in this order), the user-visible behaviour, the
   done-when observation (rule 2), the files it owns, and any `enabling` label
   with the piece it unlocks;
 - the **rejected candidates**, with the rule each failed and how it was re-cut;
@@ -334,20 +342,113 @@ Then, once per task:
    part that would otherwise be lost, and the aspects' journals will not have it.
    Aspect status is not journal content: `## Current State` says to read
    `hwt aspect list`, so it cannot go stale.
-4. Start the aspects worked now:
+4. Start the **research** aspects worked now:
    `nu -c "use ~/.config/nushell/hwt.nu *; hwt aspect start <name>"` for each —
-   it checks the aspect out from its base's current tip and opens its tab. A
+   it checks the aspect out from its base's current tip and opens its tab.
+   The **code** aspects worked now are not started here: they are queued, in
+   the gate's order, and **Phase `queue`** runs next in the same turn. A
    rebase conflict is aborted and reported; stop there and tell me. Print the
    handoff: each aspect with its kind and whether its tab is open or it waits
    as `open` (`hwt aspect start <name>`, or a click in hdash, starts it later),
    each task filed, a note that `hdash` lists the aspects on this task's card,
-   and a reminder that each code aspect runs its own `/task:build` and gates
-   independently.
+   and that the queued code aspects come next.
 
 **Only the aspects worked now are started here.** **This task implements
-nothing** — it owns no code, opens no PR, and does not poll its aspects: each
-one messages this session when it finishes (`/task:aspect` step 7). End your
+nothing** — it owns no code and opens no PR. A research aspect messages this
+session when it finishes (`/task:aspect` step 7); the code aspects are worked
+by the queue. With no code aspect worked now, end your turn; otherwise go on
+to **Phase `queue`**.
+
+______________________________________________________________________
+
+## Phase `queue` — plan every code aspect up front, then run them one by one
+
+What it is for: answer every question the queued code aspects raise in one
+sitting, then let them land one after another with no input from me but a
+decision none of them could make (`business-context.md` of
+`hobby-tooling/llm_workflow/aspect_order`, `## intent`). Entered from
+`handed-off`, or by the `queue` argument over aspects added with `/aspect`:
+`queue <name>...` in that order, else every code aspect still `open`, by
+`created`. A research aspect is never queued.
+
+Each queued aspect runs `/task:auto` (**A queued aspect** there): a headless
+plan now, an unattended build in its tab later — acceptance run as commands,
+its own PR merged, `await-fix` the only stop. There is no GATE C or GATE 2 for
+it; GATE Q replaces both, and its acceptance checks stand in for my read of
+the diff.
+
+**State** is `queue.json` in the task's notes dir, written at every change:
+
+```json
+{ "phase": "plan|await-questions|run|done",
+  "aspects": [ { "name": "", "status": "planning|questions|ready|running|await-fix|done",
+                 "planned_at": "<base sha>", "pr": "", "note": "" } ],
+  "written": "<RFC 3339>" }
+```
+
+`haspect` reads `status`: a tab opened for an aspect that is not `running` or
+`await-fix` says it is waiting its turn and exits, so restoring the session
+never starts two builds.
+
+**Q1 — Plan every one, in parallel.** For each queued aspect:
+
+1. `hwt aspect start <name> --no-tab` — its worktree, cut from the base's tip.
+2. Seed `aspects/<name>/build-task.json`: `phase: acceptance`, `auto: true`,
+   `merge: coordinator`, `brief_source: coordinator`, `brief` (the aspect's
+   `brief.md`, verbatim), `queue` (this notes dir), `base` (`aspect.json`
+   `base`, else the default branch), `front_load: true`, `answered: false`,
+   and `model` — the model this session runs on (`## build-model`).
+3. Record `planned_at` (`git -C <worktree> rev-parse HEAD`) and `status:
+   planning`, then start `cd <worktree> && chobby --model <model> -p
+   "/task:auto plan"` as a background Bash call.
+
+Wait for every plan to exit. Each ends at `await-acceptance` with its
+`context_questions` (`status: questions`) or at `planned` (`status: ready`). A
+plan that ended anywhere else is reported with its state file's path, and the
+queue stops there.
+
+**→ GATE Q: HARD STOP**, unless no aspect has questions. Set `queue.json`
+`phase: await-questions`, and the task's `build-task.json` `waiting_on` to
+`answer the queued aspects' questions`, then print, per aspect in queue order, its name, goal and done-when
+in one line each, and its questions numbered `<name>.<n>`. Then one line:
+*"Answer any of these in your own words — `<name>.<n>: skip` is an answer.
+Then say continue and the aspects plan and run one after another."* End your
 turn.
+
+**On my answers**: record them verbatim in the task's `business-context.md`,
+one `## <name>-<handle>` block each, the acceptance answer as
+`## <name>-acceptance` — the recording rule of **Phase `context`**. Set each
+answered aspect's `answered: true`, `phase: plan`, rerun its plan headless in
+the same way, and wait until each is `planned` (`status: ready`). A plan that
+asks again goes back through GATE Q with only those questions.
+
+**Q2 — Run them, one at a time.** Set `phase: run`, clear `waiting_on`. For the
+first aspect that is not `done`:
+
+1. `hwt aspect start <name> --no-tab --rebase` — onto the base's tip, which now
+   holds every aspect before it. A conflict stops the queue and is reported.
+2. **Replan when the base moved** — `HEAD` differs from `planned_at`: set its
+   `replan: true`, `phase: plan`, rerun the plan headless in the foreground
+   (Bash `timeout: 600000`), and update `planned_at`. It keeps my answers and
+   records what changed in `plan.md` (`## stale-plans`). A replan that stops at
+   `await-acceptance` is GATE Q again for that one aspect.
+3. `status: running`, then open its tab:
+   `nu -c "use ~/.config/nushell/hcdev.nu *; hcdev tab <name> --task <task> --project <project>"`.
+   `haspect` hands it to `hauto`, which starts the build stage.
+4. **Wait**: `hcoord wait <aspect notes dir>`, Bash `timeout: 600000`, again on
+   `outcome: timeout`. Never read the aspect's code, plan or diff.
+   - `phase: done` → `status: done`, `pr` from `aspect.json`; next aspect.
+   - `await-fix` (or `await-acceptance`) → `status: await-fix`, and the
+     line's `decision` as its `note` and as `build-task.json` `waiting_on`, print one line naming the tab and the
+     decision, and wait again with `--after <that phase>`. I answer in the
+     aspect's tab; the queue moves when it does.
+
+A message from an aspect while the queue runs is not a step: it is the
+`/task:aspect finish` notice, and the wait already sees the same state.
+
+**When every aspect is `done`**: `queue.json` `phase: done`, clear
+`waiting_on`, print one line per aspect with its PR, then go on as the task's
+`phase` says — `handed-off` re-reads `hwt aspect list` and runs `hwt done`.
 
 ______________________________________________________________________
 
