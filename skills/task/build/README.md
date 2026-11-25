@@ -20,7 +20,8 @@ stops for me to read the diff, the delta and the proposed commit and PR
 messages; then commits, pushes, opens the PR and writes the journal entry.
 
 Three hard stops: the split assessment (GATE S), the business-context
-questions (GATE C), and the review of the local changes (GATE 2).
+questions and the interface round (GATE C), and the review of the local
+changes (GATE 2).
 
 ## The delta is read after the code, not reviewed before it
 
@@ -28,8 +29,9 @@ The pipeline used to extract a baseline, annotate the intended change on top of
 it, review that at GATE 1, and have `hmml-translate` implement the markers.
 Reviewing that plan and then the real diff was a double review, and the plan
 drifted from what was built — "reviewing the version that works seems more
-productive than the double review from before". So only facts are settled
-before code — the brief and the business context — and after the change is
+productive than the double review from before". So only facts and the
+interface are settled before code — the brief, the business context and the
+surface the change exposes (below) — and after the change is
 implemented `/hmml-extract --against <merge-base>` writes one
 `delta-<branch>.hmml`: the touched units' walks as the worktree leaves them,
 each changed step marked `+` / `-` / `~` and linked to the diff. The
@@ -96,6 +98,36 @@ a fact only I hold stays an open question: the option questions were the ones
 answered in a word (*"option a"*, *"B and C have priority"*), and the abstract
 open ones over design choices (*"what constrains how the atlas is built?"*) the
 ones that drew blanks.
+
+## The interface is asked at GATE C, not shown at GATE 2
+
+With design left to `implement`, the interface a change exposed reached me only
+at GATE 2, built. In `watery_terrain/lib/init` the public API was handed over
+open (`## setup-api`: *"should think about what the public API should look
+like"*), and `WateryTerrainPlugin { active: S }` and the `SpawnWateryTerrain`
+command were first seen in the `design` zoom. What made correcting that not
+worth it was volume, not any one choice: *"too many small decisions that I
+disagreed with that by themselfs are not bad but in total felt overwhelming"*
+(`more_implementation_steering` `## why-gave-up`).
+
+So GATE C ends with an **interface round** (`## where-interface`): the surface
+the change will expose — `pub` items of library crates, APIs between modules or
+crates, formats other tools read (`## interface-scope`) — asked before the plan,
+while each choice is still a line to edit. It is the one part of the design
+settled up front, and it is not the dropped GATE 1: no spec, no baseline, only
+signatures, answered by number.
+
+Two forms, picked by a rule and named so I can `switch` (`## interface-form`,
+`## interface-form-choice`): the **whole surface**, one round per module, when
+the change creates or reshapes one, and **decision points only** when it adds to
+a surface that keeps its shape. `--no-context` skips the business rounds and
+keeps this one.
+
+The agreed surface is recorded in `build-task.json`. When the implementation
+cannot keep an agreed signature, it changes it without stopping and records the
+deviation, and GATE 2 lists every one (`## interface-deviation`) — so the
+corrections left for after the fact are the few the code forced, each with its
+reason.
 
 ## Aspects, tasks and this pipeline are three different cuts
 
@@ -190,7 +222,7 @@ gate used to print every level at once. On trial for the next few tasks
 | `queue` | waits on each queued code aspect's merge, then tells the next one it is its turn (`queue.json`) | runs to the last merge |
 | `await-turn` | in an aspect: waits for its turn, then rebases and replans if the base moved | falls through to `implement` |
 | `plan` | Gate 0 prior art, Gate 0b the repo's standards, brief, reading the code, then the business-context questions | hard stop |
-| `context` | records my answers verbatim, writes the plan file, seeds `todo` | falls through |
+| `context` | records my answers verbatim, derives the next round, asks the interface round, writes the plan file, seeds `todo` | hard stop per round, then falls through |
 | `implement` | the change from the plan, run + test, the repo's CI workflows run locally | falls through |
 | `delta` | `/hmml-extract --against <merge-base>` over the units the diff touches | falls through |
 | `comments` | `/comment-pass` over the branch diff | falls through |
