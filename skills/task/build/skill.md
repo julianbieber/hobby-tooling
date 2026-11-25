@@ -1,5 +1,5 @@
 ---
-description: Run a task end to end as one human-gated pipeline with a recorded stage and a live todo list — assess once whether it splits into aspects of the task, brief, the business context only I hold, a short plan, implement and test, read the implemented change back as an HMML delta derived from the diff, comment pass, code quality standards, my review, PR, journal
+description: Run a task end to end as one human-gated pipeline with a recorded stage and a live todo list — assess once whether it splits into aspects of the task, brief, the business context only I hold, the interface the change exposes, a short plan, implement and test, read the implemented change back as an HMML delta derived from the diff, comment pass, code quality standards, my review, PR, journal
 argument-hint: '[<description> | --issue | --notes] [<phase> | queue [<aspect>...]] [--no-hmml] [--no-context] [--no-split] [--resume-deep]'
 allowed-tools: Skill, Read, Write, Edit, AskUserQuestion, Bash(hobby-struct-parser:*), Bash(pwd:*), Bash(date:*), Bash(ls:*), Bash(rg:*), Bash(git branch:*), Bash(git -C * status:*), Bash(git -C * diff:*), Bash(git -C * log:*), Bash(git -C * rev-parse:*), Bash(git -C * ls-files:*), Bash(git -C * merge-base:*), Bash(git status:*), Bash(git diff:*), Bash(git log:*), Bash(git merge-base:*), Bash(git add:*), Bash(git commit:*), Bash(git push:*), Bash(gh pr list:*), Bash(gh pr view:*), Bash(gh pr create:*), Bash(gh repo view:*), Bash(jaq:*), Bash(gh pr checks:*), Bash(gh pr merge:*), Bash(gh run list:*), Bash(gh run view:*), Bash(gh run rerun:*), Bash(nu -c:*), Bash(cargo:*), Bash(just:*)
 ---
@@ -15,8 +15,9 @@ grammar, how a delta is derived from a diff). Invoke it and trust its contract. 
 phase reuses the last one's understanding — do not fan work out to subagents
 except where a sub-skill already does (`journal:resume`).
 
-**Only facts are settled before code**: what the task is, and the business
-context only I hold. Design is not reviewed up front. Once the change is
+**Only facts and the interface are settled before code**: what the task is,
+the business context only I hold, and the interface the change exposes to
+other code and tools. The rest of the design is not reviewed up front. Once the change is
 implemented and tested, it is read back as an HMML delta derived from the diff —
 the HMML exists for me to understand what the code change is doing, so it
 represents the implemented change, never a plan.
@@ -24,7 +25,8 @@ represents the implemented change, never a plan.
 ## Four rules that override everything else
 
 1. **Hard-stop at every human gate** — GATE S (the split assessment, once per
-   task), GATE C (the business-context questions, before anything is designed),
+   task), GATE C (the business-context questions, then the interface round,
+   before anything is designed),
    and GATE 2 (once the change is implemented, tested, read back as a delta and
    comment-passed). "Hard stop" means: finish the
    phase, set `waiting_on`, write the state file, print a compact summary of what I need to do, and
@@ -108,6 +110,11 @@ represents the implemented change, never a plan.
                 "reason": "<one line>" },
      "prior_art": "",
      "context_rounds": [ [ "<question>" ] ], "context_recorded": null,
+     "interface": { "form": "surface|decisions|none",
+                    "agreed": [ "<signature line>" ],
+                    "deviations": [ { "item": "<signature line>",
+                                      "change": "<what changed>",
+                                      "reason": "<what in implement forced it>" } ] },
      "evidence": [ "<command run, and what it showed>" ],
      "commits": [ { "subject": "<subject>", "body": "<body>" } ],
      "pr": { "title": "<title>", "body": "<body>" },
@@ -134,7 +141,10 @@ represents the implemented change, never a plan.
    What a split produced is recorded under this task's `aspects/`, written by
    `hwt aspect new`, and by the tasks it filed, and nowhere else.
    **`evidence`**, **`commits`** and **`pr`** are written in `implement` and
-   `review`, and are what `pr` commits and opens.
+   `review`, and are what `pr` commits and opens. **`interface`** is the
+   surface settled in GATE C's interface round and what implement changed of
+   it; absent until that round runs, `form: none` when the change touches no
+   interface in scope.
 
    **Migrate an old record** before anything else, and say so in one line: a
    phase of `await-hmml-review` or `revise` becomes `implement` (its annotated
@@ -189,17 +199,19 @@ represents the implemented change, never a plan.
    code.
 
 5. **Flags:** `--no-hmml` skips the `delta` phase, for a change I can read
-   straight from the diff. `--no-context` skips GATE C — for a change I have no
-   domain background to give.
+   straight from the diff. `--no-context` skips GATE C's business rounds — for a
+   change I have no domain background to give; its interface round still runs.
    `--no-split` skips `assess-split` for this task, for when I already know it
    is one thing. `--resume-deep` uses `journal:resume-deep`. Record each as its
    state-file flag so a resume does not silently re-add the phase. A
    `size_budget` or `context_gaps` key from an older record is dropped; a
-   `context_questions` list becomes the single entry of `context_rounds`.
+   `context_questions` list becomes the single entry of `context_rounds`. A
+   record past `context` with no `interface` is not sent back to ask one: it
+   predates the round, and GATE 2 prints no deviations line for it.
 
 6. **Rehydrate before running a phase that is not `plan`.** A resumed session has
    none of the understanding the earlier phases built, and does not need to guess
-   — read, in this order: the state file's `brief`, `todo` and `evidence`; the plan file; `business-context.md` — the domain facts I
+   — read, in this order: the state file's `brief`, `todo`, `evidence` and `interface`; the plan file; `business-context.md` — the domain facts I
    dictated at GATE C, in my own words, which are what the change was designed
    from and the only text a commit message may take an unverifiable *why* from;
    the derived `.hmml` delta when `delta` has run; and `git status --short` /
@@ -492,7 +504,8 @@ message. Ask after the code exists and they can only decorate
 it.
 
 Skip this step entirely on `--no-context`: set `phase: context` and carry on to
-the plan step in the same turn.
+**the interface round** in the same turn — `--no-context` skips the business
+rounds only.
 
 First **read what is already written down**: the brief, the task's `issue.md`,
 and the task notes. Ask for nothing recoverable from those — quote it instead.
@@ -538,8 +551,9 @@ Two kinds, asked differently:
   decision.
 
 **Nothing worth asking?** Say so in one line (`the brief is self-contained — no
-business context needed`), set `phase: context`, and carry straight on to the
-plan step **without** stopping. A gate with nothing behind it is friction.
+business context needed`), set `phase: context`, and carry straight on to
+**the interface round** **without** stopping. A gate with nothing behind it is
+friction.
 
 **→ GATE C: HARD STOP, once per round.** Otherwise set `phase: context`, append
 the round's questions verbatim to `context_rounds` as a new last entry (so a
@@ -600,10 +614,53 @@ still in mind against the answers so far:
 
 Something left that the code, the notes and research cannot settle → the next
 round, through **GATE C** again (`context_rounds` grows by one entry). Nothing
-left, or I said `plan` → write `context_recorded` (today's date), clear
-`waiting_on`, and carry on in the same turn. There is no cap on the number of
-rounds: the loop ends when nothing unrecoverable is left, and a round with
-nothing behind it is not asked.
+left, or I said `plan` → on to **the interface round** in the same turn. There
+is no cap on the number of rounds: the loop ends when nothing unrecoverable is
+left, and a round with nothing behind it is not asked.
+
+**The interface round** is the last round of GATE C, after the business rounds
+and before the plan (`hobby-tooling/llm_workflow/more_implementation_steering`,
+`## where-interface`). It puts the interface choices to me while they are still
+free. Made in `implement`, each one is small and defensible on its own, and at
+GATE 2 there are too many to correct (`## why-gave-up`).
+
+*In scope* (`## interface-scope`): the `pub` items of a library crate; an API
+between modules or crates — the functions, types and traits one of them calls
+on another; a format another tool reads — a file like `task.json`, a CLI
+subcommand or flag, a socket command, an environment variable. A binary's
+internals are not in scope.
+
+Draft the surface the change will need: every in-scope item it adds, changes or
+removes, from the code read in `plan` and the answers recorded so far. None →
+record `interface: {"form": "none"}`, say so in one line, and go on to the plan.
+
+Otherwise pick the **form** by this rule, and name it at the top of the round
+with *"say `switch` for the other form"* (`## interface-form`,
+`## interface-form-choice`):
+
+- **`surface`** — the change creates a crate, a module or a format, or
+  reshapes an existing public surface (renames, removes, or changes a
+  signature). One round per module, crate or format: every item is one
+  numbered line in the language's own syntax, marked `+` added, `-` removed,
+  `~` changed as `old → new` —
+  `3 + pub fn chunk_at(&self, world: Vec2) -> Option<(ChunkCoord, UVec2)>` —
+  and under an item where there is a real choice, lettered options with what
+  each costs.
+- **`decisions`** — the change only adds to a surface that keeps its shape.
+  Only the points where there is a choice, each as lettered options with what
+  it costs, in one round; the items without a choice are not shown.
+
+I answer by number; an item I do not mention stands as shown, and `plan` here
+accepts the rest of the surface as shown. Record my answers verbatim like any
+round's, under `## interface-<module>` handles, and the surface with my answers
+applied, one line per item, in `interface.agreed`, with the form in
+`interface.form`. An answer that reshapes items is derived like any other
+(above): another round for that module, showing only what my answer left open.
+Each round is a **GATE C** stop: its questions go into `context_rounds`, and
+`waiting_on` reads `answer GATE C interface round <module>`.
+
+Once the surface is agreed, write `context_recorded` (today's date), clear
+`waiting_on`, and carry on in the same turn.
 
 **Write a short plan.** One file,
 `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/plan-{YYYY-MM-DD}-{slug}.md`,
@@ -611,7 +668,8 @@ in the plan format of `~/.claude-hobby/CLAUDE.md` — Goal, Approach, Steps, Key
 Files, Open Questions — and short: the steps are the order you will work in,
 one line each, naming files. A recorded answer the change has to honour is
 cited in the step it shapes by its `business-context.md` handle, so it is not
-carried in your head to be remembered at the commit. A new dated file per
+carried in your head to be remembered at the commit; a step that builds an
+agreed interface item names it. A new dated file per
 planning session; never overwrite an earlier one. Record its name as `plan` and
 seed `todo` from its steps (**Live state**). The plan is not a gate: say in one
 line where it is, set `phase: implement`, and carry on — **in an aspect in its
@@ -626,6 +684,12 @@ file and keep `todo` moving as you go. A design question only I can answer is
 asked when it comes up, as one line with the options you see — set
 `waiting_on`, stop, and resume at the same `todo` item. It is not saved for a
 gate, and it is not answered on my behalf.
+
+**The agreed interface is changed without stopping** (`## interface-deviation`).
+An item of `interface.agreed` that does not survive the implementation, and an
+in-scope item the interface round did not show, is changed or added as the
+code needs — and recorded in `interface.deviations` in the same step, with
+what changed and what in the implementation forced it. GATE 2 lists them.
 
 Write comments to the rule as you go — a module header, and a public element's
 comment only where it tells the caller something the signature does not. Write
@@ -737,6 +801,9 @@ overview is what I read every time, so keep it short enough to read in one go.
   `--no-hmml`), say so in one line;
 - **evidence** in one line — what was run and that it passed — plus any CI step
   skipped locally;
+- **interface deviations** — every `interface.deviations` entry, one line
+  each: the item, what changed, what forced it; `none` when there are none, and
+  the line left out when `interface.form` is `none` or there is no `interface`;
 - **what needs my decision**, and only that: a standards regression you could not
   fix (what you tried), anything `/comment-pass` declined, a commit that needs a
   justification no handle or verified fact gives. None → say `nothing to decide`;
@@ -750,7 +817,8 @@ overview is what I read every time, so keep it short enough to read in one go.
 **On request — printed only when I ask:**
 
 - `design` — the program's shape: per module touched, its header and every
-  public signature added, changed or removed, with its comment; how the modules
+  public signature added, changed or removed, with its comment, and whether it
+  is as agreed in the interface round, a deviation, or out of its scope; how the modules
   now depend on each other where that changed; and the delta's `## api` and
   `## data` sections when `delta` extracted one. Then the standards delta,
   each budget before and after;
