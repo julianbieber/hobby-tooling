@@ -16,6 +16,7 @@
 #   hwt go <task>                           - cd to a worktree
 #   hwt tree                                - project/topic/task overview
 #   hwt rm <task>                           - remove worktree (keeps notes)
+#   hwt sweep                               - remove every done task's worktree
 
 const WORKTREE_BASE = "~/fun_worktrees" | path expand
 const PROJECTS_BASE = "~/fun_repos" | path expand
@@ -27,7 +28,7 @@ const NOTES_BASE = $NOTES_REPO | path join "notes"
 # is clamped to what zellij's socket path allows, and the launcher strips the
 # zellij env vars and redirects the terminal's stdio — a second copy of either
 # rule would silently drift from what hcdev actually does.
-use hcdev.nu [hcdev-session-name hcdev-spawn-window hcdev-aspect-worktree hcdev-aspect-notes hcdev-aspect-of-path "hcdev tab"]
+use hcdev.nu [hcdev-session-name hcdev-session-live zclean hcdev-spawn-window hcdev-aspect-worktree hcdev-aspect-notes hcdev-aspect-of-path "hcdev tab"]
 
 # Main hwt command - shows help.
 # Named `main` rather than `hwt`: a nushell module cannot export a command with
@@ -50,6 +51,7 @@ export def main [] {
     print "  hwt sync [-p <proj>]                           Pull repos, rebase+push worktrees, /sync-notes"
     print "  hwt orphans                                    Worktrees with no task.json"
     print "  hwt rm <task> [-p <proj>] [-f]                 Remove worktree (keeps notes)"
+    print "  hwt sweep [-n]                                 zclean, then remove every done task's worktree"
     print "  hwt restore <task>                             Re-create a removed worktree"
     print "  hwt forget <task> [-a]                         Purge task metadata (-a: whole notes dir)"
     print "  hwt done [task] / undone [task]                Mark task done / active"
@@ -1072,21 +1074,7 @@ export def --env "hwt go" [
     cd $found.path
 }
 
-# Remove a worktree, and the worktrees of its aspects first. Notes,
-# task.json and each aspect's state are deliberately kept so done/blocked state
-# survives and `hwt restore` can re-create the checkouts; `hwt forget` purges the
-# metadata when a task is truly finished. A dirty aspect worktree stops the
-# removal before the task's own is touched, unless `--force`.
-export def "hwt rm" [
-    task: string@live-task-completions           # Task to remove
-    --project (-p): string@project-completions   # Disambiguate across projects
-    --force (-f)                                 # Force removal even if dirty
-] {
-    let found = find-task $task $project
-    if $found == null {
-        error make { msg: $"Task '($task)' not found" }
-    }
-
+def remove-task-worktree [found: record, force: bool] {
     let main_repo = ($PROJECTS_BASE | path join $found.project)
     print $"Removing worktree: ($found.project)/($found.topic)/($found.task)"
     remove-aspect-worktrees $found $force
@@ -1112,8 +1100,89 @@ export def "hwt rm" [
         rm -r $project_path
         print $"Removed empty project directory: ($found.project)"
     }
+}
 
+# Remove a task's worktree, and its aspects' worktrees first. The branch, the
+# notes, task.json and each aspect's state stay, so `hwt restore` re-creates the
+# checkouts; `hwt forget` purges the metadata. A dirty aspect worktree stops the
+# removal before the task's own is touched, unless `--force`.
+export def "hwt rm" [
+    task: string@live-task-completions           # Task to remove
+    --project (-p): string@project-completions   # Disambiguate across projects
+    --force (-f)                                 # Force removal even if dirty
+] {
+    let found = find-task $task $project
+    if $found == null {
+        error make { msg: $"Task '($task)' not found" }
+    }
+
+    remove-task-worktree $found $force
     print $"Kept notes. 'hwt restore ($found.task)' re-creates it; 'hwt forget ($found.task)' purges the metadata."
+}
+
+# Remove the worktree, and the aspect worktrees, of every task marked done; the
+# branches and the notes stay, so `hwt restore` brings one back. Unattached
+# zellij sessions are closed first with `zclean`, across all sessions. A task is
+# left in place, with a warning, while any of its checkouts has uncommitted
+# changes or commits no remote has, while its hcdev session is still running,
+# or while the caller is inside it. `--dry-run` reports without closing or
+# removing anything.
+export def "hwt sweep" [
+    --dry-run (-n)   # Show what would be removed and kept
+] {
+    if not $dry_run { zclean }
+    let here = ($env.PWD | path expand)
+    let done = (known-tasks | where done and present)
+    if ($done | is-empty) {
+        print "No done task is checked out"
+        return
+    }
+    mut removed = []
+    mut kept = []
+    for t in $done {
+        let reasons = (sweep-blockers $t $here)
+        let name = $"($t.project)/($t.topic)/($t.task)"
+        if ($reasons | is-not-empty) {
+            $kept = ($kept | append { task: $name, reasons: $reasons })
+        } else if $dry_run {
+            $removed = ($removed | append $name)
+        } else {
+            let r = (try { remove-task-worktree $t false; null } catch {|e| $e.msg })
+            if $r == null {
+                $removed = ($removed | append $name)
+            } else {
+                $kept = ($kept | append { task: $name, reasons: [$r] })
+            }
+        }
+    }
+    let verb = if $dry_run { "Would remove" } else { "Removed" }
+    print ""
+    print $"($verb) ($removed | length) done worktree\(s\)"
+    for n in $removed { print $"  ($n)" }
+    if ($kept | is-not-empty) {
+        print $"Warning: kept ($kept | length) done worktree\(s\):"
+        for k in $kept { print $"  ($k.task) — ($k.reasons | str join '; ')" }
+    }
+}
+
+def sweep-blockers [t: record, here: string] {
+    let checkouts = ([{ label: "worktree", dir: $t.path }]
+        | append (task-aspects $t | where present | each {|a| { label: $"aspect ($a.name)", dir: $a.dir } }))
+    let inside = if ($checkouts | any {|c| $here == ($c.dir | path expand) or ($here | str starts-with $"($c.dir | path expand)/") }) {
+        ["you are inside it"]
+    } else { [] }
+    let session = if (hcdev-session-live (hcdev-session-name $t.project $t.topic $t.task)) {
+        ["its hcdev session is attached"]
+    } else { [] }
+    let dirty = ($checkouts | each {|c|
+        let status = (do -i { ^git -C $c.dir status --porcelain } | complete)
+        let unpushed = (do -i { ^git -C $c.dir log --oneline HEAD --not --remotes } | complete)
+        [
+            (if $status.exit_code != 0 { $"($c.label): git status failed" } else if ($status.stdout | str trim | is-not-empty) { $"($c.label) has uncommitted changes" })
+            (if $unpushed.exit_code == 0 and ($unpushed.stdout | str trim | is-not-empty) { $"($c.label) has ($unpushed.stdout | str trim | lines | length) commit\(s\) no remote has" })
+        ] | compact
+    } | flatten)
+    $inside | append $session | append $dirty
 }
 
 # Re-create a removed task's worktree from its notes directory, and the worktree
