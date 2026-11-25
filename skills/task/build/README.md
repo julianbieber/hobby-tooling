@@ -68,6 +68,35 @@ That is the same three-source rule the commit-message policy in
 verified fact — with the first two finally written down somewhere a later
 session can read them.
 
+## GATE C is asked in rounds
+
+The questions used to come as one numbered batch of up to seven, and the
+answers kept saying it was the wrong shape: they build on each other
+(`notes/hobby-tooling/llm_workflow/questions/business-context.md`,
+`## interactive`). Across the 129 `business-context.md` files written that way,
+an answer reads *"depends on the result from q1"* or *"for the first
+question"*; about fifteen come back as a question (*"I dont understand the
+question?"*, *"what is the cost of supporting both…?"*); eight hand the question
+back as research (*"check how bevy loads them"*); and ambiguous ones were
+settled as the model's defaults at GATE 2. A batch can record none of those
+except verbatim, and then plans around them.
+
+So GATE C is small themed rounds with no cap (`## round-shape`): the first
+round holds what decides whether other questions exist, and each later round is
+derived from the recorded answers — what an answer settled is dropped, a
+counter-question is answered, a handed-back question is researched, an
+ambiguity is asked about. It ends when nothing is left that the code, the notes
+or research cannot settle.
+
+Two rules came from the same records. The **done-when** is asked in the first
+round whenever the issue does not state it: it was asked ad hoc in 31 of the
+129 tasks, and Task shaping rule 2 wants it before the work starts. And a
+**choice between shapes** is asked as lettered options with their costs, while
+a fact only I hold stays an open question: the option questions were the ones
+answered in a word (*"option a"*, *"B and C have priority"*), and the abstract
+open ones over design choices (*"what constrains how the atlas is built?"*) the
+ones that drew blanks.
+
 ## Aspects, tasks and this pipeline are three different cuts
 
 `assess-split` runs once, first, before any planning, and ends at a hard gate.

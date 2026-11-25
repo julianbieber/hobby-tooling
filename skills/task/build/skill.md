@@ -107,7 +107,7 @@ represents the implemented change, never a plan.
      "split": { "assessed": "<YYYY-MM-DD>", "outcome": "none|split",
                 "reason": "<one line>" },
      "prior_art": "",
-     "context_questions": [], "context_recorded": null,
+     "context_rounds": [ [ "<question>" ] ], "context_recorded": null,
      "evidence": [ "<command run, and what it showed>" ],
      "commits": [ { "subject": "<subject>", "body": "<body>" } ],
      "pr": { "title": "<title>", "body": "<body>" },
@@ -168,7 +168,8 @@ represents the implemented change, never a plan.
    from the state file; else **infer** from artifacts and say what you inferred
    — `business-context.md` has no section for this task and there is no
    `plan-*.md` → `plan`; a section but no plan file → `context`, resuming at the
-   plan step (my answers are on disk, the plan is not); uncommitted code changes
+   next-round derivation (my answers are on disk, the plan is not — a round
+   may still be owed); uncommitted code changes
    or commits ahead of the default branch → `implement`; an open PR for the
    branch → `done`.
 
@@ -193,7 +194,8 @@ represents the implemented change, never a plan.
    `--no-split` skips `assess-split` for this task, for when I already know it
    is one thing. `--resume-deep` uses `journal:resume-deep`. Record each as its
    state-file flag so a resume does not silently re-add the phase. A
-   `size_budget` or `context_gaps` key from an older record is dropped.
+   `size_budget` or `context_gaps` key from an older record is dropped; a
+   `context_questions` list becomes the single entry of `context_rounds`.
 
 6. **Rehydrate before running a phase that is not `plan`.** A resumed session has
    none of the understanding the earlier phases built, and does not need to guess
@@ -495,35 +497,65 @@ the plan step in the same turn.
 First **read what is already written down**: the brief, the task's `issue.md`,
 and the task notes. Ask for nothing recoverable from those — quote it instead.
 
-Then derive the questions from the goal read against the code: what does
-building this need to know that the current code cannot tell you? **At most
-seven questions**, each
+Then derive what building this needs to know that the current code cannot tell
+you: the goal read against the code. **Do not ask it all at once.** The answers
+build on each other — one answer settles a second question, reshapes a third,
+or comes back as a question of its own — so GATE C is a conversation of small
+**rounds**, each of one to three questions on one theme.
+
+**Before anything is asked, drop what is not mine to answer.** A question that
+research, the code or an earlier task's notes could settle — how a dependency
+behaves, whether there is a standard, what a sibling task decided — is looked
+up, not asked; the finding goes in that question's `what I found:` line, or
+makes the question unnecessary.
+
+**Order the rounds by dependency.** The first round holds the questions whose
+answers decide whether other questions exist at all: the scope, the one
+decision the rest hang off, and — when neither `issue.md` nor the brief states
+it — the **done-when**: *what should you be able to do, and see, to call this
+done?* (`~/.claude-hobby/CLAUDE.md`, Task shaping rule 2). Detail comes in later
+rounds, derived from what the earlier ones said.
+
+Each question is
 
 - anchored to something named — a file, a unit, a field, a rule in the brief;
 - about the **system**: what produces this, what consumes it, which rule forces
   it, what goes wrong without it;
-- open, with no draft answer and no leading guess — a proposed sentence with a
-  question mark gets rubber-stamped, and then the reasoning is yours, not mine;
+- one question, never two joined by *and* — an answer to a compound question
+  says *"for the first one"* and leaves the second hanging;
 - carrying the one line you found while looking (`what I found: …`), or an
   explicit blank (`nothing in the notes or the issue covers this`).
+
+Two kinds, asked differently:
+
+- **A fact only I hold** — a rule, a target, what an upstream guarantees, why
+  something was rejected before — is asked **open**, with no draft answer and no
+  leading guess. A proposed sentence with a question mark gets rubber-stamped,
+  and then the reasoning is yours, not mine.
+- **A choice between shapes** is asked as **lettered options**, each with what
+  it costs, plus *"or another shape"*. An open *"what constrains X?"* over a
+  design choice gets a blank or a guess; options with their costs get a
+  decision.
 
 **Nothing worth asking?** Say so in one line (`the brief is self-contained — no
 business context needed`), set `phase: context`, and carry straight on to the
 plan step **without** stopping. A gate with nothing behind it is friction.
 
-**→ GATE C: HARD STOP.** Otherwise set `phase: context`, write
-`context_questions` verbatim (so a resumed session re-asks *these* rather than
-inventing new ones), set `waiting_on` to `answer the GATE C questions`, write
-the state file, then print the numbered questions and one line: *"Answer any of
-these in your own words — `N: skip` if there is nothing to say, and a skip is a
-real answer. Then say continue and I'll plan and build off your answers."* End
-your turn.
+**→ GATE C: HARD STOP, once per round.** Otherwise set `phase: context`, append
+the round's questions verbatim to `context_rounds` as a new last entry (so a
+resumed session re-asks *these* rather than inventing new ones), set
+`waiting_on` to `answer GATE C round <n>`, write the state file, then print the
+round's theme in a few words, its numbered questions, and one line: *"Answer in
+your own words — `N: skip` if there is nothing to say, and a skip is a real
+answer. Say `plan` to stop asking and plan from what is recorded."* End your
+turn.
 
 ______________________________________________________________________
 
 ## Phase `context` → `implement`
 
-The waiting state written at GATE C. Entered when my answers come back.
+The waiting state written at GATE C. Entered when my answers to a round come
+back.
 
 **The `context` phase argument re-opens it at any point** — the pipeline's one
 loop, and how more of what I know gets in after I have seen something. Invoked
@@ -546,11 +578,32 @@ Steam Deck; a queue would hide the cap and stutter instead of dropping a wave.
 **Copy my wording. Never paraphrase, summarize, complete or tidy it.** This file
 is the only text a commit message may take an unverifiable *why* from, so a
 sentence you smoothed here becomes a claim I never made. Record a skip too — the
-handle with the body `skipped — no context to give`. A question I leave unanswered when I say continue is a
-skip: record it as one rather than asking again.
+handle with the body `skipped — no context to give`. A question I leave
+unanswered is a skip: record it as one rather than asking again. A follow-up
+that a later round asks about an earlier answer gets a handle of its own; the
+earlier block is never edited.
 
-Write `context_recorded` (today's date), clear `waiting_on`, and carry on in the
-same turn.
+**Then derive the next round from what is now recorded.** Read every question
+still in mind against the answers so far:
+
+- **settled** by an answer → dropped, without asking;
+- **reshaped** by one → asked in its new form;
+- the answer **asks back** (*"what do you mean by …?"*, *"what would supporting
+  both cost?"*) → the next round opens with your answer to it, then the
+  question again in the sharpened form;
+- the answer **hands it to you** (*"I don't know, check how bevy loads them"*)
+  → go and look now; the next round opens with what you found, and asks
+  again only if what was found still leaves a choice that is mine;
+- the answer is **ambiguous** between two readings → ask which, quoting it.
+  An ambiguity left for GATE 2 becomes a default of yours I can only accept or
+  reject after it is built.
+
+Something left that the code, the notes and research cannot settle → the next
+round, through **GATE C** again (`context_rounds` grows by one entry). Nothing
+left, or I said `plan` → write `context_recorded` (today's date), clear
+`waiting_on`, and carry on in the same turn. There is no cap on the number of
+rounds: the loop ends when nothing unrecoverable is left, and a round with
+nothing behind it is not asked.
 
 **Write a short plan.** One file,
 `~/fun_repos/hobby-mimisbrunnr/notes/{project}/{topic}/{task}/plan-{YYYY-MM-DD}-{slug}.md`,
