@@ -57,6 +57,7 @@ hwt done | block | unblock               task state
 hwt block --pr <url> [--task <t> -p <p>] wait on a PR; merging it lifts the block
 hwt orphans                              worktrees with no task.json
 hwt rm <task>                            remove the worktree and its aspects', keep the notes
+hwt sweep [-n]                           zclean, then hwt rm every done task that is clean, pushed and not attached
 hwt restore <task>                       re-create a removed worktree and its started aspects'
 hcdev wt <task>                          zellij session: Helix + Claude, plus its started aspects' tabs
 hcdev close <task> [-p] [-t]             kill its session, stop its processes, close its window

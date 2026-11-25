@@ -380,7 +380,21 @@ export def hcdev-spawn-window [
     }
 }
 
-def hcdev-session-live [session: string] {
+# Kill every running zellij session with no client attached, then delete every
+# exited one. Sessions of any account and any task are affected, not only hcdev's.
+export def zclean [] {
+    let running = (^zellij list-sessions --no-formatting | lines | where $it !~ 'EXITED' | each { split row ' ' | first })
+    for s in $running {
+        let clients = (^zellij --session $s action list-clients | lines | skip 1 | where $it != '')
+        if ($clients | is-empty) {
+            ^zellij kill-session $s
+            print $"killed ($s)"
+        }
+    }
+    ^zellij delete-all-sessions --yes
+}
+
+export def hcdev-session-live [session: string] {
     let lines = (try { zellij list-sessions --no-formatting | lines } catch { [] })
     let m = ($lines | where { $in | str starts-with $"($session) " })
     if ($m | is-empty) { false } else { not (($m | first) | str contains "EXITED") }
